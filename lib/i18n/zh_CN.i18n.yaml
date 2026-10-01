@@ -1,0 +1,4589 @@
+common:
+  confirm: 确认
+  cancel: 取消
+  save: 保存
+  # 会话参数未自定义时标注当前生效的全局值
+  followingGlobal(value): "全局 $value"
+  delete: 删除
+  edit: 编辑
+  copy: 复制
+  close: 关闭
+  retry: 重试
+  loading: 加载中...
+  error: 出错了
+  noResults: 无匹配结果
+  # 通用动作词（语义补完）——纯图标控件的可读名。
+  # 只收真正跨域复用的动作，禁止就近造近似重复键。
+  # 清空/清除：搜索框尾部清空、引用条清除（本键是「清空当前内容」的通用口径）。
+  clear: 清除
+  # 移除附件：输入框附件缩略图右上角的移除按钮。
+  removeAttachment: 移除附件
+  # 查看大图：消息气泡内图片点击放大。
+  viewFullImage: 查看大图
+  # 密码可见性切换（API Key 等敏感字段）。
+  showPassword: 显示密码
+  hidePassword: 隐藏密码
+  # 数值步进 +/−（44px 热区的纯图标按钮）。
+  increase: 增加
+  decrease: 减少
+  # 通用「完成态」切换（伏笔兑现、条目完成等）——成对的反义动作。
+  markResolved: 标记为已完成
+  unmarkResolved: 取消已完成
+  numericInput:
+    hint: "范围 $min ~ $max"
+    invalid: 请输入有效数值
+    outOfRange: 数值超出范围
+  # 桌面端导出/日志保存走系统保存对话框后的成功确认框
+  fileSaved:
+    title: 导出成功
+    savedTo: 文件已保存到
+    openFolder: 打开所在文件夹
+  # 上下文用量指示器：环形+详情面板。
+  #  自 advanced.contextRing 泛化下沉——组件移入 story_runtime 后
+  # 故事/导演共用；模式专属键（compactModelMissing）留在各自命名空间。
+  # 2026-09-04 面板重排（用户反馈）：token 数弃「万」改通用 k/M 并显式
+  # 标注 tokens 单位；统计信息改分区键值行（标签键 + 数值独立渲染）。
+  contextRing:
+    title: 上下文用量
+    usageFraction: "$used / $total tokens"
+    tokenCount: "$count tokens"
+    triggerLine: "上下文压缩阈值 $tokens —— 到达后自动压缩并生成前情摘要"
+    cacheTitle: 缓存命中率
+    cacheHitLast: 最近一轮
+    cacheHitAverage: 会话平均
+    lastRequestTitle: 最近一轮请求
+    inputLabel: 输入
+    outputLabel: 输出
+    cacheReadLabel: 缓存读取
+    sessionTitle: 会话
+    roundsRowLabel: 已完成轮次
+    # 上下文构成区（导演侧消费）
+    compositionTitle: 上下文构成
+    compactNow: 立即压缩
+    compactRunning: 压缩中…
+    compactInsufficient: 对话还太少，暂不值得压缩
+    compactBusy: 会话正在生成，稍后再压缩
+    compactDone: 压缩完成，前情摘要已插入会话顶部
+    compactFailed: "压缩失败：$error"
+    # 手动压缩失败面板的分类前缀（导演侧消费；
+    # 错误三层的「是什么」层，技术细节截断跟随）
+    compactErrorPrefix:
+      config: 配置错误：
+      network: 网络错误：
+      auth: 认证失败：
+      rateLimit: 请求过于频繁：
+      server: 服务端错误：
+      timeout: 请求超时：
+      format: 响应格式错误：
+      contextOverflow: 上下文超限：
+      persist: 数据库错误：
+      unknown: 压缩失败：
+    compactStreamingTitle: 正在生成前情摘要…
+    noData: "—"
+    ringTooltip: 上下文用量（点开详情）
+  # 种子资源应用区段（DOC-15 §9.3， 自 intermediate.chat.sessionSettings
+  # 抽取共享——组件 story_runtime/presentation/widgets/seed_resource_section.dart
+  # 故事/导演共用；分区标题键留在各自命名空间）
+  seedResource:
+    applyCard: 应用角色卡
+    applyBook: 应用世界书
+    resourceEmpty: 暂无资源，请先在「设置 → 角色卡/世界书」导入
+    resourceApplied: "已应用 $count 个实体"
+    resourceApplyFailed: 应用失败
+    # 批 J-b-3：应用前预览
+    previewTitle: 应用预览
+    previewConstantCount: "包含 $count 条常驻词条（每轮必进上下文）"
+    # （只读语义 2.0）：预览三段式——只读基线段 / 注入方式段 / 尾部说明
+    previewBaselineSection: 将导入为只读基线
+    previewInjectionSection: 注入方式
+    previewKeywordCount(count): "其余 $count 条按关键词触发"
+    previewHint: '导入内容作为只读基线：AI 的剧情演变会以独立"演变"条目并存，不会改写原文。可随时取消应用。'
+    previewApply: 应用
+    # 预览样例行文案——域服务只出语义键，此处映射
+    previewLabelBackground: 背景
+    previewLabelPersonality: 性格
+    previewLabelEmbeddedEntry: 内置词条
+    previewConstantMark: "［常驻］"
+    previewMoreCount: "… 共 $count 条"
+    # 取消应用失败此前复用「应用失败」文案
+    resourceUnapplyFailed: 取消应用失败，请稍后重试
+    # F1 修复：兑现三处文案承诺的「可随时取消应用」
+    unapplyResource: 取消应用资源
+    unapplyEmpty: 本会话没有已应用的角色卡/世界书
+    unapplyItemLabel: "$name（$count 个实体）"
+    unapplyConfirm: "确定移除「$name」的 $count 个实体吗？\n\n实体的全部属性与 AI 演变出的新值将一并删除，此操作不可恢复。"
+    unapplyDone: "已移除 $count 个实体"
+
+chat:
+  # 批 K：会话内搜索（非模态内联条）
+  inSessionSearch:
+    menuTitle: 会话内搜索
+    placeholder: 搜索会话内容...
+    prev: 上一处（Shift+Enter）
+    next: 下一处（Enter）
+    close: 关闭搜索
+    noResults: 无结果
+    # 命中达 SQL LIMIT 的截断提示
+    truncated(n): 仅显示最近 $n 条
+  # 轮完成轻提示（对齐故事侧  语义）
+  roundDoneHint: 本轮已完成 · 点按查看
+  # 附件数量上限反馈（此前超限静默 no-op）
+  attachmentLimit:
+    image: 最多附加 $count 张图片
+    file: 最多附加 $count 个文件
+  inputPlaceholder: 输入消息...
+  messageHint: 输入消息...
+  send: 发送
+  stop: 停止
+  regenerate: 重新生成
+  editMessage: 编辑消息
+  saveAndResend: 保存并重发
+  unsavedChanges: 有未保存的更改，确定要关闭吗？
+  # 续写合并徽标（消息被「继续生成」追加过，单气泡）
+  continuedBadge: 已中断·续写
+  rename: 重命名
+  renameHint: 输入新名称
+  deleteSession: 删除会话
+  deleteConfirm: 确定删除此会话吗？此操作不可恢复。
+  starSession: 收藏会话
+  unstarSession: 取消收藏
+  copySession: 复制会话
+  clearMessages: 清空消息
+  clearMessagesConfirm: 确定清空此会话的所有消息吗？此操作不可恢复。
+  deleteSessionFromChat: 删除会话
+  deleteSessionFromChatConfirm: 确定删除此会话吗？此操作不可恢复。
+  continueGenerating: 继续生成
+  backgroundInterrupted: 后台生成已中断，请重新发送
+  sidebar:
+    copySuffix: （副本）
+    # 会话写操作失败反馈（收藏/重命名/复制/重排）
+    writeFailed: 操作失败，请重试
+    title: LMStory
+    collapse: 收起侧边栏
+    newChat: 新建对话
+    settings: 设置
+    sessionActions: 会话操作
+    search: 筛选会话
+    searchHint: 输入会话名称...
+    #  修复：此前空结果复用 searchHint，无法区分"没输"与"没找到"
+    searchNoResults: 没有匹配的会话
+    # 会话列表加载失败错误态（含重试）
+    loadFailed: 会话列表加载失败
+    retryLoad: 重试
+    globalSearch: 全局搜索
+    dragToReorder: 拖动排序
+    backToHome: 返回主界面
+    modeChat: 对话
+    modeStory: 故事
+    modeDirector: 导演
+  home:
+    title: LMStory
+    #  首屏换血：项目定位 doc/product/00_项目定位.md
+    #「你推进，AI 回应，世界生长。」
+    subtitle: 你推进，AI 回应，世界生长。
+    newChat: 新建对话
+    newChatDesc: 选择模型，开始一段新的对话
+    recentSessions: 最近会话
+    noRecentSessions: 暂无会话
+    noRecentSessionsDesc: 开始你的第一段对话吧
+    # 最近会话加载失败错误态（含重试）
+    loadFailed: 数据加载失败，请下拉重试
+    settings: 设置
+    pressBackAgain: 再按一次退出
+    #  修复：首次启动无 API Key 引导
+    apiKeyMissing: 尚未配置 API Key
+    apiKeyMissingDesc: 配置后才能发送消息给 AI 模型
+  draft:
+    title: 新对话
+  globalSearch:
+    hint: 搜索消息内容...
+    noResults: 未找到匹配的消息
+    error: 搜索失败，请重试
+    # 命中达 SQL LIMIT 的截断提示
+    truncated(n): 仅显示最近 $n 条
+  branch:
+    indicator: "$current/$total"
+    switchLeft: 上一分支
+    switchRight: 下一分支
+  compaction:
+    manualTrigger: 手动压缩
+    generating: 正在生成摘要...
+    insufficient: 消息数量还不多，暂时不需要压缩
+    earlierSummarized: 早期消息已摘要
+    editSummary: 编辑摘要
+    deleteSummary: 删除摘要
+    # 撤销压缩显性化（仅最新摘要显示撤销）
+    undoCompaction: 撤销压缩
+    undoConfirmTitle: 撤销这次压缩？
+    undoConfirmBody: 被压缩的早期消息将恢复显示并重新参与上下文，这条摘要会被删除。需要时可以随时重新压缩。
+    undoAction: 撤销
+    deleteSummaryConfirm: 删除此摘要将恢复原始消息到上下文计算中。
+    deleteSummaryTitle: 删除摘要
+    delete: 删除
+    cancel: 取消
+    compressFailedTitle: 压缩失败
+    retry: 重试
+    close: 关闭
+    partialSummaryHint: 已生成的部分摘要
+    updateTitleQuestion: 是否用新摘要更新会话标题？
+    updateTitleConfirm: 更新标题
+    updateTitleCancel: 保持原标题
+    summaryUnavailable: 摘要暂不可用（原摘要记录缺失）
+  # chat.tokenCount 整节随  圆环替换旧文本徽章移除（圆环/详情面板文案
+  # 复用 common.contextRing，零新键）
+  time:
+    justNow: 刚刚
+    minutesAgo: "$n 分钟前"
+    hoursAgo: "$n 小时前"
+    daysAgo: "$n 天前"
+    dateShort: "$month/$day"
+  empty:
+    noSession: 暂无会话
+    noMessage: 发送第一条消息
+    # 空态 action
+    startAction: 开始对话
+  #  滚动终案：生成中上滚脱离底部时的「回到最新」胶囊
+  scrollToLatest: 回到最新
+  # 后台分支生成指示——流式中切看旧分支后，重生成
+  # 在生成分支后台继续；被查看分支尾部不再渲染误导性「生成中」占位气泡，
+  # 改由输入区上方轻量指示告知
+  backgroundGenerating: 另一分支正在生成，完成后自动保存
+  toolCall:
+    # 旧 ：对话请求从不携带工具，此区块仅为导入/
+    # 历史数据的兼容展示——标题如实标注，防用户误以为对话模式会发工具
+    arguments: 参数
+    result: 结果
+    noResult: 无返回结果
+  thinking:
+    title: 思考中...
+    thoughtFor: "思考了 $duration 秒"
+    expand: 展开思考过程
+    collapse: 收起思考过程
+  messageActions:
+    copy: 复制
+    copySuccess: 已复制到剪贴板
+    linkCopied: 链接已复制到剪贴板
+    edit: 编辑
+    delete: 删除
+    #  修复：删除为级联语义（该消息及其后全部尾部消息），
+    # 文案必须如实，避免误删整段对话
+    deleteConfirm: 删除此消息及其后的所有消息？此操作不可恢复。
+    quote: 引用
+    showMore: 展开更多
+    showLess: 收起
+    codeExpand: 展开代码
+    codeCollapse: 折叠代码
+    mermaidNotSupported: Mermaid 图表暂不支持移动端渲染，可复制到 mermaid.live 查看
+  navigation:
+    jumpToTop: 跳到顶部
+    prevUserMessage: 上一条用户消息
+    nextUserMessage: 下一条用户消息
+    jumpToBottom: 跳到底部
+  modelSelector:
+    noModel: 未选择模型
+    title: 选择模型
+  attachment:
+    add: 添加附件
+    uploadImage: 上传图片
+    selectFile: 选择文件
+    # 非白名单附件即时提示
+    unreadableHint: 该文件类型暂不支持读取，内容不会发给模型
+  sessionSettings:
+    title: 会话设置
+    model: 模型
+    systemPrompt: 系统提示词
+    systemPromptHint: 留空将使用内置默认提示词
+
+    selectTemplate: 选择模板
+    temperature: 温度
+    topP: Top P
+    maxTokens: 最大 Token 数
+    maxTokensHint: 输入 Token 上限（清空重置为全局当前值）
+
+    maxContextMessages: 最大上下文消息数
+    maxContextMessagesNoLimit: 无限制
+    streamEnabled: 流式输出
+    streamEnabledOn: 已启用
+    streamEnabledOff: 已禁用
+    reasoningEffort: 思考预算
+    reasoningEffortOptions:
+      # 2026-07-28 新增：会话级档位，对齐全局设置的 5 档语义
+      # null = 未单独设置（使用全局默认值），disabled = 显式禁用（强制关闭思考）
+      # 两者语义不同：null 不发参数（跟随模型默认），disabled 发送厂商原生关闭参数
+      notSet: 未单独设置
+      disabled: 禁用
+      low: 低
+      medium: 中
+      high: 高
+    # 2026-07-28 新增：会话级未单独设置时显示当前生效的全局值
+    # prefix 为全局当前值的中文名（如"禁用"/"低"/"中"/"高"）
+    reasoningEffortCurrentEffect(prefix): "当前生效：$prefix"
+    # 2026-07-22 快照语义：重置按钮 tooltip（点击后用当前全局值覆盖会话字段）
+    resetToGlobal: 重置为全局当前值
+    inputHint: "范围 $min ~ $max"
+    inputInvalid: 请输入有效数值
+    inputOutOfRange: 数值超出范围
+    deleteSession: 删除会话
+    deleteConfirm: 确定删除此会话吗？此操作不可恢复。
+    # 2026-07-22 新增：前往对话模式默认配置
+    openGlobalSettings: 对话模式默认配置
+    # 2026-07-24 双菜单→单菜单改造：模型选择卡片 + sheet 所需的新文案
+    modelSelected: 模型已更新
+    modelCleared: 已重置为全局当前值
+    # 手动「更新标题」按钮
+    updateTitle: 更新标题
+    updateTitleHint: 根据当前对话重新生成标题
+    titleUpdating: 正在生成标题...
+    titleUpdated: 标题已更新
+    titleFailed: 生成失败，请稍后重试
+
+    usingGlobalPrefix(prefix): "全局：$prefix"
+    notConfigured: 未配置
+  failure:
+    messages:
+      config: 配置不完整，请前往设置检查 API 供应商和模型
+      network: 网络连接失败，请检查网络后重试
+      auth: API Key 无效或无权限
+      rateLimit: 请求过于频繁，请稍后重试
+      server: 服务器异常，请稍后重试
+      timeout: 请求超时，请检查网络后重试
+      format: 模型响应格式异常
+      persist: 本地存储失败
+      unknown: 发生错误，请重试
+    # 错误横幅上线后，原先无人可见的硬编码
+    # 错误文案外泄成用户可见（含两条英文），迁入 slang
+    regenerateNoAnchor: 未找到可重新生成的锚点消息
+    # 输入框上方错误横幅的关闭按钮 tooltip（此前横幅只能重进会话消失）
+    dismissBanner: 关闭
+    editResendNotFound: 未找到要编辑重发的消息
+    deleteSummaryFailed: 删除摘要失败，请稍后重试
+    editSummaryFailed: 编辑摘要失败，请稍后重试
+    # 生成中删除会话会向已删会话回写孤儿数据
+    deleteBlockedWhileGenerating: 该会话正在生成，请先停止后再删除
+    # 忙态操作（重生成/编辑重发/摘要编辑/手动压缩）
+    # 此前 controller 守卫静默 no-op，点击无任何反馈——统一 floating
+    # SnackBar 提示（与 insufficient 同款节奏）
+    busyOperation: 正在生成或压缩中，请稍后再试
+    # 错误码可操作建议（2026-07-20 新增）
+    # 与 messages 区分：messages 描述"发生了什么+一般提示"，suggestedActions 给出"具体可操作步骤"
+    suggestedActions:
+      config: 前往「设置」检查 API 供应商、模型 ID 和 API Key
+      network: 切换 Wi-Fi/移动数据，或重启路由器后重试
+      auth: 前往「设置」确认 API Key 是否有效，必要时重新生成
+      rateLimit: 等待 1 分钟后重试，或降低请求频率
+      server: 等待 5 分钟后重试，如持续异常请联系供应商
+      timeout: 切换更快的模型，或检查网络稳定性
+      format: 重试，或切换到其他模型
+      persist: 清理设备存储空间后重试
+      unknown: 重试，如持续失败请反馈
+    # 错误卡片中"建议"行的前缀标签
+    suggestionLabel: 建议
+    # 2026-07-29：错误卡片中"详细信息"行的前缀标签（可折叠区域）
+    detailLabel: 详细信息
+    displayFormat: "$message（$code）"
+    # 完整展示格式（含建议行），持久化到 ChatMessage.error 字段
+    displayFormatWithSuggestion: "$message（$code）\n$suggestionLabel：$suggestion"
+    # 2026-07-29：含详细信息的完整展示格式（建议行 + 详细信息行）
+    # 详细信息来自供应商返回的原始错误，帮助用户定位 400 参数错误等具体原因
+    displayFormatWithDetail: "$message（$code）\n$suggestionLabel：$suggestion\n$detailLabel：$detail"
+
+advanced:
+  # 导演会话设置入口专用键（原借用故事模式文案）
+  sessionSettingsTitle: 会话设置
+  emptyHint: 导演模式下，AI 总编辑将自主检索记忆、撰写正文并维护设定。发送第一句话开始。
+  # 导演主模型未配置（E010+config）的报点级
+  # 建议覆盖——通用 config 建议「前往设置配置 API 供应商和模型」在导演模式
+  # 指不到真正的修复入口（GM 与故事四步模型是两条独立解析链）
+  failure:
+    gmMissing: 导演主模型未配置：前往「设置 → 导演模式设置 → 模型与生成」配置导演主模型后，重新发送
+    #  残余：导演侧溢出横幅（原借用 intermediate.chat.failure）
+    contextOverflow: 已自动压缩重试仍超限，请手动压缩或精简输入
+  # 请求重试等待状态条（退避/Retry-After）
+  retryWaitingBadge: 限流等待中
+  retryWaitingCountdown(attempt, seconds): "${seconds}s 后第 $attempt 次重试"
+  # 稿件变体（非破坏性重生成）
+  variant:
+    switcherLabel(n, m): "第 $n 版，共 $m 版"
+    prev: 上一版
+    next: 下一版
+    sheetTitle: 稿件版本
+    currentBadge: 当前
+    setcurrentHint: 点按切为当前版本
+    copy: 复制此版
+    copyDone: 已复制该版本正文
+    delete: 删除此版
+    deleteDone: 已删除该版本
+    sourceLabel: "生成指令：$input"
+  input:
+    hint: 给导演的指令…
+  # 空态引导（体验重构 §4.3.5）：示例开场语 + 项目规则提示
+  emptyState:
+    example: "雨夜，旧宅的门被敲响第三次。"
+    exampleAction: 用这句开场
+    rulesHint: 世界观、文风与禁忌可写进「项目规则」（右上角设置）
+  # 舞台动词（体验重构 §4.1 命名体系）：L1 过程行与 L2 步骤卡的人话动词，
+  # 工具名/等宽字体只存在于 L2 审计展开层
+  stage:
+    searchStory: 翻阅前情
+    readStory: 回读原文
+    queryFacts: 查证设定
+    readCompactSummary: 重读主线
+    updateFacts: 修订设定集
+    recordEventMemory: 记入大事记
+    updateStoryAnchor: 记场记
+    mergeEntities: 归并设定
+    askUser: 请示导演
+    finishRound: 落幕
+    readSkill: 翻阅手记
+    spawn: 派出子代理
+    fallback: 幕后工作
+  # 导演失败/审批/留痕文案此前整批硬编码中文
+  #（部分为 / 修复期新增），迁入 slang；面向模型的信封消息不在此列
+  agentStop:
+    error: '导演执行失败：$message'
+    errorGeneric: 导演执行失败（模型调用出错）
+    maxSteps: '导演执行步数达到上限（$steps 步），本轮未完成。可调大「每轮最大步数」后重试。'
+    budgetTokens: 本轮 token 预算耗尽，未完成。
+    budgetDuration: 本轮超时，未完成。
+    doomLoop: 检测到导演重复调用同一工具，已自动停止。
+    # 余量守卫/钩子拒绝的用户可读文案——此前两因
+    # 落 default「本轮未完成」，长会话主停止路径（余量守卫）的精确
+    # 诊断只进日志，用户无从行动
+    contextHeadroom: 上下文余量越限，本轮提前收尾。请打开输入区圆环详情执行「立即压缩」（或删减长历史）后重试。
+    hookRejected(reason): '本轮被前置检查拦下：$reason'
+    completedEmpty: 导演执行结束但本轮没有产出正文（模型可能在工具调用受挫后停止了输出）。点击「重试」重新生成本轮。
+    incomplete: 本轮未完成。
+  # 正文交付契约 §4.3：finish_round 执行中工具卡的 running 标题
+  #（Gemini 原子到达/非流式回退的整块出稿等待观感由它兜住）
+  penStreaming: 正在执笔…
+  # 正文交付契约 §2.2：通道 B/C 收割留痕（L1 过程行 + 持久化产物）
+  textFallbackCollected: 正文经文本回退收录（预算边界收尾）
+  # 正文交付契约 §6：L2/L3 去重折叠后的 content 占位行
+  draftMergedPlaceholder: （草稿已并入稿件）
+  hitl:
+    # 去数字化——超时时长可配置（默认 3/5 分钟，设置页 1-30 可调），
+    # 留痕写死分钟数会与实际配置矛盾
+    # 审批摘要 parts 专用词（原硬编码中文插值进 slang 模板）
+    approvalPartNewArc: 新弧线
+    approvalPartForeshadow: 伏笔清单
+    approvalPartMainline: 主线一句话
+    approvalUnknownEntity: 未知实体
+    askTimeout: 请示超时未获回应，AI 自行决定继续
+    approvalTimeout: 审批超时未响应，本轮写入按拒绝处理（fail-closed）
+    # HITL 横幅头部 muted 倒计时 + 首次出现的一行解释
+    countdownAsk(minutes): "$minutes 分钟未回应，AI 将自行决定"
+    countdownApproval(minutes): "$minutes 分钟未回应，将按拒绝处理"
+    waitForever: 一直等待你的回复
+    introAsk: AI 遇到关键抉择会请你拍板，超时未回应它将自行决定
+    introApproval: 关键写入会请你确认，超时未回应将按拒绝处理（fail-closed）
+    approvalFacts: '$count 处设定修订'
+    approvalAnchor: 场记更新
+    approvalAnchorWithParts: '场记更新（$parts）'
+    approvalEvent: 记入大事记
+    approvalMerge(source, target): '归并「$source」→「$target」'
+    approvalGeneric: 一项写入操作
+  # L1 过程汇总行（体验重构 §4.3.1）
+  process:
+    working: "正在$verb…"
+    workingStep: "正在$verb… · 第 $step 步"
+    # 轮中预算进度标题（步数分数+用时+阶段动词）
+    workingStepBudget(step, maxSteps, elapsed, verb): "第 $step/$maxSteps 步 · 已用 $elapsed · 正在$verb…"
+    # 无上限档（maxSteps=0）不显示分母
+    workingStepElapsed(step, elapsed, verb): "第 $step 步 · 已用 $elapsed · 正在$verb…"
+    idle: "幕后 $steps 步 · $verbs"
+    idleWithTime: "幕后 $steps 步 · $verbs · ${seconds}s"
+    # 对话流：单一折叠组标题新口径（动词串 → 思考段数）
+    groupIdle: "幕后 $steps 步 · 思考 $segments 段"
+    groupIdleWithTime: "幕后 $steps 步 · 思考 $segments 段 · ${seconds}s"
+    # 思考块折叠行时长标题（无起止数据时回退 live.thinkingCount 字数口径）
+    thinkingDuration: "思考 · 持续 $seconds 秒"
+    # 连续同工具动作 >3 的聚合行
+    aggregatedActions(verb, count): "$verb × $count"
+    # 播报行无障碍语义（视觉为无框裸文本，与正文同字体）
+    narrationLabel: 导演播报
+  # 心跳行（体验重构 §4.3.2）：发送后首字前
+  heartbeat:
+    composing: 导演正在构思…
+  # 直播分块时间线（2026-08-23 重构）：opencode 式 part 分段
+  live:
+    thinkingCount: "思考 · $count 字"
+    #  残余：导演思考折叠条（原借用 intermediate.chat.thinking.collapse）
+    thinkingCollapse: 收起思考过程
+  # 幕间 Recap 卡（体验重构卡片 C §4.3.7）：一行书脊形态，无编辑入口
+  recap:
+    actLabel: "第 $act 幕"
+    arc: 当前弧线
+    foreshadowsOpen: 待兑现伏笔
+    foreshadowsResolved: 已兑现
+    # → ：伏笔清单
+    # 超 8 条从静默计数改为可展开
+    foreshadowsExpandAll(count): "展开其余 $count 条"
+    foreshadowsCollapse: 收起
+    # （'）：Recap 卡设定集变更 chip
+    factsChanges(count): "设定集 $count 处变更"
+  # 稿件导出（选项 sheet + Markdown 内文标签）
+  export:
+    menuLabel: 导出稿件
+    sheetTitle: 导出稿件
+    scopeTitle: 范围
+    scopeAll(count): "全部（共 $count 幕）"
+    scopeCurrent(act): "当前幕（第 $act 幕）"
+    scopeCurrentNone: 当前幕（尚无完成的幕）
+    contentTitle: 内容
+    contentManuscriptOnly: 纯稿件
+    contentManuscriptOnlyDesc: 仅各幕正文与幕间场记
+    contentWithBackstage: 含幕后过程
+    contentWithBackstageDesc: 附导演指令与幕后步骤
+    confirm: 导出
+    shared: 已调起系统分享
+    failed: 导出失败
+    # —— Markdown 内文标签（写入导出文件的用户可见文案）——
+    actsCount(count): "共 $count 幕"
+    actOf(act): "第 $act 幕"
+    exportedAt(time): "导出于 $time"
+    noRounds: 尚无完成的幕
+    directiveLabel: 导演指令
+    backstageLabel: 幕后过程
+    backstageWithSteps(steps): "幕后过程 · $steps 步"
+    backstageWithStepsAndSeconds(steps, seconds): "幕后过程 · $steps 步 · ${seconds}s"
+    narrationPrefix: 播报
+    recapTitle: 幕间场记
+    narrativeTimeLabel: 叙事时间
+  # 剧情锚编辑（Recap 卡展开区入口 + 编辑 sheet）
+  anchorEdit:
+    entry: 编辑
+    sheetTitle: 编辑剧情锚
+    sheetHint: 保存写入当前剧情锚（下一轮生效）；历史轮快照不受影响
+    narrativeTime: 叙事时间
+    addForeshadow: 新增伏笔
+    removeForeshadow: 删除该伏笔
+    foreshadowHint: 伏笔内容
+    saved: 当前剧情锚已更新，下一轮生效
+    saveBlocked: 生成进行中暂不可编辑，请先停止本轮
+  # 场记板视图（「AI 眼中的现在」只读面板）
+  scriptBoard:
+    menuLabel: 场记板
+    title: 场记板
+    hint: AI 眼中的现在——下一轮将注入的世界状态（与注入面同源）
+    entities: 当前世界状态（关键实体）
+    macros: 剧情主线（宏摘要）
+    narrativeTime: 叙事时间
+    anchor: 剧情锚
+    empty: （暂无关键实体）
+    unavailable: 场记板暂不可用（事实层未启用或装配失败）
+    # 来源后缀分键（原 sourceImported 透传枚举名裸显）
+    sourceWorldbook: 来源·世界书
+    sourceCard: 来源·角色卡
+  # 失败轮半截稿件未定稿徽标
+  draftBadge:
+    label: 未定稿
+    hint: 此段未定稿且未保存，重试将替换这段内容
+  # 溢出自愈 toast
+  overflowHealedToast: 上下文已压缩，正在重试本步
+  # 纯净阅读模式
+  pureReading:
+    toggle: 纯净阅读
+  # 上下文构成分段标签（圆环详情面板）
+  contextComposition:
+    system: 系统提示词（含项目规则）
+    coreBlocks: 场记板（世界状态）
+    history: 历史对话
+    directive: 本轮指令
+    estimateNote: 各段 token 为估算值——按装配期字符占比拆分最近一次请求的输入
+  scrollToLatest: 回到最新
+  # 上下文用量指示器：导演专属键（共享键已挪 common.contextRing）
+  contextRing:
+    compactModelMissing: 未配置模型，请先在导演模式设置中选择主模型
+  # L2 审计展开层标签（体验重构 §4.3.3）
+  audit:
+    toolLabel: "工具 $name"
+    # 2026-08-17 新增：错误步骤卡一键复制（便于用户反馈）
+    copyStep: 复制本步骤信息
+    copyStepSuccess: 已复制该步骤的完整信息
+  askUser:
+    title: 导演决策
+    inputHint: 输入回答…
+    skip: 跳过
+  approval:
+    title: "确认写入：$tool"
+    allow: 允许
+    deny: 拒绝
+    # 审批 once/always——会话级放行第三按钮与 L2 留痕
+    alwaysAllow: 本会话总是允许
+    sessionAlwaysRemembered(tool): "已记住「$tool」的本会话放行，后续不再逐次确认"
+    sessionAllowTrace(tool): "已按「本会话总是允许」自动放行：$tool"
+  home:
+    newDirector: 新导演
+    newDirectorDesc: 导演模式（实验）
+  settings:
+    title: 导演模式（实验）
+    sheetTitle: 导演模式设置
+    desc: 开启后首页与侧边栏出现「新导演」入口：AI 总编辑自主检索记忆与维护设定
+    sectionMemoryDesc: 浏览、搜索、编辑本会话的经历与事实（可手动增删改）
+    sectionRules: 项目规则
+    sectionRulesDesc: 常驻背景规则：世界观、人设、文风与叙事守则；整场会话生效，AI 不会改写
+    rulesHint: 世界观、人设、文风、叙事守则…
+    sectionModel: 主模型
+    selectModel: 选择模型
+    sectionBudget: 预算
+    sectionBudgetDesc: 每轮允许导演自主执行的最大步数（模型请求次数）；到上限会先注入收尾指令，让它用现有素材落幕后才停
+    maxSteps: "每轮 $n 步"
+    maxStepsUnlimited: 无上限
+    maxStepsUnlimitedHint: 已解除步数限制，导演执行到自然收尾；每轮仍受时间与 token 预算保护
+    sectionWatchMode: 监督模式
+    watchModeDesc: 开启后，导演每次写入记忆库（修订设定集、记入大事记等）都会暂停并弹出确认卡，由你逐项「允许 / 拒绝」；关闭时这些写入自动执行
+    watchModeHint: 想逐项把关剧情正史改动时开启；代价是生成会频繁暂停等你确认。开关从下一轮开始生效（进行中的轮次沿用开启前的快照）
+    # 审批「本会话总是允许」的会话级放行管理（监督分区）
+    sessionAllowDesc: 审批卡「本会话总是允许」的放行记忆（仅本会话有效，下一轮起不再逐次确认）
+    clearSessionAllows: 清除本会话放行
+    sessionAllowCount(n): "$n 项生效"
+    sessionAllowCleared(count): "已清除 $count 项本会话放行"
+    sessionAllowNone: 本会话暂无审批放行
+    saved: 已保存
+    # 会话设置保存反馈两分——生成中拒绝走
+    # 专用键（可行动），真失败走通用键（旧文案「模型保存失败」系模型分区
+    # 遗留，被规则/参数路径复用易误导）
+    saveFailed: 保存失败，请稍后重试
+    saveBlockedWhileGenerating: 生成进行中，设置暂不可保存——请先停止本轮
+    # 会话面板折叠骨架（导演设置 ，DOC-14 §3.4 同款约定）
+    collapseAll: 一键折叠
+    expandAll: 一键展开
+    sectionModelGeneration: 模型与生成
+    sectionSupervision: 监督与工具
+    sectionContext: 上下文与压缩
+    # 批 L：UI 不再出现「跟随全局」——
+    # 重置=把当前全局值快照写入会话列，此后互不影响
+    resetToGlobalSnapshot: 重置为全局当前值
+    # 检索松紧度（会话快照，选中即写具体值）
+    retrievalProfileTitle: 检索松紧度
+    retrievalProfileConservative: 保守
+    retrievalProfileConservativeDesc: 少而准：检索默认返回 5 条，并过滤低分向量命中
+    retrievalProfileBalanced: 平衡
+    retrievalProfileBalancedDesc: 与当前全局行为一致：默认 8 条，不过滤
+    retrievalProfileLoose: 宽松
+    retrievalProfileLooseDesc: 多而广：检索默认返回 12 条，不过滤
+    sectionContextDesc: 上下文与压缩参数独立保存于会话；「重置为全局当前值」写入此刻的全局值快照；生成中禁止修改
+    sectionMemoryManagement: 记忆管理
+    # 导演面板挂载种子资源区段（内容键在 common.seedResource）
+    sectionResource: 角色卡/世界书
+    #  残余：导演侧专用键（原借用
+    # t.intermediate.*）——「两个产品」文案层零依赖收口
+    openMemoryBrowser: 查看记忆库
+    rulesSelectTemplate: 选择模板
+    # 白名单搭车归零：原 director_session_settings_sheet 硬编码 '$n 分钟'
+    maxDurationMinutes(n): "$n 分钟"
+    generation:
+      temperature: 温度
+      topP: Top P
+      presencePenalty: 存在惩罚
+      frequencyPenalty: 频率惩罚
+    memory:
+      rebuildVectorIndexConfirmTitle: 确认重建向量索引
+      rebuildVectorIndexConfirmContent: "将为 $count 条记忆逐条调用嵌入模型 API，可能产生较多请求。失败的条目会跳过，不中断整体重建。"
+      rebuildVectorIndexButton: 重建向量索引
+      rebuildVectorIndexRunning: 重建中...
+      rebuildVectorIndexProgress: "已处理 $processed / $total（失败 $failed）"
+      rebuildVectorIndexResultSuccess: "成功 $succeeded 条，失败 $failed 条"
+      rebuildVectorIndexFailureBusy: 生成中无法重建，请等待当前轮次完成
+      rebuildVectorIndexFailureNotConfigured: 未配置嵌入模型，请先前往全局设置配置
+    generationGroup: 生成参数
+    rebuildPendingCount: "$count 条未向量化"
+    # 换嵌入模型后维度不符的陈旧向量（重建即自愈）
+    rebuildStaleCount(count): "$count 条与新模型不匹配"
+    customPreset: 自定义
+    sectionPacing: 剧情节奏
+    sectionPacingDesc: 三档控制每轮剧情推进幅度；仅激进档要求正文写满写足，改动下一轮生效
+    # 未物化会话的「平衡」档默认态回显——
+    # NULL=按平衡档默认生效，chip 以「默认」态高亮并回显说明
+    retrievalProfileDefaultBadge: 默认
+    retrievalProfileDefaultDesc: 未单独设置：当前按「平衡」档默认生效；点选任意档位即把该档具体值快照到本会话
+  # 事件日志滚动保留裁剪后，轮轨迹页标注历史缺失
+  #（被裁掉的轮不在日志中，重建请求序列会短于当时实际请求）
+  roundTrace:
+    trimmedNotice: "事件日志已按保留策略裁剪：仅保留第 $count 轮起的事件。更早轮的消息不在日志中，展开单步看到的「重建请求序列」会短于当时实际请求。"
+  #  残余：导演消息操作与压缩撤销（原借用
+  # intermediate.chat.messageActions / compaction）——「两个产品」
+  # 文案层零依赖收口的一部分
+  chat:
+    # 准备中遮罩（与故事侧同文案，advanced 段独立键
+    # ——批八口径 features/advanced 不引 t.intermediate.*）
+    preparingRegenerate: 正在准备重新生成...
+    messageActions:
+      copySuccess: 已复制到剪贴板
+      deleteTitle: 确认删除
+      deleteConfirm: 删除此轮及之后的所有消息？此操作不可恢复。
+      deletePendingTitle: 删除未发送的消息
+      deletePendingConfirm: 这条消息尚未发送成功，删除后无法恢复。是否删除？
+      overwritePendingTitle: 覆盖未发送的消息？
+      overwritePendingConfirm: 你有上一条未发送成功的消息，发送新消息将覆盖它。是否继续？
+    compaction:
+      undoSuccess: 已撤销压缩，归档对话已恢复
+      undoFailed: 撤销失败，请稍后再试
+intermediate:
+  title: 故事
+  # 草稿页专用标题——对齐 chat.draft.title「新对话」/
+  # 导演「新导演」命名（此前复用模式名「故事」，少「新」字与入口卡不齐）
+  draft:
+    title: 新故事
+  home:
+    newStory: 新建故事
+    newStoryDesc: 开启一段沉浸式叙事旅程
+  # 首页/侧边栏入口开关（故事模式设置页顶部）：默认隐藏，
+  # 开启恢复「新建故事」入口；关闭只藏入口，不影响已有会话与配置
+  settings:
+    title: 故事模式
+    desc: 开启后首页与侧边栏出现「新建故事」入口；关闭不影响已有故事会话与配置
+  chat:
+    inputPlaceholder: 推动故事发展...
+    inputPlaceholderFailed: 请先重试或清空本轮
+    send: 发送
+    stop: 停止
+    stopping: 正在终止...
+    # 上滑阅读中轮完成的非打断式提示胶囊
+    roundDoneHint: 本轮已完成 · 点按查看
+    # 2026-07-29 新增：输入框工具栏按钮（添加引号/括号/推荐回复）
+    toolbar:
+      addQuote: 引号
+      addParen: 括号
+      suggest: 推荐
+      suggestTooltip: 根据当前剧情生成 3 条候选回复
+    # 上下文用量指示器：故事模式专属键（共享键在 common.contextRing）
+    contextRing:
+      compactModelMissing: 未配置模型，请先在故事模式设置中选择生成模型
+    # 2026-07-29 新增：推荐回复气泡浮层
+    suggestReply:
+      title: 推荐回复
+      generating: 正在生成候选回复...
+      empty: 暂无候选回复
+      failed: 生成失败，请稍后重试
+      retry: 重试
+      collapse: 收起
+      expand: 展开
+      close: 关闭
+    # 进行中提示文案（分区差异化）：通俗动作词
+    # 失败详情区仍使用 phaseLabels 技术化词便于排查
+    generating: 正在生成中...
+    generatedReady: 生成完成
+    extractingHint: 正在分析中...
+    extractingReady: "关键词：$count 个"
+    retrieving: 正在回忆中...
+    retrievalReady: "找到 $count 条相关经历"
+    retrievalEmpty: 未找到相关经历
+    # 语义模式 0 命中时的阈值口径说明——「已向量化」是存储
+    # 口径，命中与否还取决于相似度阈值，避免「亮绿徽标但 0 命中」误读
+    retrievalEmptyThresholdNote: 语义检索按相似度阈值召回：相关度过低的记忆不会注入本轮。0 命中不代表记忆库为空。
+    # 2026-07-21 新增：检索小窗摘要行的检索模式标签
+    retrievalMode:
+      semantic: 语义
+      keyword: 关键词
+      degraded: 关键词（临时降级）
+    # 2026-07-21 新增：未配置 embedding 模型时的常驻 Banner
+    embeddingMissingBanner:
+      title: 未配置嵌入模型
+      message: 当前使用关键词检索，配置后可启用语义检索以提升记忆召回精度
+      configure: 去配置
+      dismiss: 关闭
+    # 事实层分区（DOC-11 §6.1，2026-07-20 新增）
+    factsSectionTitle: 相关事实
+    factsSectionReady: "$count 个实体"
+    factsKeyEntityBadge: 关键
+    factsMatchedBadge: 命中
+    factsArchivedBadge: 已归档
+    # 事实层类型分组标签（与 FactContextBuilder._typeGroupLabel 一致）
+    factsTypeCharacter: 角色
+    factsTypeLocation: 地点
+    factsTypeItem: 物品
+    factsTypeLore: 设定
+    factsTypeOrganization: 组织
+    factsTypeMisc: 杂项
+    # 事实层变更小窗（DOC-11 §4 配套，2026-08-13 新增）
+    factsChangeHint: 正在更新事实...
+    factsChangeReady: "事实已更新 · $count 项"
+    historyFactsChangeReady: "第 $turn 轮 · 事实已更新 · $count 项"
+    factsChangeEmpty: 本轮无事实变更
+    # 疑似重复条目（事实变更小窗）
+    similarNameBadge: 疑似重复
+    similarNameEntry(newName, existing): "「$newName」与既有实体互为包含：$existing · 点击进归并"
+    factsChangeFailed: 事实更新失败
+    factsChangeOldValue: 变更前
+    factsChangeNewValue: 变更后
+    factsChangeReason: 原因
+    factsChangeConfidence: 置信度
+    factsChangeEntityLabel: 实体
+    factsChangeAttrLabel: 属性
+    # 事实变更动作标签（对应 FactAction 枚举）
+    factsActionCreateEntity: 新增
+    factsActionUpdateAttr: 更新
+    factsActionAppendList: 追加
+    factsActionRemoveFromList: 移除
+    factsActionAddAlias: 别名
+    factsActionArchiveEntity: 归档
+    summarizingHint: 正在整理中...
+    summarizingReady: 摘要已生成
+    preparingRegenerate: 正在准备重新生成...
+    # 历史小窗文案：带轮次前缀以区分「进行中」vs「已固化」
+    historyGeneratedReady: "第 $turn 轮 · 生成完成"
+    historyExtractingReady: "第 $turn 轮 · 关键词：$count 个"
+    historyRetrievalReady: "第 $turn 轮 · 找到 $count 条相关经历"
+    historyRetrievalEmpty: "第 $turn 轮 · 未找到相关经历"
+    historySummarizingReady: "第 $turn 轮 · 摘要已生成"
+    extractFailed: 提取失败
+    summaryFailed: 摘要失败
+    retrievalFailed: 检索失败
+    retryRound: 整轮重试
+    clearRound: 清空本轮
+    emptyTitle: 开始你的故事
+    emptyDesc: 输入一句话，让故事展开
+    # 空态示例开场（对齐导演空态示例卡）
+    emptyExample: 雨夜，我推开了一家从未见过的旧书店的门。
+    emptyExampleAction: 用这句话开场
+    # 会话顶部世界状态条
+    worldStatusBar(time, summary): "世界状态 · $time · $summary"
+    worldStatusBarTime(time): "世界状态 · $time"
+    # 首轮/无叙事时间会话只有事实摘要，避免「世界状态 ·  · X」空时间隔断
+    worldStatusBarSummary(summary): "世界状态 · $summary"
+    messageActions:
+      copy: 复制
+      copySuccess: 已复制到剪贴板
+      linkCopied: 链接已复制到剪贴板
+      regenerate: 重新生成
+      editAndResend: 编辑重发
+      edit: 编辑
+      deleteRound: 删除整轮
+      editTitle: 编辑消息
+      save: 保存
+      saveAndResend: 保存并重发
+      deleteTitle: 确认删除
+      deleteConfirm: 删除此轮及之后的所有消息？此操作不可恢复。
+      windowExceeded: 只能操作最近 $count 轮的消息
+      deletePendingTitle: 删除未发送的消息
+      deletePendingConfirm: 这条消息尚未发送成功，删除后无法恢复。是否删除？
+      overwritePendingTitle: 覆盖未发送的消息？
+      overwritePendingConfirm: 你有上一条未发送成功的消息，发送新消息将覆盖它。是否继续？
+      # ST13U-1：仅保存的成功/失败反馈
+      saved: 已保存
+      saveFailed: 保存失败，请稍后重试
+    thinking:
+      title: 思考过程
+      expand: 展开思考过程
+      collapse: 收起思考过程
+    # 2026-08-04 新增：压缩摘要卡片文案（DOC-06B §6.5）
+    # 故事模式压缩摘要作为上下文隔断展示，区别于普通消息气泡
+    compaction:
+      earlierSummarized: 早期消息已摘要
+      expand: 展开摘要
+      collapse: 收起摘要
+      # 已归档轮次范围标注
+      archivedTurns(from, to): "已归档第 $from–$to 轮"
+      #  触底警示：压缩保留量触底时摘要卡警示行
+      retentionFloorWarning: 上下文空间已接近上限，早期对话保留量被压到最低，后续可能频繁压缩
+      # U2（2026-09-04 撤销压缩）：摘要卡撤销入口（故事/导演共用组件）
+      undoCompaction: 撤销压缩
+      undoConfirmTitle: 撤销这次压缩？
+      undoConfirmBody: 被压缩的早期消息将完整恢复，这条摘要会被删除。撤销后可随时重新压缩。
+      undoSuccess: 已撤销压缩，归档对话已恢复
+      undoFailed: 撤销失败，请稍后再试
+    backgroundInterrupted: 后台生成已中断，请重新发送
+    sessionSettings:
+      title: 会话设置
+      dismiss: 关闭
+      generatingDisabled: 生成中无法修改设置
+      openGlobalSettings: 故事模式默认配置
+      # 2026-07-22 快照语义：重置按钮 tooltip（点击后用当前全局值覆盖会话字段）
+      resetToGlobal: 重置为全局当前值
+      # DOC-14 §3.4：一键折叠/展开（记忆管理常驻，折叠时跳过）
+      collapseAll: 全部折叠
+      expandAll: 全部展开
+      sectionSystemPrompt: 提示词
+      sectionGeneration: 生成参数
+      sectionContextWindow: 上下文窗口
+      sectionContextBudget: 上下文预算
+      sectionToolCalling: 工具调用
+      model: 模型
+      # 提示词
+      systemPrompt: 系统提示词
+      systemPromptHint: "留空将使用内置默认角色设定（当前：$preview…）"
+      systemPromptEmptyHint: 留空将使用内置默认角色设定
+      selectTemplate: 选择模板
+      # 生成参数
+      temperature: 温度
+      topP: Top P
+      maxTokens: 最大 Token 数
+      maxTokensHint: 输入 0 或任意正整数
+      maxTokensZeroHint: 0 表示不设置应用层输出上限，由模型或供应商决定
+      presencePenalty: 存在惩罚
+      frequencyPenalty: 频率惩罚
+      presencePenaltyHint: 鼓励模型谈论新话题，避免剧情单调
+      frequencyPenaltyHint: 减少模型重复用词，避免描写冗余
+      inputHint: "范围 $min ~ $max"
+      inputInvalid: 请输入有效数值
+      inputOutOfRange: 数值超出范围
+      # 上下文窗口（v0.2.2 阶段 2-F：maxContextMessages 已删除，
+      # 由压缩机制管理原文区；仅保留 effectiveContextLimit）
+      # 单次请求 token 上限（v0.2，2026-07-29 新增，应对 TPM 限制）
+      effectiveContextLimit: 单次请求 Token 上限
+      effectiveContextLimitNoLimit: 无限制
+      effectiveContextLimitHint: 限制每次请求塞入的 token 数，避免触发 TPM 429。留空使用模型窗口。
+      # 工具调用会话级覆盖（V2 流程，DOC-09B §8.6 / §10.2）
+      jsonMode: 工具调用
+      jsonModeEnabled: 启用
+      jsonModeDisabled: 禁用
+      jsonModeHint: 控制关键词提取和摘要生成的输出格式。默认启用，遇到不兼容模型时可关闭。
+      # 审查阶段会话级覆盖（Task /，三态：null=未单独设置 / true=开启 / false=关闭）
+      reviewEnabled: 审查阶段
+      reviewEnabledHint: 开启后增加审查阶段，检查事实一致性
+      reviewEnabledSessionDefault: 设为全局当前值
+      reviewEnabledEnabled: 开启
+      reviewEnabledDisabled: 关闭
+      # 上下文预算会话级覆盖（审查  修复，2026-07-31：三态数值覆盖）
+      # 用于 recentMinRatioOverride / retrievalRatioOverride 两个字段
+      contextBudgetRecentMin: 原文区下限
+      contextBudgetRecentMinHint: 原文区保留下限占比，低于此值不压缩
+      contextBudgetRetrieval: 检索区比例
+      contextBudgetRetrievalHint: 检索区占可用窗口的比例，控制注入的记忆体量
+      contextBudgetDynamic: 动态
+      contextBudgetGlobalCurrent: '当前全局：$value'
+      # 记忆管理（2026-07-21 新增：会话级重建向量索引）
+      sectionMemoryManagement: 记忆管理
+      # 角色卡/世界书分区标题（：区段内容键已挪 common.seedResource）
+      sectionResource: 角色卡/世界书
+      rebuildVectorIndexTitle: 重建记忆索引
+      rebuildVectorIndexDesc: 把本会话中重要但还没建立检索索引的记忆补上索引，AI 才能想起这些内容（更换嵌入模型后也用这里重建）
+      rebuildVectorIndexCount: "$count 条记忆还没建立索引"
+      # 换嵌入模型后维度不符的陈旧向量（重建即自愈）
+      rebuildVectorIndexStaleCount(count): "$count 条与新模型不匹配"
+      rebuildVectorIndexNoPending: 全部记忆已向量化
+      rebuildVectorIndexButton: 重建记忆索引
+      rebuildVectorIndexRunning: 重建中...
+      rebuildVectorIndexConfirmTitle: 确认重建向量索引
+      rebuildVectorIndexConfirmContent: "将为 $count 条记忆逐条调用嵌入模型 API，可能产生较多请求。失败的条目会跳过，不中断整体重建。"
+      rebuildVectorIndexConfirmAction: 开始重建
+      rebuildVectorIndexProgress: "已处理 $processed / $total（失败 $failed）"
+      rebuildVectorIndexResultSuccess: "成功 $succeeded 条，失败 $failed 条"
+      rebuildVectorIndexFailureBusy: 生成中无法重建，请等待当前轮次完成
+      rebuildVectorIndexFailureNotConfigured: 未配置嵌入模型，请先前往全局设置配置
+      # 推荐回复会话级配置（2026-07-29 新增）
+      sectionSuggestReply: 推荐回复
+      suggestReplyModel: 推荐回复模型
+      suggestReplyModelHint: 推荐按钮使用的模型，未配置时按全局推荐模型兜底
+      suggestReplyModelSaved: 推荐回复模型已更新
+      suggestReplyModelCleared: 已重置为全局当前值
+      suggestReplyPrompt: 推荐回复提示词
+      suggestReplyPromptEmptyHint: 清空即重置为全局当前值（全局空时用内置默认）
+    # 故事会话稿件导出
+    export:
+      menuLabel: 导出稿件
+      sheetTitle: 导出故事
+      scopeTitle: 范围
+      scopeAll(count): "全部轮次（$count 轮）"
+      scopeLastNone: 仅最新轮（无已完成轮）
+      scopeLast(round): "仅最新轮（第 $round 轮）"
+      contentTitle: 内容
+      contentManuscriptOnly: 纯正文
+      contentManuscriptOnlyDesc: 只导出每轮的最终正文
+      contentWithProcess: 含生成过程
+      contentWithProcessDesc: 附指令、检索关键词与记忆、草稿、事件摘要
+      confirm: 导出
+      shared: 已调起系统分享
+      failed: 导出失败
+      noRounds: 暂无可导出的轮次
+      roundsCount(count): "共 $count 轮"
+      roundOf(round): "第 $round 轮"
+      roundLabel(turn): "第 $turn 轮"
+      inputLabel: 指令
+      keywordsLabel: 检索关键词
+      retrievedLabel: 检索到的记忆
+      draftLabel: 生成草稿
+      summaryLabel: 事件摘要
+      exportedAt(time): "导出于 $time"
+      narrativeTimeLabel: 叙事时间
+    # 失败轮半截稿件卡（只读正文+复制）
+    partialManuscript:
+      title: 未完成稿件
+      copy: 复制全文
+      copyDone: 已复制未完成正文
+    failure:
+      expandDetail: 查看详情
+      collapseDetail: 收起详情
+      technicalDetail: 技术详情
+      suggestedAction: 建议操作
+      # 2026-07-21 新增：E104 错误时的"临时降级继续"按钮文案
+      # 用户点击后会跳过 embedding 调用，仅用 FTS5 关键词检索继续本轮
+      continueWithFts5: 临时降级为关键词检索
+      # 2026-07-22 新增：所有失败阶段显示的"从中断处继续"按钮文案
+      # 保留已完成阶段产出（如生成内容），从失败阶段继续重试
+      continueFromFailed: 从中断处继续
+      # 中断正文保留——以此收稿按钮（快照非空+
+      # generating/reviewing 失败时显示；replyText=快照直奔收稿链）
+      acceptPartial: 以此收稿
+      # 快照可用时「从中断处继续」的语义升级文案（带半截正文续跑）
+      continueWriting: 续写
+      # 2026-08-17 新增：一键复制完整报错（便于用户反馈）
+      copyError: 复制报错
+      copySuccess: 已复制完整报错信息
+      reportHeader: LMStory 故障报告
+      messages:
+        e010: 生成失败
+        # e011/e015 文案键已删除——V2 四步重构后
+        # 两码不再产生（幽灵码），格式错误由 e013/e017 覆盖。
+        e012: 记忆检索失败
+        e013: 关键词提取失败
+        e014: 审查失败
+        e016: 网络中断
+        # 上游 400「模型不可用」（如 AG Upstream request
+        # failed: Model is unavailable）——网络正常，不应按 e016 显示
+        # 「网络中断」误导排查方向
+        e016Server: 模型服务暂时不可用
+        e017: 摘要生成失败
+        e018: 保存失败
+        # 2026-07-21 新增：E104 = embedding 调用失败（限流是子场景，由 ErrorCategory.rateLimit 区分）
+        # 不再静默降级到 FTS5，用户可选重试/临时降级/中止
+        e104: 嵌入模型调用失败
+        # 上下文超限专属横幅（自动压缩重试仍超限后的终态文案）
+        contextOverflow: 已自动压缩重试仍超限，请手动压缩或精简输入
+        unknown: 发生错误
+      suggestedActions:
+        config: 请前往设置配置 API 供应商和模型
+        network: 检查网络连接后重试
+        auth: API Key 无效或无权限，请检查供应商配置
+        rateLimit: 请求过于频繁，请稍后重试
+        server: 服务器异常，请稍后重试
+        timeout: 请求超时，请检查网络后重试
+        format: 模型输出格式不符，可重试或切换模型
+        persist: 数据库写入失败，请重试
+        # 超限建议动作（圆环手动压缩入口 + 精简输入）
+        contextOverflow: 用输入框旁圆环的「立即压缩」缩短上下文，或精简本轮输入后重试
+        unknown: 请重试，如持续失败请反馈
+      detailLabels:
+        code: 错误码
+        httpStatus: HTTP 状态
+        failedPhase: 失败阶段
+        errorCategory: 错误类型
+        rawError: 原始异常
+        # 2026-08-17 新增：复制报错时 errorMessage 行的标签
+        message: 提示信息
+      categoryLabels:
+        config: 配置
+        network: 网络
+        auth: 认证
+        rateLimit: 限流
+        server: 服务器
+        timeout: 超时
+        format: 格式
+        persist: 持久化
+        # 上下文超限类别标签
+        contextOverflow: 上下文超限
+        unknown: 未知
+      phaseLabels:
+        compacting: 上下文压缩
+        generating: 生成回复
+        generatingRetry: 生成重试
+        extracting: 关键词提取
+        extractingRetry: 提取重试
+        retrieving: 记忆检索
+        retrievingRetry: 检索重试
+        reviewing: 审查
+        reviewingRetry: 审查重试
+        summarizing: 事件摘要
+        summarizingRetry: 摘要重试
+        persisting: 结果保存
+        failed: 失败
+        idle: 空闲
+    # 审查  修复：compacting 阶段加载提示文案
+    # 用于 intermediate_round_panels_builder.dart 中 compacting 阶段的加载面板
+    # 注意：phaseHints 在 chat 节点下（与 failure 同级），不是 failure 子节点
+    phaseHints:
+      compacting: 正在压缩对话历史...
+    # 5W1E 详情临时小窗（v0.2 Phase C 方案二，2026-07-19 新增）
+    # 触发：用户点击 SummarizePanel/RetrievalPanel 中的条目；点击小窗外或关闭按钮即关闭
+    memoryDetail:
+      eventTitle: 事件详情
+      memoryTitle: 记忆详情
+      close: 关闭
+      # 5W1E 字段标签
+      when: 何时
+      where: 何地
+      who: 何人
+      what: 何事
+      significance: 为何重要
+      extra: 额外
+      # 绝对叙事时间（v0.2 叙事时间机制，2026-07-25 新增）
+      narrativeTime: 叙事时间
+      # 元数据
+      importance: 重要性
+      tags: 标签
+      originalSummary: 原始摘要
+      turn: "轮次 $n"
+      microMemory: 微观记忆
+      macroMemory: 宏观记忆
+      parentEvents: "聚合 $n 条微摘要"
+      triggerReason: 触发原因
+      triggerEventEnd: 事件结束触发
+      triggerRoundLimit: 固定轮次兜底
+      triggerCompaction: 上下文压缩触发
+      createdAt: 生成时间
+      empty: （空事件）
+    # 事实层详情小窗（DOC-11 §6.1，2026-07-20 新增）
+    # 触发：用户点击 RetrievalPanel 中的事实类条目
+    factDetail:
+      title: 实体详情
+      close: 关闭
+      type: 类型
+      primaryName: 主名
+      aliases: 别名
+      category: 分类
+      importance: 重要性
+      isKeyEntity: 关键实体
+      isArchived: 已归档
+      createdTurn: 登场轮次
+      updatedTurn: 最后修改轮次
+      createdAt: 创建时间
+      updatedAt: 最后修改时间
+      attributes: 属性列表
+      noAttributes: 该实体暂无属性记录
+      # 类型标签（与 factsType* 一致）
+      typeCharacter: 角色
+      typeLocation: 地点
+      typeItem: 物品
+      typeLore: 设定
+      typeOrganization: 组织
+      typeMisc: 杂项
+  # 记忆查看器（2026-07-22 新增：会话级记忆库管理）
+  # 入口：会话设置 → 记忆管理 → 查看记忆库
+  # 独立全屏页面，Tab 切换经历类 / 事实类，支持搜索 + 完整 CRUD
+  memoryBrowser:
+    title: 记忆库
+    #  修复：空列表展示文案进 slang（此前硬编码）
+    emptyListValue: （空）
+    tabExperiences: 经历
+    tabFacts: 事实
+    # 索引健康条（关键词索引缺失可自愈；
+    # 向量缺失在会话设置里重建）
+    indexHealthTitle: 记忆索引
+    indexHealthHealthy: 索引完整
+    indexHealthKeywordPending(count): "关键词索引待补 $count 条"
+    # 向量缺口拆两口径——未向量化 / 换嵌入模型后维度不符
+    indexHealthEmbeddingPending(count): "未向量化 $count 条"
+    indexHealthEmbeddingStale(count): "与新模型不匹配 $count 条"
+    indexHealthRepair: 补齐关键词索引
+    indexHealthRepaired(count): "已补齐 $count 条"
+    indexHealthRepairFailed: 补齐失败，请查看诊断日志
+    # 经历记忆归档标识——归档记忆不参与
+    # 检索（FTS/向量两通道均排除），此前浏览器无标识也无筛选，造成"看得见
+    # 却搜不到"的静默
+    archivedBadge: 已归档
+    # 经历记忆归档/恢复通路
+    archiveMemory: 归档
+    unarchiveMemory: 恢复
+    archiveMemoryDone: 已归档（不再进入检索与注入）
+    unarchiveMemoryDone: 已恢复为活跃记忆
+    archiveMemoryFailed: 归档/恢复失败，请查看诊断日志
+    searchHint: 搜索关键字...
+    searchEmpty: 未找到匹配的记忆
+    experienceEmpty: 还没有经历记忆
+    factEmpty: 还没有事实记忆
+    noAttributes: 该实体暂无属性记录
+    readonlyHint: 只读资源（世界书/角色卡）主名与基线属性不可改、不可删除；可新增属性（作演变行）与别名，归档/恢复可用
+    readonlyMergeHint: 世界书实体是只读基线，不能参与归并；角色卡实体只能作为保留者（同选多条只读实体无法归并）
+    # 已归档实体恢复入口（2026-08-24：兑现"（可恢复）"承诺，审计可逆直接落 UI）
+    restoreEntity: 恢复
+    restoreEntityDone: 已恢复为活跃条目
+    restoreEntityFailed: 恢复失败，请查看诊断日志
+    # 实体归档直达项（可逆）
+    archiveEntityItem: 归档
+    archiveEntityDone: 已归档（可随时恢复）
+    archiveEntityFailed: 归档失败，请查看诊断日志
+    archiveReason: 记忆查看器手动归档
+    # 强制注入开关（v0.2.3 新增，2026-08-14）
+    multiSelectMode: 多选
+    multiSelectExit: 退出多选
+    # 找相似聚类
+    findSimilar: 找相似
+    findSimilarTitle: 疑似重复的实体（名称互为包含）
+    findSimilarEmpty: 没有发现名称互为包含的疑似重复实体
+    findSimilarGroupCount(count): "$count 个实体 · 点击预选进归并"
+    forceInjectOff: 关
+    forceInjectWorld: 世界设定
+    forceInjectDirective: 常驻指令
+    forceInjectApplied: 已设置强制注入
+    # 批 J-b：种子来源/常驻徽标+词条级注入停用
+    sourceBadgeCard: 角色卡
+    sourceBadgeBook: 世界书
+    # （只读语义 2.0）：属性行级徽标——同键双行时基线行/演变行各自标识
+    baselineBadge: 基线
+    evolvedBadge: 演变
+    pinWorldBadge: 常驻·世界
+    pinDirectiveBadge: 常驻·指令
+    injectionDisabledBadge: 已停用注入
+    injectionDisableItem: 停用注入（暂不参与每轮上下文）
+    injectionEnableItem: 恢复注入
+    injectionDisabledToast: 已停用注入，该词条暂不进入每轮上下文
+    injectionEnabledToast: 已恢复注入
+    injectionToggleFailed: 设置失败，请重试
+    # 批量设置强制注入失败反馈
+    forceInjectFailed: 批量设置强制注入失败，请重试
+    forceInjectNoneSelected: 请先勾选实体
+    forceInjectSelected(n): "已选 $n 个"
+    # 手动归并（2026-08-24：多选重复实体 → AI 整合方案 → 预览确认 → 归档吸收）
+    mergeAction: AI 合并
+    mergeSelectAtLeastTwo: 请至少勾选 2 个实体进行合并
+    mergeConfirmTitle: AI 合并实体
+    mergeConfirmBody(n): "将由 AI 把选中的 $n 个条目整合为一条规范条目，其余条目归档（可在筛选中恢复）。继续？"
+    mergeConfirmModel(model): "使用模型：$model"
+    mergeCancel: 取消
+    mergeContinue: 继续
+    mergeModelNotConfigured: 当前会话未配置可用的「生成」模型（合并与对话生成使用同一模型），请在会话设置或 设置 → 故事模式 → 分步骤模型 中配置后再使用合并
+    mergePlanning: 正在生成整合方案...
+    mergePlanFailed: 整合方案生成失败，请稍后重试
+    mergePreviewTitle: 合并方案预览
+    mergePreviewCanonical(name): "规范条目：$name"
+    mergePreviewAliases(aliases): "别名：$aliases"
+    # 归并预览别名超限披露
+    mergeAliasCapWarning(count, cap): 预计 $count 个别名超出上限（$cap 条），这些名字不会并入
+    mergePreviewImportance(n): "重要度：$n"
+    mergePreviewNotes(notes): "说明：$notes"
+    mergePreviewAbsorbed(names): "将被归档：$names"
+    mergeApply: 应用合并
+    mergeApplied: 合并完成
+    mergeApplyFailed: 合并落库失败，数据未变更
+    mergeArchivedBlocked: 已归档的条目不可参与合并（它已不参与记忆），请先在筛选中只显示活跃条目
+    mergeNameConflict(name): "合并后的名称「$name」与其他条目冲突，本次未做任何变更。请重试或先处理同名条目"
+    # 手动建/改实体撞活跃名预检 + 空名行内校验
+    nameConflict(name): "已存在同名实体「$name」（活跃状态），本次未保存。请换一个名称，或先处理同名实体"
+    nameRequired: 名称不能为空
+    # 对话框标题
+    addExperienceTitle: 新增经历记忆
+    editExperienceTitle: 编辑经历记忆
+    addEntityTitle: 新增实体
+    editEntityTitle: 编辑实体
+    addAttributeTitle: 新增属性
+    editAttributeTitle: 编辑属性
+    # 删除确认
+    deleteConfirmTitle: 确认删除
+    deleteExperienceConfirm(turn): "确定删除第 $turn 轮的记忆？此操作不可恢复。"
+    deleteEntityConfirm(name): "确定删除实体 \"$name\" 及其所有属性？此操作不可恢复。"
+    deleteAttributeConfirm(key): "确定删除属性 \"$key\"？此操作不可恢复。"
+    # 操作反馈
+    saved: 已保存
+    deleted: 已删除
+    saveFailed: 保存失败
+    deleteFailed: 删除失败
+    # 经历记忆卡片
+    turnLabel(turn): "第 $turn 轮"
+    macroLabel: 宏观
+    # 绝对叙事时间展示（v0.2 叙事时间机制，2026-07-25 新增）
+    narrativeTime: 叙事时间
+    # 经历记忆字段
+    fieldSummary: 摘要
+    fieldWhat: 何事
+    fieldWho: 何人
+    fieldWhen: 何时
+    fieldWhere: 何地
+    fieldSignificance: 为何重要
+    fieldExtra: 额外
+    fieldTags: 标签
+    fieldTagsHint: 用逗号分隔多个标签
+    fieldImportance: 重要性
+    fieldTurn: 轮次
+    # 实体字段
+    fieldEntityName: 实体名称
+    fieldEntityNameHint: 这个实体的主要称呼，如"李逍遥""村口古碑"
+    fieldEntityType: 实体类型
+    # 类型清单对齐实际下拉（六类；宠物/NPC 归入角色）
+    fieldEntityTypeHint: 选择角色/地点/物品/设定/组织/杂项（宠物与 NPC 归入角色）
+    fieldCategory: 分类
+    fieldCategoryHint: 自定义分组（可选），如"主角阵营""反派"，可留空
+    fieldImportanceHint: 1-5 星，影响对话中检索优先级，5 为最关键
+    fieldArchived: 已归档
+    fieldArchivedHint: 标记为已退场/已销毁，归档后不再注入到对话上下文
+    # 属性字段
+    fieldAttrKey: 属性类型
+    fieldAttrKeyHint: 选择要记录的属性
+    fieldAttrValue: 属性值
+    fieldCustomAttrKey: 自定义属性
+    fieldCustomAttrKeyHint: 不在预定义列表内，AI 无法自动更新此属性
+    customAttrKeyOption: 自定义...
+    # 值类型（仅自定义属性时显示）
+    fieldValueType: 值类型
+    valueTypeSingle: 单值
+    valueTypeList: 列表
+    valueTypeDict: 字典
+    valueTypeHintSingle: 一段文字描述
+    valueTypeHintList: 每行一个值
+    valueTypeHintDict: '每行一个"键: 值"，如"师父: 墨尘"'
+    # 入口按钮
+    openButton: 查看记忆库
+    openButtonSubtitle: 浏览、搜索、编辑本会话的经历与事实
+    # 筛选与排序（v0.2.3 新增，2026-08-04）
+    filterToggle: 筛选
+    sortBy: 排序
+    filterAll: 全部
+    filterMacro: 段落摘要
+    filterMicro: 事件记忆
+    filterImportance5: ★★★★★
+    filterImportance4Plus: ★★★★+
+    filterImportance3Minus: ★★★及以下
+    filterKey: 关键
+    filterNormal: 普通
+    filterActive: 活跃
+    filterArchived: 已归档
+    sortByTurn: 按轮次
+    sortByImportance: 按重要性
+    sortByName: 按名称
+    sortByCreatedAt: 按创建时间
+    statsSummary(n, macro, micro): "共 $n 条 | 段落摘要 $macro 条 | 事件记忆 $micro 条"
+    statsFiltered(shown, total): "显示 $shown / $total 条"
+    statsEntitiesSummary(n, character, location, item, lore, organization): "共 $n 个实体 | 角色 $character | 地点 $location | 物品 $item | 设定 $lore | 组织 $organization"
+    statsEntitiesFiltered(shown, total): "显示 $shown / $total 个实体"
+    # 重要性评分引导（2026-08-06 新增）
+    importanceGuideTitle: 重要性评分说明
+    importanceGuideDesc: 评分决定实体在对话中被检索注入的频率。评分越高，越容易被注入到对话上下文中。
+    importanceTier5: 核心 - 主角、玩家角色
+    importanceTier5Behavior: 每轮对话自动注入，无需提及
+    importanceTier4: 重要 - 主角团核心成员、贯穿全局的设定
+    importanceTier4Behavior: 仅当对话中提到时才注入
+    importanceTier3: 常驻 - 常驻配角、常用地点物品、通识规则
+    importanceTier3Behavior: 仅当对话中提到时才注入
+    importanceTier2: 偶尔 - 特定场景配角、特定领域规则
+    importanceTier2Behavior: 仅当对话中提到时才注入，优先级较低
+    importanceTier1: 罕见 - 路人、一次性出场
+    importanceTier1Behavior: 几乎不会注入
+    importanceGuideHint: 可以在实体编辑中手动调整评分。仅5分（主角）会每轮自动注入，其余均需对话中提到才会注入。
+
+settings:
+  title: 设置
+  # 模型能力徽标 Tooltip（此前硬编码英文）
+  modelCapabilities:
+    vision: 视觉理解（图片输入）
+    reasoning: 深度推理
+    toolUse: 工具调用
+    webSearch: 联网搜索
+  provider:
+    title: 模型提供商
+    entrySubtitle(count): "$count 个供应商"
+    add: 添加供应商
+    edit: 编辑供应商
+    delete: 删除供应商
+    test: 测试连接
+    # 2026-08-02 新增：测试连接 = 获取模型列表（GET 请求，不消耗 token）
+    testHint: 测试连接会请求获取模型列表来验证，不消耗 Token 额度
+    builtIn: 内置
+    custom: 自定义
+    name: 供应商名称
+    nameHint: 输入供应商名称
+    baseUrl: API Host
+    baseUrlHint: 输入 API Host
+    baseUrlHelper: 填写供应商基础地址即可，系统会自动补全 /chat/completions、/models 等端点路径。支持多种格式（自动补 https://、自动去末尾斜杠、自动剥离端点后缀），如 https://api.openai.com 或 https://api.openai.com/v1/chat/completions 均可。系统会保留您填写的版本号（/v1、/v3、/v4 等），例如智谱 GLM 填 https://open.bigmodel.cn/api/paas/v4、火山引擎填 https://ark.cn-beijing.volces.com/api/v3 或 https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions 均可。
+    baseUrlHelperRaw: 手动模式：请输入完整请求地址（如 https://api.example.com/v4/chat/completion），系统不会做任何补全。注意：此模式下所有端点（chat/models/embeddings）都用同一个 URL，获取模型列表可能 404，仅适用于端点完全非标准的供应商。
+    baseUrlPreview: '实际请求地址: $url'
+    baseUrlEmpty: 未设置，请点击右侧编辑按钮添加
+    baseUrlRawMode: 手动输入完整 URL（高级）
+    baseUrlRawModeHint: 仅当供应商端点完全非标准时打开（如 /v4/chat/completion 单数）。普通供应商请保持关闭，系统会自动处理各种 URL 格式。
+    insecureHostWarning: '明文 http 地址：API Key 与对话内容将以未加密方式传输，同一网络内的第三方可截获，仅建议在可信内网或本机调试使用。'
+    apiKey: API Key
+    apiKeyHint: 输入 API Key
+    apiKeyStatus:
+      set: 已设置
+      notSet: 未设置
+    testResult:
+      success: 连接成功
+      fail: "连接失败: $error"
+      # 按状态码分类的人话提示——此前英文原始异常直出
+      failAuth: "API Key 无效或无权限（$status），请检查 Key 是否正确"
+      failNetwork: 网络不可达，请检查网络连接或代理设置
+      failEndpoint: "端点疑似错误（$status），请检查 baseUrl 层级是否正确"
+      failServer: "服务器异常（$status），请稍后重试"
+    deleteConfirm: "确定删除供应商 \"$name\" 吗？"
+    emptyList: 暂无供应商，点击右上角添加
+    models: 模型
+    modelCount: "$count 个模型"
+    fetchModels: 获取模型列表
+    fetchError: "获取模型列表失败: $error"
+    fetchEmpty: 供应商连接正常，但返回了 0 个模型（可手动添加模型 ID）
+    # 编辑态空保存=清除 Key，先确认（G3 后为无声破坏性操作）
+    clearKeyConfirmTitle: 清除 API Key？
+    clearKeyConfirmBody: 保存空内容将清除该供应商的 API Key，之后需要重新填写才能使用。确定清除吗？
+    searchModels: 搜索模型...
+    noModels: 暂无模型，点击获取模型列表
+    addModel: 添加模型
+    editModel: 编辑模型
+    modelId: 模型 ID
+    modelIdHint: 输入模型 ID
+    modelIdDuplicate(modelId): "模型 $modelId 已在列表中，请勿重复添加"
+    modelIdReadonly: 模型 ID 创建后不可修改
+    modelDisplayName: 显示名称
+    modelDisplayNameHint: 输入显示名称（可选）
+    modelType: 模型类型
+    modelTypeOptions:
+      chat: 对话
+      embedding: 嵌入
+      rerank: 重排
+    modelCapabilities: 能力
+    modelCapabilitiesHint: 仅对话模型可配置
+    modelCapabilitiesOptions:
+      vision: 视觉
+      reasoning: 推理
+      toolUse: 工具调用
+      webSearch: 网络搜索
+    contextWindow: 上下文窗口
+    contextWindowHint: 输入 token 上限
+    maxOutput: 最大输出
+    maxOutputHint: 输出 token 上限
+    testModel: 测试模型
+    testingModel: 正在测试...
+    testModelSuccess: "测试完成：视觉 $vision，工具 $tool"
+    testModelFail: "测试失败: $error"
+    testModelUnavailable: 模型不可用或 API Key 无效
+    deleteModel: 删除模型
+    deleteModelConfirm: "确定删除模型 \"$name\" 吗？"
+    batchSelect: 多选
+    batchSelectAll: 全选
+    batchDeselectAll: 取消全选
+    batchSelected: "已选 $count 项"
+    batchDelete: "删除选中 ($count)"
+    batchDeleteConfirm: "确定删除选中的 $count 个模型吗？"
+    # 2026-07-24 供应商模板系统 UI（DOC-12 §9）
+    protocol: 协议类型
+    protocolReadOnly: 来自模板，不可修改
+    protocolOptions:
+      openaiCompatible: OpenAI 兼容
+      openaiResponses: OpenAI Responses
+      anthropic: Anthropic Claude
+      geminiNative: Google Gemini
+    templatePicker:
+      title: 新建供应商
+      subtitle: 选择模板快速开始，或自定义配置
+      custom: 自定义
+      customDesc: 手动选择协议与地址
+      nameStep: 命名供应商
+      nameHint: 如 "OpenAI 备用账号"
+      nameRequired: 请输入供应商名称
+      templatePreview: 模板预览
+      create: 创建
+      back: 返回
+    reset: 重置为默认
+    resetConfirm: 确定恢复为模板默认值吗？当前自定义的名称、地址和模型列表将被清除（API Key 保留）。
+    resetDone: 已恢复为模板默认值
+    # providerOptions 高级参数 JSON 文本域
+    advancedOptions:
+      title: 高级参数
+      summaryEmpty: 未配置
+      summaryConfigured(count): "已配置 $count 项"
+      # 三协议消费面差异大，helperText 按协议
+      # 列有效键位——键名为代码原样保留英文
+      hintOpenai: 以下键在本协议生效：extra_headers、extra_body、parallel_tool_calls、thinking。extra_body 在基础字段之后展开，可覆盖 model/messages/stream 等同名保留键。留空表示无自定义参数。
+      hintAnthropic: 以下键在本协议生效：anthropic_beta、thinking。extra_headers / extra_body 在本协议无消费通道，配置后不生效。留空表示无自定义参数。
+      hintGemini: 仅 thinkingConfig 在本协议生效（写入 generationConfig）；extra_headers / extra_body 在本协议无消费通道，配置后不生效。留空表示无自定义参数。
+      invalidJson: JSON 格式无效，请检查逗号与引号
+      mustBeObject: 必须是 JSON 对象（以 { 开头）
+      saved: 高级参数已保存
+  # 导演模式设置（2026-08-27 导演设置体系，自包含不跳故事设置）
+  director:
+    title: 导演模式设置
+    entrySubtitle: 入口 · 模型 · 规则 · 工具 · 预算 · 记忆
+    collapseAll: 一键折叠
+    expandAll: 一键展开
+    sectionPending: 分区配置建设中，即将开放
+    sections:
+      models: 模型与生成
+      rules: 项目规则
+      tools: 工具权限
+      budget: 运行与预算
+      context: 上下文与压缩
+      memory: 检索与记忆
+    models:
+      gm: 导演主模型
+      gmDesc: 导演会话的默认主模型；未配置时首条消息会提示配置缺失
+      # （CF-O2）：主模型消费者清单
+      gmConsumers: 导演轮全部工作（检索/记忆/正文生成/压缩）
+      gmEmpty: 未配置
+      clear: 清除选择
+      cleared: 已清除，未配置时发送首条消息会提示配置缺失
+    generation:
+      title: 生成参数
+      temperature: 温度
+      topP: Top P
+      maxTokens: 单次生成上限
+      maxTokensHint: 单次生成的最大 Token 数（默认 8192）
+      presencePenalty: 存在惩罚
+      frequencyPenalty: 频率惩罚
+      reasoningEffort: 思考档位
+      reasoningNone: 无
+      # 补「禁用」第 5 档——chat 全局与导演会话级
+      # 均有，唯独导演全局缺；「无」=未配置（模型默认），「禁用」=显式关闭
+      reasoningDisabled: 禁用
+      reasoningLow: 低
+      reasoningMedium: 中
+      reasoningHigh: 高
+    pacing:
+      title: 剧情节奏
+      desc: 档位决定每轮覆盖多大一段故事时间、可以替主角做多少决定；仅激进档要求正文写满写足，保守/平衡把当轮要表达的内容交代完整即可
+      conservative: 保守
+      conservativeDesc: 只执行你声明的动作和世界的直接反应；下一步选择交还给你
+      balanced: 平衡
+      balancedDesc: 把你输入中明显暗示的延续做完；需要取舍的新选择仍留给你
+      aggressive: 激进
+      aggressiveDesc: 允许输入之外的新进展与转折，世界主动推动剧情；正文写满写足
+    rules:
+      hint: 留空回退内置编辑部规则；每个导演会话可在会话设置单独覆盖
+      saved: 项目规则已保存
+    # 2026-09-13 上下文配置收敛：导演上下文唯一旋钮（百分比⇄token 双显示）
+    context:
+      threshold: 上下文压缩阈值
+      thresholdHint: 历史占用到达生效窗口的这一比例时，下一轮开始前压缩历史；轮内另有 85% 保命线兜底
+      thresholdTokensUnit: tokens
+      thresholdTokenInputTitle: 阈值（生效 tokens）
+      windowAdvanced: 高级：窗口上限
+      effectiveWindowCaption(window): 当前生效窗口 $window（模型窗口与上限取小）
+    budget:
+      maxSteps: 每轮最大步数
+      maxStepsHint: 0 = 不限（默认 8）
+      unlimited: 不限
+      maxDuration: 单轮时间预算（分钟）
+      # 2026-09-13 上下文配置收敛：tokenRatio/tokenRatioHint 移除
+      #（削面不削功能，键保留为引擎级高级覆盖，默认 0.6 继续生效）
+      maxRetries: 请求失败重试次数
+      advanced: 高级
+      doomLoop: 循环保护阈值
+      doomLoopHint: 连续同工具同参调用判定阈值（默认 8；第 3/5 次会先收到递进提醒）
+      askUserTimeout: 请示等待超时（分钟）
+      askUserTimeoutHint: 导演未回答视同跳过（默认 3 分钟；0 = 一直等待）
+      # ask_user 超时 0 档的值显示（对齐 maxSteps 0=无上限语义）
+      waitForever: 一直等待
+      approvalTimeout: 写前审批超时（分钟）
+      approvalTimeoutHint: 超时 fail-closed 拒绝写入（默认 5 分钟）
+      subagentMaxSteps: 子代理步数上限
+      subagentMaxDuration: 子代理时长上限（分钟）
+      # 帮助文案承诺的写点落地——两个
+      # harness 键此前只有配置文件入口，设置 UI 无写点
+      foreshadowCheckInterval: 伏笔清点间隔（轮）
+      foreshadowCheckIntervalHint: 每隔 N 轮在轮尾提醒未兑现的伏笔清单；0 = 停用清点与闸门
+      eventLogRetentionTurns: 轮日志保留（轮）
+      eventLogRetentionTurnsHint: 幕后事件日志滚动保留最近 N 轮；0 = 不限制
+    suggestReply:
+      title: 推荐回复
+      model: 推荐模型
+      modelDesc: 留空跟随导演主模型
+      prompt: 提示词
+      promptHint: 留空使用内置默认提示词
+      temperature: 温度
+      maxTokens: 生成上限
+      # 候选数量/单条字数入口（08-29  收口）
+      candidateCount: 候选数量
+      candidateCountHint: 一次生成的候选回复条数
+      maxReplyLength: 单条最大字数
+      maxReplyLengthHint: 提示词层面控制单条回复长度，与生成上限互补（Token 数是 API 兜底）
+      saved: 已保存
+    tools:
+      presetFree: 自由创作
+      presetFreeDesc: 全部工具直接执行
+      presetSupervised: 监督模式
+      presetSupervisedDesc: 写入与派出子代理前需你确认
+      states:
+        allow: 允许
+        ask: 询问
+        deny: 禁用
+      groups:
+        readOnly: 只读
+        write: 写入
+        control: 控制
+      denyDesc: 禁用 = 本会话不注册该工具（模型不可见）
+      askDesc: 询问 = 执行前弹审批横幅，超时拒绝
+      allowDesc: 允许 = 直接执行
+      toolDesc:
+        search_story: 检索故事记忆
+        read_story: 按轮号回读原文
+        query_facts: 查询事实层实体卡片
+        read_compact_summary: 读取剧情主线概览
+        read_skill: 读取写作技能规范
+        update_facts: 写入/更新事实层（暂存有误可清空/重设）
+        merge_entities: 归并重复实体
+        update_story_anchor: 更新剧情锚
+        record_event_memory: 记录本轮事件记忆
+        spawn: 派出子代理调研
+        ask_user: 向导演提问
+        finish_round: 提交本轮
+    memory:
+      embeddingModel: 向量化模型
+      embeddingModelDesc: 用于故事记忆的语义检索；未配置时仅关键词检索
+      factualEnabled: 事实记忆
+      factualEnabledDesc: 开启后 agent 维护实体卡片（人物状态/关系/设定）
+      keyEntityThreshold: 关键实体重要性阈值
+      keyEntityThresholdHint: 重要度 ≥ 此值的实体每轮强制注入（默认 5）
+      consolidationTrigger: 记忆归并触发阈值
+      consolidationTriggerHint: 上下文占用率达此比例触发归并（默认 2.0 = 禁用）
+      advanced: 高级
+      embeddingTimeout: 向量化超时（毫秒）
+      embeddingFallback: 失败时降级关键词检索
+      consolidationMin: 归并最少条数
+      consolidationMax: 归并单批上限
+  template:
+    title: 模板管理
+    # 入口副标题专用键（原借用 filterAll 筛选文案）
+    entrySubtitle: 管理系统提示词与内容模板
+    add: 新建模板
+    edit: 编辑模板
+    delete: 删除模板
+    copy: 复制模板
+    name: 模板名称
+    nameHint: 输入模板名称
+    nameRequired: 请输入模板名称
+    content: 模板内容
+    contentHint: 输入模板内容
+    filterAll: 全部
+    typeLabel: 类型
+    type:
+      systemPrompt: 系统提示词
+      # compaction（折叠模板）标签键已删除——
+      # TemplateKind.consolidation 下架（编辑不生效，真压缩提示词在故事
+      # 模式分段自定义）
+      #  #28：toolUpdateWorld 全下架，toolDefinition 标签键随之删除
+      #（注意：settings.intermediate.preview.toolDefinition 是另一键，保留）
+    # TP13-1：内置模板拦的是「修改」不是「删除」——
+    # 原文案答非所问（删除侧本就不显示入口）
+    builtIn: 内置模板不可修改，可先复制再编辑
+    # TP13-3：复制默认名（页面层传本地化名，数据层不再硬编码中文）
+    copyOf(name): "$name（副本）"
+    # TP13-2：模板 CRUD 失败反馈
+    opFailed: 操作失败，请重试
+    deleteConfirm: "确定删除模板 \"$name\" 吗？"
+    emptyList: 暂无模板，点击右下角添加
+  resourceLibrary:
+    # WA13U-1：内容查看器（人类可读性第一）
+    viewer:
+      version: 卡片规范版本
+      description: 描述
+      personality: 性格
+      embeddedEntries(count): 内嵌世界书词条（$count 条）
+      entries(count): 词条（$count 条）
+      noEntries: 本书没有词条
+      unnamedEntry: 未命名词条
+      expand: 展开全文
+      collapse: 收起
+      moreEntries(count): 仅显示前 20 条，还有 $count 条未展示
+      rawJson: 原始 JSON（解析失败兜底）
+    title: 角色卡/世界书
+    entrySubtitle: 导入并管理 SillyTavern 角色卡与世界书
+    cardsSection: 角色卡
+    booksSection: 世界书
+    importCard: 导入角色卡（PNG）
+    # F9 修复：纯 JSON 卡应用内入口（此前只能靠分享进入）
+    importCardJson: 导入角色卡（JSON）
+    importBook: 导入世界书（JSON）
+    emptyList: 暂无资源
+    # 删除弹窗补标题（对齐记忆库实体删除骨架）
+    deleteTitle: 删除资源
+    # 删除成功反馈（此前仅靠 tile 消失暗示成功）
+    deleted: "已删除 \"$name\"（含投影级联移除）"
+    deleteConfirm: "确定删除 \"$name\" 吗？\n\n已应用到会话的该资源投影（实体及其 AI 演变值）将被一并移除，此操作不可恢复。"
+    importFailed: "导入失败：$error"
+    imported: "已导入 \"$name\""
+    # 列表加载失败错误态（重试按钮复用 common.retry）
+    loadFailed: 资源库加载失败，请检查数据文件后重试
+    # 外部"打开方式/分享"导入（微信等第三方应用）
+    # AI 建卡入口（2026-09-11 resource_ai）
+    aiCreateCard: AI 建角色卡
+    aiCreateBook: AI 建世界书
+    aiEdit: AI 编辑
+    incomingTitle: 导入到资源库
+    incomingTypeCard: 角色卡
+    incomingTypeBook: 世界书
+    incomingTypeUnknown: 未知类型
+    incomingConfirm: "将 \"$name\" 作为$typeLabel导入资源库？"
+    incomingReadFailed: "读取文件失败：$error"
+    # 应用数据备份（全量/单会话导出）从"打开方式/分享"进入时的分流确认
+    incomingBackupTitle: 检测到应用数据备份
+    incomingBackupConfirm: "\"$name\" 是 LMStory 数据备份（会话、供应商、偏好等）。确认后将打开数据管理页完成导入，可再选择追加或覆盖。"
+  general:
+    title: 通用设置
+    entrySubtitle: 供应商 · 外观 · 语言 · 高级
+    # 顶层分类卡片（2026-07-19 子页化重构）
+    categories:
+      appearance:
+        title: 外观
+        subtitle: 主题结构 · 配色 · 深浅 · 字体大小
+      languageInput:
+        title: 语言与输入
+        subtitle: 界面语言 · 发送快捷键
+      advanced:
+        title: 高级
+        subtitle: 思考预算 · 超时设置 · 标题模型
+    theme: 主题模式
+    themeOptions:
+      dark: 深色
+      light: 浅色
+      system: 跟随系统
+    structure: 主题
+    palette: 配色
+    language: 语言
+    languageOptions:
+      zhCn: 简体中文
+      enUs: English
+      system: 跟随系统
+      comingSoon: 敬请期待
+    fontSize: 字体大小
+    fontSizeOptions:
+      medium: 中
+    # 实际字号数值显示（tabular figures 等宽对齐）
+    fontSizeActualPx(value): "实际字号 $value px"
+    # 默认值标记 label（Slider 上方徽章 + 下方标尺位置都用这个）
+    fontSizeDefaultLabel: 默认
+    # 预览卡片示例文本：让用户直观感受当前字号在消息气泡中的渲染效果
+    fontSizePreviewText: 这是一条预览消息，用于展示当前字号下消息内容的实际显示效果。拖动上方滑块可即时调整。
+    fontSizePreviewCaption: 预览效果（与聊天页字号一致）
+    sendKey: 发送键
+    sendKeyOptions:
+      enter: Enter
+      shiftEnter: Shift+Enter
+      ctrlEnter: Ctrl+Enter
+      button: 仅按钮
+    newlineKey: 换行键
+    newlineKeyOptions:
+      enter: Enter
+      shiftEnter: Shift+Enter
+      ctrlEnter: Ctrl+Enter
+      altEnter: Alt+Enter
+    mobileSendKeyOptions:
+      enter: 回车发送
+      button: 回车换行
+    sendKeyEnterHint: 提示：部分输入法长按发送键可换行
+    sendButtonNewlineHint: 长按发送按钮可换行（不限配置，随时可用）
+    timeout: 超时设置
+    connectTimeout: 连接超时
+    connectTimeoutDesc: 连接服务器的最长等待时间（秒）
+    receiveTimeout: 响应超时
+    receiveTimeoutDesc: 等待模型回复的最长时间（秒），模型思考时间长时可适当调大
+    timeoutUnit: 秒
+    defaultReasoningEffort: 默认思考预算
+    # 此前无任何解释（键存在但 UI 未渲染）——补「是什么 +
+    # 档位差异 + 改动影响范围」，写法对齐响应超时的人话说明
+    defaultReasoningEffortDesc: >-
+        控制模型回复前是否思考及思考深度：禁用=不思考，回复最快；低/中/高=思考逐档加深，耗时与 token 消耗相应增加；未配置=由模型自行决定。仅对支持思考的模型生效。改动只作为新会话的默认值，已有会话不受影响，会话内可单独覆盖。注意：部分始终思考的模型（如 GLM-5.3）与第三方兼容端点无法真正禁用思考，此时禁用=不发参数（沿用模型默认档），消耗可能与预期不符。
+    defaultReasoningEffortOptions:
+      notSet: 未配置
+      disabled: 禁用
+      low: 低
+      medium: 中
+      high: 高
+    # 会话标题模型（2026-07-21 配置架构重构新增）
+    # 独立于业务模式，统一从 common.title_model 读取，用于所有模式的会话标题自动生成
+    titleModel: 会话标题模型
+    titleModelNotConfigured: 未配置（先用当前生成模型起标题，失败时截取回复前缀）
+    titleModelSaved: 标题模型已更新
+    # 清除 tile 专用键——此前复用「清除默认模型」
+    # 在标题模型面板语境错位（地图 09-09 真机同记录）
+    titleModelClear: 清除标题模型
+    # 配置显示模式（简单/进阶）：跨页元配置开关，双模式下恒显
+    configDisplayMode:
+      title: 配置显示模式
+      desc: 简单模式只显示常用配置；进阶模式显示全部配置（含高级参数）
+      simple: 简单模式
+      advanced: 进阶模式
+  chatSettings:
+    title: 对话模式设置
+    entrySubtitle: 默认模型 · 压缩 · 显示偏好
+    defaultModel:
+      title: 默认模型
+      desc: 新对话建立时默认填充的模型
+      select: 选择默认模型
+      selected: 已选择
+      notSelectedWithCurrent: "未设置（将使用 $current）"
+      noProviderAvailable: 暂无可用供应商
+      clear: 清除默认模型
+      empty: 暂无可用模型，请先在供应商配置中添加
+      emptyAction: 前往供应商配置
+      filterAll: 全部
+    autoCompaction: 自动压缩
+    autoCompactionDesc: 当上下文超过阈值时自动压缩
+    compactionThreshold: 压缩阈值
+    compactionThresholdDesc: 上下文使用量达到此比例时触发自动压缩（40%-90%）
+    # 2026-07-22 新增：全局生成参数（对标 ChatBox Default Settings for New Conversation）
+    # 这些值是新会话物化时的"快照源"——会话级字段在物化时读取当前全局值并写入
+    # chat_sessions 对应字段。修改全局参数不会影响已物化的会话（快照语义）。
+    generationDefaults:
+      title: 新对话默认生成参数
+      desc: 新对话建立时默认填充的生成参数，修改不影响已有会话
+      temperature: 温度
+      temperatureDesc: 控制输出随机性，值越高越有创造力（0.0-2.0）
+      topP: Top P
+      topPDesc: 控制输出多样性，值越低越聚焦（0.0-1.0）
+      maxTokens: 最大 Token 数
+      maxTokensDesc: 单次回复的 Token 上限（留空由模型决定）
+      maxTokensCleared: 已清除（由模型决定）
+      streamEnabled: 流式输出
+      streamEnabledDesc: 启用后回复将逐字流式显示
+    display: 显示设置
+    showTimestamp: 显示时间戳
+    showTimestampDesc: 在消息下方显示发送时间
+    showModelName: 显示模型名称
+    showModelNameDesc: 在助手消息下方显示模型名称
+    showTokenUsed: 显示 Token 用量
+    showTokenUsedDesc: 在助手消息下方显示 Token 消耗
+    showWordCount: 显示字数统计
+    showWordCountDesc: 在消息下方显示字数统计
+    showFirstTokenLatency: 显示响应时间
+    showFirstTokenLatencyDesc: 在助手消息下方显示 AI 开始回复前花了多久
+    showAvatar: 显示头像
+    showAvatarDesc: 在消息旁显示用户/助手头像
+    modelNameTooltip: 模型
+    tokensUsedTooltip: Token 总消耗
+    wordCountTooltip: 字数统计
+    firstTokenLatencyTooltip: 响应时间
+    messageLayout: 消息布局
+    messageLayoutDesc: 切换消息的显示方式
+    messageLayoutOptions:
+      bubble: 气泡模式
+      standard: 标准模式
+  intermediate:
+    title: 故事模式设置
+    entrySubtitle: 模型 · 提示词 · 记忆 · 帮助
+    # 顶层分类卡片（2026-07-19 子页化重构）
+    categories:
+      models:
+        title: 模型配置
+        subtitle: 默认模型 · 分步骤模型 · 嵌入模型
+      systemPrompt:
+        title: 系统提示词
+        subtitle: 故事角色设定
+      toolsMemory:
+        title: 工具与记忆
+        subtitle: 工具调用 · 记忆配置
+      generation:
+        title: 生成参数
+        subtitle: 温度 · Top P · 惩罚 · Token 上限
+      prompts:
+        title: 提示词模板
+        subtitle: 10 段可编辑提示词
+      suggestReply:
+        title: 推荐回复
+        subtitle: 模型 · 提示词 · 生成参数
+      help:
+        title: 使用帮助
+        subtitle: 配置说明与使用指引
+    # 模型配置子页提示（2026-07-19 Phase B：reviewing 阶段依赖 reasoning 能力）
+    reasoningHintTitle: 建议配置支持 reasoning 的模型
+    reasoningHintBody: 审查阶段依赖模型的思考能力来检查生成内容的事实一致性、叙事质量和 AI 味。推荐使用支持 reasoning 的模型（如 GPT-5、Claude 4.1、GLM-5.2 等），并在模型能力中勾选"推理"。思考预算可在会话设置中调整。
+    # 会话级 reasoningEffort 选项（2026-07-19 Phase B：故事模式会话设置补齐）
+    # 2026-07-22 快照语义：移除 useDefault 选项，始终显示具体档位
+    sessionReasoningEffort: 思考预算
+    sessionReasoningEffortHint: 仅作用于生成与审查阶段（关闭审查阶段时仅生成阶段生效），关键词提取/摘要等阶段不消耗思考预算
+    sessionReasoningEffortCurrentEffect(prefix): "当前生效：$prefix"
+    sessionReasoningEffortOptions:
+      notSet: 未单独设置
+      disabled: 禁用
+      low: 低
+      medium: 中
+      high: 高
+    systemPrompt: 系统提示词
+    systemPromptDesc: 设置故事模式的默认角色设定。每个故事会话可单独覆盖此配置。
+    systemPromptHint: 留空将使用内置默认角色设定（沉浸式互动故事创作助手）
+    systemPromptDefaultPreview: "内置默认：$preview…"
+    systemPromptHelperTitle: 使用帮助
+    systemPromptHelperBullet1: 默认模型和系统提示词可留空，留空时使用通用默认或内置设定
+    systemPromptHelperBullet2: 嵌入模型用于故事记忆的语义检索，留空则仅用关键词检索
+    systemPromptHelperBullet3: 工具调用控制 AI 输出格式，默认启用即可，遇到不兼容模型时关闭
+    systemPromptHelperBullet4: 故事模式每轮对话流程：提取关键词→检索记忆→生成→（可选审查阶段）→生成摘要，提示词模板可自定义每步指令
+    systemPromptHelperBullet5: 所有配置对新会话立即生效；每个会话可在会话设置中单独覆盖
+    charCount: "$count 字"
+    save: 保存
+    reset: 恢复默认
+    resetConfirm: 确定恢复为内置默认角色设定吗？当前自定义内容将被清除。
+    saved: 系统提示词已保存
+    resetDone: 已恢复为默认设定
+    loading: 加载中…
+    model: 模型
+    presetsLoadFailed: 供应商列表加载失败
+    defaultModelSaved: 默认模型已更新
+    defaultModelCleared: 已恢复使用通用默认模型
+    # 分步骤模型配置（phase_models 组）
+    # 2026-07-21 配置架构重构：删除"故事模式默认模型"中间层，
+    # 仅保留会话级 phase + 全局 phase 两层。会话级未配置时显示 useGlobal，
+    # 全局级未配置时显示 notConfigured。
+    phaseModels:
+      title: 分步骤模型配置
+      desc: 为故事生成的每个步骤配置独立模型，简单步骤可用小模型降低成本
+      # 会话级模式专用：未配置该阶段时显示，表示将使用全局 phase_models 配置
+      # 全局模式专用：未配置该阶段时显示，表示该步骤未配置模型
+      notConfigured: 未配置
+      generating: 生成回复
+      extracting: 关键词提取
+      reviewing: 审查
+      summarizing: 事件摘要
+      # （CF-O2）：模型槽位消费者清单（换模型前看「影响」）
+      consumers(items): "影响：$items"
+      useStoryMain: 正文生成（故事模式主链路）
+      useExtract: 关键词提取
+      useReview: 正文审查修正
+      useSummarize: 事件摘要提取
+      useCompaction: 对话压缩
+    embeddingModel: 嵌入模型
+    embeddingModelDesc: 语义检索用的嵌入模型，独立于聊天模型。留空则仅用关键词检索。
+    embeddingModelNotConfigured: 未配置（仅使用关键词检索）
+    embeddingModelSaved: 嵌入模型已更新
+    # 切换嵌入模型时确认对话框（避免已有向量静默失效）
+    # 简化方案：不查询具体 count，避免破坏 ExperienceRepository 的 session-scoped 设计
+    embeddingSwitchConfirmTitle: 切换嵌入模型？
+    embeddingSwitchConfirmContent: 切换后，已有记忆的向量将不再参与语义检索。是否继续？
+    embeddingSwitchConfirmAction: 确认切换
+    # 结构化输出开关（DOC-09B §8.6 V2）
+    jsonMode: 工具调用
+    jsonModeDesc: 控制 AI 提取关键词和生成摘要时的输出格式。默认启用，遇到不兼容模型时可关闭。
+    jsonModeToggle: 启用工具调用
+    jsonModeOnHint: AI 优先使用工具调用返回结构化数据，兼容性更好
+    jsonModeOffHint: AI 直接输出 JSON 文本，适用于不支持工具调用的模型
+    # 审查阶段全局开关（控制 reviewing 阶段是否执行）
+    # false（默认）= 生成即最终，3 次 LLM 调用；true = 增加 reviewing 审查，4 次 LLM 调用
+    reviewEnabled: 审查阶段
+    reviewEnabledDesc: 开启后增加审查阶段，检查事实一致性
+    reviewEnabledToggle: 启用审查阶段
+    reviewEnabledOnHint: 生成后增加审查阶段，检查事实一致性（多 1 次 LLM 调用）
+    reviewEnabledOffHint: 生成即最终，跳过审查阶段，减少 1 次 LLM 调用
+    # 上下文预算全局配置（控制原文区/检索区的 token 预算分配）
+    # - 压缩触发线固定 50%（总占用达此比例触发压缩）
+    # - 原文区下限默认动态（基于 32K token 反推），可自定义
+    # - 检索区比例默认 15%
+    contextBudget: 上下文预算
+    contextBudgetDesc: 控制压缩触发线与检索区的 token 预算分配，影响压缩触发时机
+    contextBudgetRecentMax: 压缩触发线
+    contextBudgetRecentMin: 原文区下限
+    contextBudgetRetrieval: 检索区比例
+    contextBudgetTokens: tokens
+    contextBudgetDynamic: 动态（基于 32K）
+    contextBudgetCustom: 自定义
+    contextBudgetRecentMinHint: 原文区保留下限占比，低于此值不压缩。留空使用动态计算
+    contextBudgetRetrievalHint: 检索区占可用窗口的比例，控制注入的记忆体量
+    contextBudgetAvailableWindow: 可用窗口
+    contextBudgetGenerating: 生成
+    contextBudgetReviewing: 审查
+    # v0.2.2 阶段 2-E：检索区比例 = 0 时的明确提示
+    contextBudgetRetrievalDisabledHint: "⚠️ 已完全关闭检索，故事将无法引用过往记忆"
+    # v0.2.2 阶段 2-C：单次请求 token 上限全局配置
+    effectiveContextLimitGlobal: "单次请求 Token 上限"
+    effectiveContextLimitNoLimit: 无限制
+    effectiveContextLimitGlobalHint: "限制每次请求塞入的 token 数，避免触发 TPM 429。0 表示使用模型窗口。实际生效值 = min(配置值, 模型窗口)"
+    # 记忆检索门槛（全局，2026-08-13 恢复：原 macro_summary 容器被删后阈值无 UI 入口）
+    # importance < storage 的记忆不建索引；storage <= importance < vectorize 仅 FTS5；
+    # importance >= vectorize 才生成语义向量。纳入低分记忆需同时调低两个门槛。
+    vectorizeThreshold: 记忆检索门槛
+    vectorizeThresholdDesc: 控制哪些重要性的记忆进入检索；纳入低分记忆需同时调低两个门槛
+    storageThreshold: 存储索引门槛
+    storageThresholdHint: "低于此分数的记忆不建索引（无法检索）。默认 3"
+    vectorizeThresholdLabel: 向量化门槛
+    vectorizeThresholdHint: "达到此分数才生成语义向量，支持语义检索。默认 4；不应低于存储索引门槛"
+    vectorizeThresholdLevel: "$score 分"
+    # 生成参数全局配置（v0.2.2 阶段 2-B 新增）
+    # 这5个参数是新会话物化时的"快照源"——会话级字段在物化时读取当前全局值并写入
+    # chat_sessions 对应字段。修改全局参数不会影响已物化的会话（快照语义）。
+    # 作用范围：generating（生成）与 reviewing（审查阶段）阶段
+    generation:
+      title: 生成参数
+      desc: 新会话默认的生成参数，修改不影响已有会话。作用于生成与审查阶段
+      temperature: 温度
+      temperatureDesc: 控制生成随机性，值越高越发散（0.0-2.0）
+      topP: Top P
+      topPDesc: 核采样阈值，值越低越聚焦（0.0-1.0）
+      maxTokens: 最大 Token 数
+      maxTokensDesc: 单次回复的 Token 上限；0 表示不设置应用层上限，也可输入任意正整数
+      presencePenalty: 存在惩罚
+      presencePenaltyDesc: 鼓励新话题，避免剧情单调（-2.0 ~ 2.0）
+      frequencyPenalty: 频率惩罚
+      frequencyPenaltyDesc: 减少重复用词，避免描写冗余（-2.0 ~ 2.0）
+      # v0.2.2 新增：思考预算全局配置（放入生成参数子页，作用范围一致）
+      reasoningEffort: 思考预算
+      reasoningEffortDesc: 仅作用于生成与审查阶段（关闭审查阶段时仅生成阶段生效），关键词提取/摘要等阶段不消耗思考预算
+      reasoningEffortNotSet: 未配置（跟随模型默认）
+      reasoningEffortDisabled: 禁用
+      reasoningEffortLow: 低
+      reasoningEffortMedium: 中
+      reasoningEffortHigh: 高
+    # 推荐回复配置（2026-07-29 新增）
+    suggestReply:
+      title: 推荐回复配置
+      desc: 配置输入框「推荐」按钮使用的模型、提示词和生成参数。未配置模型时回退到生成阶段模型。
+      modelSection: 推荐回复模型
+      modelDesc: 推荐回复专用模型，可选用便宜的小模型节省 token。留空回退到生成模型。
+      notConfigured: 未配置（回退到生成模型）
+      promptSection: 推荐回复提示词
+      promptDesc: 控制候选回复生成的系统提示词。输入框始终显示当前生效的提示词内容，可直接编辑后保存。留空保存视为兜底，运行时回退到内置默认。
+      promptHint: 输入框内容即为生效内容。留空保存则回退到内置默认。
+      restoreDefault: 恢复默认
+      promptSaved: 推荐回复提示词已保存
+      promptResetDone: 已将内置默认提示词填入输入框
+      promptResetConfirm: 确定将内置默认推荐回复提示词填入输入框吗？填入后会自动保存，可基于它继续修改。
+      generationSection: 生成参数
+      temperature: 温度
+      temperatureHint: 控制候选回复的多样性，值越高越发散
+      maxTokens: 最大 Token 数
+      maxTokensHint(count): API 层面的总 token 硬限制，$count 条候选共用的上限，防止输出过长被截断
+      candidateCount: 候选数量
+      candidateCountHint: 一次生成的候选回复条数（1-5）
+      maxReplyLength: 单条最大字数
+      maxReplyLengthHint: 在提示词中告诉 AI 每条回复不超过多少字，控制单条质量。与最大 Token 数互补：Token 数是 API 兜底，字数是提示词层控制。
+      modelSaved: 推荐回复模型已更新
+      modelCleared: 已恢复使用生成模型
+    # 设置页 dirty check 放弃修改确认对话框（替代硬编码中文）
+    confirmDiscardTitle: 放弃修改？
+    confirmDiscardContent: 当前编辑内容尚未保存，离开将丢失修改。
+    keepEditing: 继续编辑
+    discard: 放弃
+    #  提示词编辑（提示词白盒化）
+    prompts:
+      sectionTitle: 提示词模板
+      sectionDesc: 故事生成、记忆与事实处理的 10 段提示词，可自定义覆盖内置默认值
+      sectionNote: 高级配置。每段提示词对应生成流程或记忆/事实扩展的特定位置，修改前建议先查看「预览拼接效果」。
+      customized: 已自定义
+      defaultStatus: 默认
+      save: 保存
+      reset: 恢复默认
+      resetConfirm: 确定恢复为内置默认提示词吗？当前自定义内容将被清除。
+      saved: 提示词已保存
+      resetDone: 已恢复为默认提示词
+      usageTitle: 使用场景
+      # 空保存校验拦截（空就是空、每项必有值）
+      emptyBlocked: 提示词不能为空。请填写内容，或点「恢复默认」还原内置提示词。
+      defaultValuePreview: 内置默认值
+      # 占位符段的可用变量提示与保存警告
+      placeholdersTitle: 可用变量
+      placeholdersDesc(names): "该段提示词发送前会替换以下占位符：$names。它们对应设置页「注入标题」等配置，删除后对应区块标题将失效，请保留。"
+      placeholderMissingWarning(names): "已保存，但以下占位符被删除，对应区块标题将不再显示：$names"
+      charCount: "$count 字"
+      confirmDiscardTitle: 放弃修改？
+      confirmDiscardContent: 当前编辑内容尚未保存，离开将丢失修改。
+      keepEditing: 继续编辑
+      discard: 放弃
+      fields:
+        defaultRolePrompt:
+          title: 默认角色提示词
+          desc: 故事模式会话的基础角色设定，所有新会话默认使用
+          usage: 作为系统提示词的前缀，与各步骤后缀拼接后发送给 LLM
+        generatingSuffixV2:
+          title: 生成后缀
+          desc: 附加在系统提示词后，指导 LLM 生成生成正文（纯文本）
+          usage: generating 步骤使用，要求 LLM 输出纯文本，无关键词/JSON
+        extractKeywordsPrompt:
+          title: 关键词提取提示
+          desc: 指导 LLM 从用户消息和最近对话中提取 5 类检索关键词（角色/物品/地点/动作/情节）
+          usage: extracting 步骤使用，工具调用或 JSON 模式输出结构化关键词
+        reviewSuffixV2:
+          title: 审查后缀
+          desc: 附加在系统提示词后，指导 LLM 结合检索记忆审查并生成最终回复（纯文本）
+          usage: reviewing 步骤使用，要求 LLM 输出纯文本回复，无事件摘要
+        extractSummaryPrompt:
+          title: 事件摘要提示
+          desc: 指导 LLM 从回复中提取事件摘要（summary + tags + importance）
+          usage: summarizing 步骤使用，工具调用或 JSON 模式输出结构化摘要
+        generatedInjectionPrefix:
+          title: 生成内容注入前缀
+          desc: 审查阶段将生成内容注入对话时使用的前缀标识
+          usage: reviewing 步骤将生成内容作为 system 消息注入，此前缀作为标签
+        memoriesInjectionTitle:
+          title: 经历摘要类记忆检索结果注入标题
+          desc: 审查阶段注入检索到的经历层记忆时使用的标题
+          usage: generating/reviewing 步骤将检索到的经历记忆作为 system 消息注入，此标题作为标签
+        consolidationPrompt:
+          title: 记忆提炼提示
+          desc: 指导 LLM 将多条低重要性记忆合并为高重要性剧情节点
+          usage: 批量记忆提炼时使用，合并结果写入 experiential_memories
+        extractFactsPrompt:
+          title: 事实层提取提示
+          desc: 指导 LLM 从回复中提取世界事实变更（实体/属性的新增、修改、删除）
+          usage: summarizing 步骤与事件摘要提示词同时注入，工具调用模式产出 FactsDelta 列表
+        factInjectionTitle:
+          title: 事实类记忆检索结果注入标题
+          desc: generating/reviewing 阶段注入检索到的事实层记忆时使用的标题
+          usage: generating/reviewing 步骤将事实层记忆作为 system 消息注入，此标题作为标签
+      #  提示词预览按钮入口
+      previewButton: 预览拼接效果
+      previewButtonDesc: 用固定示例展示当前配置下四个步骤实际发送的请求内容
+    #  提示词拼接预览页
+    preview:
+      title: 预览拼接效果
+      mockBanner: 以下为模拟数据预览——固定示例输入配合当前提示词配置拼装。实际对话时会替换为真实内容。
+      # 流程 Tab 标签
+      generateTab: 生成
+      extractTab: 提取
+      reviewTab: 审查
+      summarizeTab: 摘要
+      # 步骤说明（小白用户）
+      generateStep: 根据对话历史生成故事内容
+      extractStep: 从用户消息和最近对话提取 5 类关键词，检索相关往事
+      reviewStep: 融合记忆，审查并改写为最终回复
+      summarizeStep: 从回复生成事件摘要，存入记忆
+      # 工具调用信息（技术用户，extract/summarize 步骤）
+      toolCallingOn: 工具调用已启用
+      toolCallingOff: 工具调用已禁用
+      toolCallingOnDesc: AI 通过工具调用返回结构化数据，兼容性更好
+      toolCallingOffDesc: AI 直接输出 JSON 文本，适用于不支持工具调用的模型
+      toolDefinition: 工具定义
+      showToolDefinition: 展开工具定义
+      hideToolDefinition: 收起
+      # 消息角色
+      roleSystem: 系统
+      roleUser: 用户
+      roleAssistant: 助手
+      stats:
+        one: "共 $count 条消息 · 约 $tokens tokens"
+        other: "共 $count 条消息 · 约 $tokens tokens"
+      # token 预算信息（技术用户，仅 generating/reviewing 步骤显示）
+      budgetInfo(context, reserve): "上下文窗口 $context · 输出预留 $reserve"
+  data:
+    title: 数据管理
+    # 入口副标题专用键（原借用 export 动作文案）
+    entrySubtitle: 备份、恢复与存储概览
+    export: 导出数据
+    exportDesc: 导出会话、供应商或偏好
+    import: 导入数据
+    importDesc: 从 JSON 文件导入数据
+    #  备份完整性立项：自动备份区段
+    autoBackup:
+      title: 自动备份
+      desc: 启动后自动备份到本机（不含 API Key，保留最近 3 份）
+      # 行为说明，口径与 AutoBackupManager 实际
+      # 行为一致——启动时检查、距上次备份超 24h 且有会话数据才执行、长驻进程
+      # 每 6h 周期补查（行为 /  文案补齐）、文档目录 backups/、
+      # 不含 API Key、滚动保留 3 份
+      hint: >-
+        开启后，应用启动时以及长期驻留期间每 6 小时会自动检查：距上次备份超过 24 小时且有会话数据才备份一次。备份存于文档目录 backups/，不含 API Key，保留最近 3 份。不需要时关闭上方开关即可。
+      # 醒目提示行（warning 色加粗）：沙盒目录不可见 + 迁移指路
+      sandboxNotice: 备份目录在应用私有存储内，文件管理器看不到属正常现象；迁移数据请用「导出数据」。
+      backupNow: 立即备份
+      openFolder: 打开备份目录
+      done: 已完成备份
+      failed: 备份失败，请重试或查看日志
+      pathLabel: 备份目录（已复制到剪贴板）
+      # 兜底弹窗说明：路径在应用私有存储内，文件管理器不可见；
+      # 迁移数据请走导出/导入，不走这个目录
+      pathSandboxNote: 该目录在应用专属的受保护存储内，文件管理器无法浏览，这是系统的安全设计，备份并未丢失。
+      pathMigrationTip: 想把数据搬到新设备？请用本页的「导出数据」导出备份文件，到新设备上再用「导入数据」恢复。
+      # 状态行+恢复入口
+      lastSuccessAt(time): 上次成功备份：$time
+      lastFailedAt(time): 上次自动备份失败（$time），请检查存储空间或手动备份
+      restoreFromBackup: 从备份恢复
+      restoreSheetTitle: 选择要恢复的备份
+      restoreSectionBackups: 自动备份
+      restoreSectionSnapshots: 覆盖导入前快照
+      nothingToRestore: 暂无备份或快照可恢复
+      restoreReadFailed: 备份文件读取失败，请重试
+    #  修复：与 Wiki/帮助入口统一名称「清除所有数据」
+    # （此前设置卡叫"清除会话和消息"，用户按 Wiki 找不到同名卡片）
+    clearAll: 清除所有数据
+    clearAllDesc: 删除所有会话和消息（保留 API 供应商和个人偏好）
+    clearConfirm: 确定清除所有会话和消息吗？API 供应商和个人偏好不会被删除。此操作不可恢复。
+    clearSuccess: 会话和消息已清除
+    clearFailed: 清除数据失败
+    importSuccess: 导入成功
+    importFailed: "导入失败: $error"
+    # 导入进行中的进度弹层文案（不可关闭，完成/失败自动撤除）
+    importing: 正在导入数据，请稍候…
+    importSummary:
+      presets: "预设: 导入 $imported 个, 跳过 $skipped 个"
+      sessions: "会话: 导入 $imported 个, 跳过 $skipped 个"
+      messages: "消息: 导入 $imported 条"
+      preferences: "偏好: 导入 $imported 个, 跳过 $skipped 个"
+      # v3 全局资产 + API Key 提示直达
+      assets: "全局资产: 导入 $imported 行（角色卡/世界书/模板/事件日志）"
+      # Key 提示三档口径，与  含 Key 备份语义对齐——
+      # 勾选导入后不得再说「API Key 不随备份保存」
+      apiKeyReminder: 供应商已恢复，但这份备份不含 API Key，需重新填写
+      apiKeyNotImportedNotice: 备份包含 API Key，但未勾选导入，本机密钥保持不变；如需使用备份中的密钥，请重新导入并勾选「导入备份中的 API Key」。
+      apiKeyImportedNotice: 已从备份导入 API Key 并覆盖本机密钥
+      goProviders: 去填写
+    # 导出角色标签/恢复会话标题（服务层文案入 slang）
+    exportRoleUser: 用户
+    exportRoleAssistant: 助手
+    exportRoleSystem: 系统
+    recoveredSessionTitle: 恢复的会话
+    exportOptions:
+      title: 选择导出内容
+      sessions: 会话（含消息）
+      presets: API 供应商
+      preferences: 个人偏好
+      includeApiKeys: 包含 API Key
+      apiKeyWarning: 包含 API Key 存在安全风险，请妥善保管导出文件
+      # 第四选项——全局世界资产
+      globalAssets: 世界资产（角色卡/世界书/自建模板）
+      export: 导出
+    sessionExport:
+      title: 导出此会话
+      formatJson: JSON（可再导入）
+      formatMarkdown: Markdown（便于阅读）
+      formatText: 纯文本
+      preparing: 正在准备导出...
+      success: 已导出
+      successHint: 请在弹出的分享面板选择保存位置（如"文件"App 保存到本地，或分享到其他应用）
+    importMode:
+      title: 选择导入模式
+      append: 追加
+      appendDesc: 保留现有数据，跳过已存在的，只导入新的
+      overwrite: 覆盖
+      overwriteDesc: 清空备份包含的数据类型，再用备份重建
+      overwriteWarning: 覆盖模式将清空当前数据！此操作不可恢复（系统会先自动创建快照），确定继续？
+      # 含 Key 备份导入
+      secretsNotice: 该备份包含 API Key。默认不导入密钥；如需用备份中的 Key 覆盖本机密钥，请勾选下方开关。
+      importApiKeysLabel: 导入备份中的 API Key（覆盖本机密钥）
+      # en 单复数分支；中文无形态变化，one/other 同文双分支
+      overwriteSingleHint:
+        one: "这份备份只包含 $count 个会话——覆盖将清空全部现有会话，只留下这 $count 个。请谨慎选择。"
+        other: "这份备份只包含 $count 个会话——覆盖将清空全部现有会话，只留下这 $count 个。请谨慎选择。"
+      # v3 纯配置备份仍无条件携带全局资产三键，覆盖时
+      # 资产域会被清空重建（现状）——「仅供应商/偏好配置」低估影响面
+      overwriteNoSessionsHint: 这份备份不含会话数据，会话不受影响；但覆盖仍会清空并按备份重建供应商、偏好与全局资产（如有——导出时可选择不携带世界资产）。
+      # 覆盖导入前置自动快照说明（确认页 + 摘要）
+      snapshotHint: 覆盖前会自动快照当前数据（文档目录 backups/，保留最近 2 份，不含 API Key）——导入搞砸可从该快照回滚。
+      snapshotCreated: "已自动创建导入前快照：$fileName"
+      snapshotFailed: "导入前快照创建失败，已中止导入：$error"
+    recovery:
+      title: 数据恢复
+      desc: 扫描并恢复孤立消息
+      noOrphan: 未发现可恢复的数据
+      foundOrphan: "发现 $groups 组孤立消息，共 $messages 条"
+      recover: 恢复全部
+      recovered:
+        one: "已恢复 $count 个会话"
+        other: "已恢复 $count 个会话"
+    repairSchema:
+      title: 修复表结构
+      desc: 增量补齐缺失的表和列（不删除已有数据）
+      confirm: "将检测并修复数据库表结构差异（不删除已有数据）。\n\n建议在执行前先导出全量备份，以防意外情况。\n\n是否继续？"
+      successTitle: 修复完成
+      noChange: 数据库表结构已是最新，无需修复
+      createdTables: "新建表（$count 个）"
+      addedColumns: "新增列（$count 个）"
+      versionUpdated: "schemaVersion 已更新至 $version"
+      failed: "修复失败：$error"
+      failedColumns: "添加失败的列（$count 个，下次启动将自动重试）"
+      # 修复：导入版本守卫 + 单会话覆盖二次确认
+      importVersionTooNew: "该备份由更新版本的应用导出（格式 v$version），请先升级应用后再导入"
+      importOverwriteSingleTitle: "危险操作确认"
+      importOverwriteSingleBody:
+        one: "这份备份只包含 $count 个会话。\n\n覆盖导入会先清空当前全部会话与消息，再导入这 $count 个会话——其余数据将无法恢复。\n\n确定继续吗？"
+        other: "这份备份只包含 $count 个会话。\n\n覆盖导入会先清空当前全部会话与消息，再导入这 $count 个会话——其余数据将无法恢复。\n\n确定继续吗？"
+    storageInfo:
+      title: 存储信息
+      dbSize: 数据库大小
+      sessionCount: 会话数量
+      messageCount: 消息数量
+      presetCount: API 供应商数量
+      templateCount: 模板数量
+      preferenceCount: 偏好项数量
+      # 稿件变体膨胀可见
+      variantCount: 稿件变体版本
+      # 批 I：导演事件日志膨胀可见
+      agentEvents: 导演事件日志
+      agentEventsValue(count, size): "$count 条 · $size"
+      placeholder: "--"
+  diagnostics:
+    title: 诊断信息
+    entrySubtitle: 查看运行日志与失败记录
+    # 版本行连点解锁 toast
+    devGateUnlockedToast: 开发者工具已解锁
+    agentLoop:
+      title: Agent Loop 自检
+      # 消耗警示副标题（自检真实调用 LLM）
+      costWarning: 会真实调用模型消耗你的配额，仅用于诊断
+      descTitle: 开发者自检
+      desc: 用全局默认对话模型跑一轮最小工具循环（echo → 当前时间 → finish），验证多步循环、流式工具调用增量、预算上限与取消。
+      model: 模型
+      loading: 正在解析默认模型…
+      run: 运行自检
+      cancel: 停止
+      running: 运行中…
+      empty: 尚未运行。点击「运行自检」开始。
+      summary: 结果
+      # 配置解析错误文案入 slang（原控制器硬编码中文直渲染）
+      resolveNoPreset: 未配置 API 供应商，请先在设置中添加
+      resolveNoModel: 未配置默认模型，请先在设置中选择模型
+      resolveFailed: "配置解析失败：$error"
+      # 终止原因映射 slang 化（原控制器硬编码中文直渲染）
+      stopReason:
+        completed: 正常完成
+        completedByTool: 工具终结
+        maxSteps: 步数预算耗尽
+        budgetTokens: token 预算耗尽
+        budgetDuration: 时间预算耗尽
+        contextHeadroom: 上下文余量越限
+        doomLoop: 循环保护触发
+        cancelled: 已取消
+        hookRejected: 钩子拒绝
+        error: 错误
+      # 轮时间线事件行与结果摘要（诊断页用户可见）
+      timeline:
+        turnStarted(maxSteps): "— 轮开始（预算 $maxSteps 步）—"
+        stepRequesting(index): "Step $index 请求中…"
+        retryScheduled(waitMs, attempt): "请求失败，$waitMs ms 后第 $attempt 次重试"
+        toolCallReceived(name, id): "收到工具调用 $name($id)"
+        assistantEnqueued: assistant 消息入列
+        assistantEnqueuedWithTools(count): "assistant 消息入列（$count 个工具调用）"
+        toolExecuting(name): "▸ 执行 $name…"
+        toolFinished(name, ms): "✓ $name · $ms ms"
+        toolFailedSuffix: "（失败）"
+        stepFinishedNoUsage(index): "Step $index 完成（无 usage）"
+        stepFinished(index, tokens): "Step $index 完成（$tokens tokens）"
+        injected(kind, preview): "注入($kind): $preview"
+        doomLoop(toolName, count): "循环保护：$toolName 连续 $count 次同参调用"
+        turnFinished(reason): "— 轮结束（$reason）—"
+        summary(reason, steps, tokens): "$reason · $steps 步 · $tokens tokens"
+        summaryWithError(reason, steps, tokens, error): "$reason · $steps 步 · $tokens tokens · $error"
+        summaryError(e): "异常：$e"
+      # 会话聚合卡状态文案与统计段标签（诊断页用户可见）
+      sessionAggregate: 会话汇总
+      loadingSessions: 正在加载会话…
+      noSessions: 暂无导演会话
+      selectSessionHint: 选择会话
+      errorLine(error): "错误：$error"
+      toolsLabel: "工具："
+    # 轮轨迹入口页 + 轮页的用户可见文案；
+    # 密集技术遥测标签（kv 行/步时间线/消息预览）保留英文字面量
+    roundTrace:
+      entryTitle: 导演轮轨迹
+      title(turnNumber): "轮轨迹 #$turnNumber"
+      noSessions: 暂无导演会话。
+      noEvents: 本轮暂无事件记录。
+      loadFailed(error): "轨迹加载失败：$error"
+      turnSummary: 轮摘要
+      turnNumber: 轮号
+      turnNumberHint: 如 3
+      open: 打开
+    overview:
+      title: 状态概览
+      failureCount: "失败记录: $count 条"
+      noFailures: 暂无失败记录
+      logLevel: "日志级别: $level"
+    logLevel:
+      title: 日志级别
+      desc: 控制写入日志文件的最低级别
+      debug: Debug
+      info: Info
+      warn: Warn
+      error: Error
+    debugLog:
+      title: 调试日志开关
+      desc: 中级模式排障专用，勾选后记录详细字段到日志文件
+      logPrompts: 记录提示词
+      logPromptsDesc: 完整的 LLM 请求 messages（含系统提示/历史/用户输入）
+      logResponses: 记录回复内容
+      logResponsesDesc: 审查阶段解析出的最终回复与事件摘要
+      logMemories: 记忆检索结果
+      logMemoriesDesc: 检索到的经历记忆（含相似度分数）
+      logKeywords: 提取关键词
+      logKeywordsDesc: 生成阶段解析出的检索关键词
+      logPayloads: 完整请求负载
+      logPayloadsDesc: 每次调用的完整请求与响应（含阶段标注，超长截断）
+    logs:
+      title: 运行日志
+      desc: 最近 500 行日志
+      empty: 暂无日志
+      share: 分享日志
+      shareSubject: LMStory 运行日志
+      shareConfirmTitle: 分享运行日志？
+      shareConfirmBody: 日志可能包含你的会话内容与提示词文本（不含 API Key）。请确认接收方可信后再分享。
+      shareConfirmAction: 分享
+    failures:
+      title: 失败历史
+      desc: 最近 50 条失败记录
+      empty: 全部正常
+      emptyDesc: 没有失败记录
+      session: 会话
+      # 删死键 5 枚（mode/errorCode/category/message/
+      # time 标签组）——failure_history_widget 摘要行为裸值渲染，模式徽章
+      # 走 diagnostics.mode.*、分类走 category.* switch，五键全仓零消费
+      phase: 阶段
+      httpStatus: HTTP 状态
+      rawError: 原始异常
+      unknown: 未知
+    clear:
+      title: 清空诊断数据
+      desc: 清空日志文件和失败记录
+      confirm: 确定清空所有日志文件和失败记录吗？此操作不可恢复。
+      success: 诊断数据已清空
+      failed: 清空失败
+    mode:
+      chat: 对话
+      intermediate: 故事
+      advanced: 导演
+    category:
+      network: 网络
+      timeout: 超时
+      auth: 鉴权
+      rateLimit: 限流
+      server: 服务器
+      config: 配置
+      format: 格式
+      persist: 持久化
+      unknown: 未知
+
+error:
+  generic: 操作失败，请重试
+
+# 新手引导（2026-07-20 新增）
+# 首次启动全屏覆盖 + 设置主页底部入口可重复访问
+# 6 步详细版：欢迎 → 双模式 → API Key → 模板 → 记忆 → 开始使用
+onboarding:
+  # 设置主页入口卡片
+  # 通用按钮
+  skip: 跳过
+  prev: 上一步
+  next: 下一步
+  done: 开始使用
+  close: 关闭
+  # 步骤指示器："步骤 $current / $total"
+  stepIndicator(current, total): "步骤 $current / $total"
+  # Step 1：欢迎介绍
+  welcome:
+    title: 欢迎来到 LMStory
+    #  首屏换血：与 home.subtitle 同源（项目定位）
+    subtitle: 你推进，AI 回应，世界生长。
+    desc: 让 AI 成为你故事的共同创作者——不只是问答，更是真正记得过往经历的长期伙伴。
+  # Step 2：双模式说明
+  modes:
+    title: 三种模式，三种玩法
+    subtitle: 工具、沉浸与导演，按需选择
+    chatTitle: 对话模式
+    chatDesc: 自由配置的 AI 对话工具，类似 ChatBox。支持多会话、分支、模型切换、模板系统。
+    storyTitle: 故事模式
+    storyDesc: 叙事沉浸·衬线正文。AI 自动记忆剧情发展，按步骤配置生成更深入的回复。入口默认隐藏，可在故事模式设置中开启。
+    directorTitle: 导演模式（实验）
+    directorDesc: 你写项目规则，AI 总编辑在幕后自主检索记忆、维护设定并执笔正文。默认开启，可在设置中关闭。
+  # Step 3：API Key 配置引导
+  apiKey:
+    title: 配置你的 AI 模型
+    subtitle: 任意 OpenAI 兼容供应商皆可
+    desc: LMStory 不内置模型，需要你提供 API Key。支持 OpenAI、DeepSeek、OpenRouter 等供应商，也可自定义任意 OpenAI 兼容端点。
+    goConfig: 去配置
+    later: 稍后
+  # Step 4：提示词模板介绍
+  template:
+    title: 丰富的提示词模板
+    subtitle: 内置多种场景模板，开箱即用
+    desc: 内置「异世界穿越叙述者」等系统提示词模板。新建对话或故事时可在系统提示词选择器中挑选，也可自定义模板。
+    goView: 去查看
+  # Step 5：记忆机制简介（故事模式）
+  memory:
+    title: AI 自主记忆剧情
+    subtitle: 故事与导演共享的记忆
+    # 弃维护的故事模式不再独占首启 1/6 篇幅
+    # ——记忆基建（批 J-b 徽标/注入停用）同服务导演模式
+    desc: AI 会自动记住每轮对话中的事件、人物、地点，建立专属剧情记忆。下次对话时 AI 会回忆相关内容，故事与导演模式共用这套记忆，让情节自然延续而非断片。
+    # 顺序对齐实际管线 extracting→retrieving→generating
+    #（旧顺序"先生成初稿再查记忆"与 Wiki 原理页互相矛盾）
+    flow1: 用户输入
+    flow2: 提取关键词
+    flow3: 检索相关记忆
+    flow4: 融合记忆生成回复
+  # Step 6：开始使用
+  ready:
+    title: 准备就绪
+    subtitle: 现在可以开始你的故事了
+    desc: 随时可在「设置 → 帮助 → 开始使用 → 新手引导」回看本引导。祝你创作愉快。
+
+# 帮助页（2026-07-26 新增）
+# 设置主页底部入口 → 跳转 WikiHomePage（带搜索 + 8 章节说明书）
+help:
+  # 主页
+  title: 帮助
+  entrySubtitle: 使用入门与原理说明
+
+  # 子页目录
+  firstLaunchWiki:
+    title: 第一次打开 App
+  homeOverviewWiki:
+    title: 界面总览
+  flowWiki:
+    title: 六步生成流程
+  memoryWiki:
+    title: 记忆机制
+  failureWiki:
+    title: 失败处理
+
+  # 生成流程子页内容（2026-07-26 v2 重构：图形化布局）
+  # 图示标签入 slang（原 widget 硬编码中文）
+  flowDiagram:
+    inputLabel: 输入
+    outputLabel: 输出
+    roundN: 第 $n 轮
+
+  # 主流程图 + 角色图 + 6 个增强步骤卡片 + 视觉时间轴
+  # 步骤详细说明精简为 2-3 个短句要点（keyPoints）
+  flow:
+    # 顶部主流程图标题
+    overviewTitle: 整体流程
+    overviewSubtitle: 每轮对话按顺序执行 6 个阶段
+
+    # 引言（保留作为页面顶部说明）
+    # v0.2.2：reviewing 改为可选，默认 3 次 AI 调用，开启审查阶段为 4 次
+    intro: >-
+      故事模式每轮对话按顺序做 5-6 件事：提取关键词 → 检索记忆 → 生成内容 → （可选审查阶段）→ 生成摘要 → 入库。默认 3 次 AI 请求 + 1 次本地检索 + 1 次向量化；开启审查阶段后为 4 次 AI 请求。
+
+    # 编辑部比喻
+    metaphorTitle: 用编辑部比喻理解
+    metaphorSubtitle: 把故事模式想象成一个编辑部写小说的流程
+
+    # 6 个步骤详解（每个含 input/output/keyPoints）
+    # extracting 前置到 generating 之前
+    step1Title: 提取关键词
+    step1Input: 你的消息 + 最近对话 + 提取提示词
+    step1Output: 5 类关键词（角色/物品/地点/动作/情节）
+    step1Points:
+      - 「角色/物品/地点」3 类实体词：走 FTS5 精确匹配（如「李逍遥」「古碑」「蜀山」）
+      - 「动作/情节」2 类经历词：走向量语义匹配（如「斩妖」「碑文显现」）
+      - 关键词是检索查询条件，不是存进数据库的记忆
+
+    step2Title: 检索记忆
+    step2Input: 第 1 步的 5 类关键词
+    step2Output: 经历摘要类记忆 + 事实类记忆检索结果
+    step2Points:
+      - 纯本地操作，不调 AI，速度快
+      - 5 路并行检索：角色/物品/地点 3 类走 FTS5 精确匹配，动作/情节 2 类走向量语义匹配
+      - 经历层合并后最多保留 12 条；关键实体默认以重要性 ≥5 判定，事实注入数量由配置控制
+
+    step3Title: 生成内容
+    step3Input: 你的消息 + 角色设定 + 最近对话 + 检索记忆
+    step3Output: 一段生成回复
+    step3Points:
+      - v0.2.2 起生成阶段注入检索记忆 + 事实记忆 + 压缩摘要，生成质量本身有保障
+      - AI「假装在进行正常的角色扮演」，提示词里不说「这是生成内容」，避免 AI 偷懒
+      - 显示在屏幕上方的「生成面板」，正文同步流式显示
+
+    step4Title: 审查阶段（可选）
+    step4Input: 生成内容 + 检索记忆 + 事实记忆
+    step4Output: 最终回复正文
+    step4Points:
+      - v0.2.2 起默认关闭（生成即最终，省 1 次 AI 调用），可在设置中手动开启
+      - AI 先审查生成内容，分 3 节：事实一致性 / 叙事质量 / AI 味（清单含 8 个模式）
+      - 基于审查结果重写最终回复：有错就改，无错就润色，流式显示在主聊天区域
+
+    step5Title: 生成摘要 + 提取事实
+    step5Input: 最终回复 + 你的消息
+    step5Output: 5W1E 事件摘要 + 事实变更 deltas
+    step5Points:
+      - 并行调用两个工具（事件摘要工具 + 事实变更工具）
+      - 事件摘要：5W1E 六字段 + 绝对叙事时间 + 重要性 + 标签
+      - 事实变更：新建实体 / 修改属性 / 添加别名（无变更则传空数组）
+
+    step6Title: 持久化入库
+    step6Input: 回复 + 摘要 + 事实 deltas + embedding
+    step6Output: 核心记录与可选索引入库
+    step6Points:
+      - 消息、经历记忆、轮次产物和会话元数据在本地事务中写入
+      - 低重要性记忆可能不建向量/全文索引；单条无效事实变更会被跳过，不阻塞核心经历链路
+      - 切换会话再切回来，生成内容和检索结果仍可见
+
+    # 视觉时间轴
+    visualFlowTitle: 用户在屏幕上看到什么
+    visualFlowSubtitle: 4 个折叠小窗 + 1 个主回复区域（压缩小窗条件触发时显示）
+    # 节点名称+描述（2026-07-26 新增：与实际 UI 文案对齐，避免硬编码过时）
+    # 节点顺序调整为 压缩?→提取→检索→生成→(审查?)→摘要→入库
+    # - 压缩节点（compacting）：可选，仅当原文区 token 超上限时触发
+    # - 审查节点（reviewing）：可选，根据 reviewEnabled 配置动态显示/隐藏
+    # desc 文案与 intermediate.chat 中的实际阶段提示文案保持一致，
+    # 并在生成节点补充"正文流式显示"信息（实际 GeneratePanel 会显示 streamingGenerated）
+    visualFlowCompactingName: 压缩小窗（可选）
+    visualFlowCompactingDesc: 条件触发时显示，正在压缩对话历史...
+    visualFlowNode1Name: 提取小窗
+    visualFlowNode1Desc: 正在分析中...
+    visualFlowNode2Name: 检索小窗
+    visualFlowNode2Desc: 正在回忆中...
+    visualFlowNode3Name: 生成面板
+    visualFlowNode3Desc: 正在生成中...（生成正文同步流式显示）
+    visualFlowNode4Name: 主回复
+    visualFlowNode4Desc: 最终回复流式显示
+    visualFlowNode5Name: 摘要小窗
+    visualFlowNode5Desc: 正在整理中...
+    visualFlowNode6Name: 入库小窗
+    visualFlowNode6Desc: 正在保存本轮结果...
+
+    # 主流程图节点（FlowOverviewDiagram，2026-07-31 新增：从硬编码改为 i18n）
+    # 6 节点竖向，每节点「图标 + 步骤名 + 1 行动作」
+    overview:
+      node1Name: 提取
+      node1Action: 从消息挑出 5 类关键词
+      node2Name: 检索
+      node2Action: 5 路并行翻记忆
+      node3Name: 生成
+      node3Action: 注入记忆生成内容
+      node4Name: 审查（可选）
+      node4Action: 开启后审查生成内容定稿
+      node5Name: 摘要
+      node5Action: 提炼事件 + 事实变更
+      node6Name: 入库
+      node6Action: 写入数据库
+
+    # 编辑部角色流程图（RoleFlowDiagram，2026-07-31 新增：从硬编码改为 i18n）
+    # 5 角色横向，每角色「图标 + 角色名 + 一句话职责」
+    roleFlow:
+      role1Name: 资料员
+      role1Duty: 挑关键词
+      role2Name: 档案管理员
+      role2Duty: 翻档案
+      role3Name: 实习编辑
+      role3Duty: 生成内容
+      role4Name: 主编
+      role4Duty: 定稿（可选）
+      role5Name: 归档员
+      role5Duty: 存档案
+
+  # Wiki 主目录页（2026-07-26 新增：作为整个软件的说明书入口）
+  # 设计参考 iOS/Android 系统设置搜索：顶部搜索框 + 章节分组列表
+  wikiHome:
+    title: LMStory 使用手册
+    searchHint: 搜索功能...
+    noResults: 没有找到相关内容
+    # 8 个章节标题（用户视角分类，非技术模块）
+    section1Title: 开始使用
+    section1Subtitle: 入门与基本操作
+    section2Title: 对话模式用法
+    section2Subtitle: 创建会话、发送消息、消息操作
+    section3Title: 故事模式用法
+    section3Subtitle: 创建故事、六步生成、记忆库
+    section4Title: 故事模式原理
+    section4Subtitle: 看懂背后的设计
+    section5Title: 配置与个性化
+    section5Subtitle: API 供应商、模型、提示词、外观
+    section6Title: 数据与维护
+    section6Subtitle: 导入导出、备份、诊断
+    section7Title: 附录
+    section7Subtitle: FAQ、术语表、功能索引
+    # section1（阶段 2 实现，1.3 已可直接跳新手引导）
+    entry_1_1_title: 第一次打开 App
+    entry_1_1_subtitle: 首次启动配置与第一个对话
+    entry_1_2_title: 界面总览
+    entry_1_2_subtitle: 主界面、侧边栏、导航逻辑
+    entry_1_3_title: 新手引导
+    entry_1_3_subtitle: 重看 6 步引导
+    # section2（阶段 3 实现，全部待建设）
+    entry_2_1_title: 创建与切换会话
+    entry_2_1_subtitle: 草稿会话、侧边栏操作、全局搜索
+    entry_2_2_title: 发送消息与查看回复
+    entry_2_2_subtitle: 输入框、流式、引用
+    entry_2_3_title: 消息操作
+    entry_2_3_subtitle: 复制、编辑、重发、分支
+    entry_2_4_title: 消息导航
+    entry_2_4_subtitle: 浮动按钮、自动隐藏
+    entry_2_5_title: 会话设置
+    entry_2_5_subtitle: 模型、提示词、温度
+    entry_2_6_title: 上下文管理与压缩
+    entry_2_6_subtitle: 自动压缩、手动压缩
+    # section3（阶段 3 实现，全部待建设）
+    entry_3_1_title: 三种模式的区别
+    entry_3_1_subtitle: 对话/故事/导演，何时选哪个
+    entry_3_2_title: 创建第一个故事
+    entry_3_2_subtitle: 新建、系统提示词、嵌入模型
+    entry_3_3_title: 六步生成流程
+    entry_3_3_subtitle: 用户视角的 6 阶段视觉时间轴
+    entry_3_4_title: 故事模式消息操作
+    entry_3_4_subtitle: 与对话模式差异、Fork 窗口限制
+    entry_3_5_title: 失败处理
+    entry_3_5_subtitle: 失败栏 4 按钮用法
+    entry_3_6_title: 故事会话设置
+    entry_3_6_subtitle: 4 步骤模型、记忆管理
+    entry_3_7_title: 记忆库浏览器
+    entry_3_7_subtitle: 双 Tab、手动增删改、搜索
+    entry_3_8_title: 推荐回复与输入助手
+    entry_3_8_subtitle: 引号括号按钮、AI 推荐回复
+    # section4（4.1-4.3 已有，4.4 阶段 1 新增）
+    entry_4_1_title: 六步生成原理
+    entry_4_1_subtitle: AI 是怎么一步步写出回复的
+    entry_4_2_title: 记忆机制原理
+    entry_4_2_subtitle: 故事模式怎么记住剧情
+    entry_4_3_title: 失败处理原理
+    entry_4_3_subtitle: 出错时会发生什么
+    entry_4_4_title: 宏摘要机制
+    entry_4_4_subtitle: 双触发、边界跳过、失败降级
+    entry_4_5_title: 上下文预算
+    entry_4_5_subtitle: 压缩触发线、原文区下限、检索区比例
+    entry_4_6_title: 审查阶段
+    entry_4_6_subtitle: 开关作用、与思考预算的关系
+    # 导演模式章节（2026-08-19 新增，v0.3 实验性）
+    sectionDirectorTitle: 导演模式
+    sectionDirectorSubtitle: 项目规则、监督模式、台前幕后
+    entryDirector1Title: 导演模式是什么
+    entryDirector1Subtitle: 与对话/故事模式的区别
+    entryDirector2Title: 创建导演会话
+    entryDirector2Subtitle: 开关、开场、项目规则
+    entryDirector3Title: 监督模式：请示与审批
+    entryDirector3Subtitle: 逐项把关每次写入
+    # 键名跳过 4（历史编排位删除）非漏项，勿「补齐」——
+    # wiki_data.dart 按显式键引用，补键会多出条目。
+    entryDirector5Title: 看懂过程：台前与幕后
+    entryDirector5Subtitle: 过程行与幕后步骤卡
+    entryDirector6Title: 事件日志与恢复
+    entryDirector6Subtitle: 意外退出后接着写
+    entryDirector7Title: 失败与重试
+    entryDirector7Subtitle: 出错时怎么办
+    entryDirector8Title: 导演会话设置
+    entryDirector8Subtitle: 主模型、项目规则、预算
+    # section5（阶段 4 实现，九条目均已接 pageBuilder—— 订正过时注释）
+    entry_5_1_title: API 供应商管理
+    entry_5_1_subtitle: 内置、自定义、API Key
+    entry_5_2_title: 模型选择策略
+    entry_5_2_subtitle: 全局默认、会话覆盖、4 步骤
+    entry_5_3_title: 提示词模板系统
+    entry_5_3_subtitle: 类型、创建、应用
+    entry_5_4_title: 故事模式提示词自定义
+    entry_5_4_subtitle: 10 段、预览、修改检测
+    entry_5_5_title: 外观与主题
+    entry_5_5_subtitle: 亮暗、字体大小
+    entry_5_6_title: 语言与输入
+    entry_5_6_subtitle: 界面语言中/英、发送快捷键
+    entry_5_7_title: 高级设置
+    entry_5_7_subtitle: 思考预算、超时
+    entry_5_8_title: 生成参数
+    entry_5_8_subtitle: 温度、Top P、惩罚参数全局配置
+    entry_5_9_title: 角色卡与世界书（资源库）
+    entry_5_9_subtitle: 导入种子、应用到会话
+    # section6（阶段 4 实现，全部待建设）
+    entry_6_1_title: 数据导出与导入
+    entry_6_1_subtitle: 选内容、含 API Key、导入模式
+    entry_6_2_title: 数据恢复与表修复
+    entry_6_2_subtitle: 扫描孤立消息、修复表结构
+    entry_6_3_title: 清除所有数据
+    entry_6_3_subtitle: 不可逆提示
+    entry_6_4_title: 诊断信息
+    entry_6_4_subtitle: 日志、失败历史、调试开关
+    # section7（阶段 4 实现，全部待建设）
+    entry_7_1_title: 故障排除 FAQ
+    entry_7_1_subtitle: 常见问题与解决方法
+    entry_7_2_title: 术语表
+    entry_7_2_subtitle: 通俗解释技术词
+    entry_7_3_title: 功能索引表
+    entry_7_3_subtitle: 按字母/模块列出所有功能
+    entry_7_4_title: 版本更新记录
+    entry_7_4_subtitle: 已交付与计划中
+
+  # 宏摘要机制页内容（2026-07-26 新增：第四部分 4.4）
+  # 设计原则：示意图优先，少量短句补充，拒绝大段文字
+  macroWiki:
+    title: 宏摘要机制
+    intro: >-
+      故事模式会维护两种不同的长程摘要：累积压缩摘要替代早期对话原文，保证当前上下文连续；分段宏摘要概括本次新进入压缩区的连续事件，作为长期记忆参与检索。
+    # 示意图标题
+    overviewTitle: 微摘要与宏摘要的关系
+    overviewSubtitle: 若干微摘要聚合成一条宏摘要
+    # 示意图标注
+    diagramMicroLabel: 微摘要
+    diagramMicroDesc: 每轮 1 条
+    diagramMacroLabel: 宏摘要
+    diagramMacroDesc: 聚合多轮
+    diagramAggregateLabel: 聚合
+    # 双触发
+    triggersTitle: 压缩触发与双产物
+    triggersSubtitle: 达到上下文阈值时同步维护
+    trigger1Title: 累积压缩摘要
+    trigger1Body: >-
+      当请求上下文达到配置的压缩触发线时，把旧压缩摘要与本次被压缩的消息合并成新的累积摘要，后续请求用它替代早期原文。
+    trigger2Title: 分段宏摘要
+    trigger2Body: >-
+      后续压缩会并行概括「本次新增压缩区间」，写成独立 macro 记忆参与检索；首次压缩可直接复用压缩摘要建立 macro 记录。
+    # 边界与失败
+    skipTitle: 两类摘要不要混用
+    skipBody: >-
+      累积摘要回答「到目前为止发生了什么」，分段宏摘要回答「这一段发生了什么」。前者是当前上下文前缀，后者是可检索的长期记忆。
+    fallbackTitle: 失败与重试
+    fallbackBody: >-
+      摘要生成属于 compacting 阶段。失败时按故事模式失败栏重试或取消，不能假设会静默回到 idle；已持久化数据不会被无提示覆盖。
+    # UI 表现
+    uiTitle: UI 表现
+    uiBody: >-
+      触发压缩时显示 compacting/整理上下文反馈，不再存在独立「宏摘要阶段」小窗。macro 记录可在记忆库中查看，也会在后续检索命中时注入。
+
+  # 第一次打开 App 子页内容（2026-07-27 新增：第一部分 1.1）
+  # 设计原则：示意图优先，6 步引导用 WikiStepCard 紧凑列表
+  firstLaunch:
+    intro: 首次启动 LMStory 会自动进入 6 步新手引导，介绍核心概念并可选配置 API Key。
+    # 示意图标题
+    flowTitle: 启动流程
+    flowSubtitle: 从启动到进入主界面
+    # 示意图标注
+    diagramStartLabel: 启动 App
+    diagramStartDesc: 显示空白启动屏
+    diagramGuideLabel: 新手引导
+    diagramGuideDesc: 6 步快速介绍
+    diagramHomeLabel: 主界面
+    diagramHomeDesc: 首页 + 侧边栏
+    # 6 步引导内容
+    guideStepsTitle: 6 步引导内容
+    guideStepsSubtitle: 可以左右滑动切换
+    step1Title: 欢迎介绍
+    step1Body: App 定位与核心能力介绍
+    step2Title: 三种模式
+    step2Body: 对话（工具）、故事（沉浸）与导演（AI 执笔，实验）对比
+    step3Title: 配置 AI 模型
+    step3Body: 提供 API Key（可选，可点"稍后"跳过）
+    step4Title: 提示词模板
+    step4Body: 内置多种场景模板，开箱即用
+    step5Title: AI 自主记忆
+    step5Body: 故事模式核心能力介绍
+    step6Title: 准备就绪
+    step6Body: 点击"开始使用"进入主界面
+    # API Key 提示
+    apiKeyTitle: 未配置 API Key 时
+    apiKeyCardTitle: 首页顶部黄色提示卡片
+    apiKeyCardBody: 完成引导后若未配置 API Key，首页顶部显示黄色提示卡片，点击可前往配置。
+
+  # 界面总览子页内容（2026-07-27 新增：第一部分 1.2）
+  # 设计原则：首页布局示意图优先，侧边栏用紧凑卡片展示
+  homeOverview:
+    intro: LMStory 主界面由首页和侧边栏组成，所有功能从这里出发。
+    # 首页布局示意图
+    layoutTitle: 首页布局
+    layoutSubtitle: 无会话选中时显示的入口页
+    # 示意图标注
+    diagramHeaderLabel: 顶部标题
+    diagramHeaderDesc: LMStory 标志与定位
+    diagramApiKeyLabel: API Key 提示
+    diagramApiKeyDesc: 未配置时显示，点击可前往配置
+    diagramEntryLabel: 入口卡片
+    diagramEntryDesc: 模式切换入口
+    diagramEntryChatLabel: 新对话
+    diagramEntryStoryLabel: 新建故事（默认隐藏）
+    diagramEntryDirectorLabel: 新导演（默认开启）
+    diagramRecentLabel: 最近会话
+    diagramRecentDesc: 最多 5 条，点击进入
+    diagramSettingsLabel: 设置入口
+    diagramSettingsDesc: 底部 ListTile
+    # 侧边栏
+    sidebarTitle: 侧边栏
+    sidebarSubtitle: 会话列表与导航
+    sidebarHeaderLabel: 顶部
+    sidebarHeaderDesc: 标志 + 搜索 + 收起按钮
+    sidebarSearchLabel: 搜索栏
+    sidebarSearchDesc: 筛选会话名称
+    sidebarListLabel: 会话列表
+    sidebarListDesc: 拖拽排序 + 三点菜单操作
+    sidebarFooterLabel: 底部
+    sidebarFooterDesc: 新建对话 / 新导演 / 设置；故事按钮默认隐藏
+    # 模式切换
+    modeSwitchTitle: 模式切换
+    modeSwitchCardTitle: 通过首页入口卡片实现
+    modeSwitchCardBody: LMStory 没有独立的模式切换组件。首页入口卡片就是模式切换入口——点"新对话"进入对话模式，点"新导演"进入导演模式（默认开启，可在设置中关闭）；故事模式入口默认隐藏，可在故事模式设置中开启后再从"新建故事"进入。
+
+  # ── 第二部分 2.1：创建与切换会话（2026-07-27 新增）──
+  sessionOpWiki:
+    title: 创建与切换会话
+  sessionOp:
+    intro: 会话是你和 AI 的一段独立对话。你可以创建任意多个会话，每个会话独立保留消息历史和设置，互不干扰。
+    # 主视觉
+    flowTitle: 创建会话的两种方式
+    flowSubtitle: 主页双卡入口 / 侧边栏新建按钮
+    diagramNewLabel: 点击新建
+    diagramNewDesc: 新建对话
+    diagramDraftLabel: 输入消息
+    diagramDraftDesc: 在输入框写第一条消息
+    diagramPersistLabel: 发送
+    diagramPersistDesc: 消息发送后会话自动保存
+    # 侧边栏操作矩阵
+    diagramOpsTitle: 会话项支持的 6 种操作
+    opNew: 新建
+    opRename: 重命名
+    opStar: 收藏
+    opCopy: 复制
+    opDrag: 拖拽排序
+    opDelete: 删除
+    # 6 步操作
+    operationsTitle: 日常使用流程
+    operationsSubtitle: 从创建到管理的完整用法
+    step1Title: 新建会话
+    step1Body: 点击侧边栏底部的「新建对话」按钮，或主页的「新建对话」卡片，即可进入新的对话。新会话默认复制全局当前配置（模型与提示词的快照）。
+    step2Title: 切换会话
+    step2Body: 在侧边栏点击任意会话即可切换到该会话。每个会话独立保留滚动位置和未发送的草稿，切换不会丢失上下文。
+    step3Title: 重命名会话
+    step3Body: 点击会话项右侧的三点菜单，选择「重命名」修改会话标题。会话标题也会在发送首条消息后由 AI 自动生成。
+    step4Title: 收藏常用会话
+    step4Body: 三点菜单中选择「收藏」，收藏的会话会自动置顶到列表最前面，方便快速访问。再次点击可取消收藏。
+    step5Title: 拖拽自定义排序
+    step5Body: 长按会话项右侧的拖拽把手（··· 图标），上下拖动即可自定义会话顺序。松手后顺序自动保存。
+    step6Title: 复制与删除
+    step6Body: 三点菜单提供「复制」和「删除」操作。复制会创建一个包含全部消息的新会话；删除需要二次确认，防止误操作。
+    # 全局搜索
+    searchTitle: 全局搜索消息
+    searchBody: 点击侧边栏顶部的放大镜图标（或按 Ctrl+K），打开全局搜索。输入关键词即可搜索所有会话中的消息内容，搜索结果直接显示来源消息，点击（或用方向键选择后回车）可跳转并定位到对应消息。
+    # 平台差异
+    platformTitle: 移动端与桌面端的差异
+    platformBody: 桌面端侧边栏固定显示在左侧，可通过顶部按钮折叠；移动端侧边栏隐藏为抽屉，点击左上角汉堡菜单打开。
+
+  # ── 第二部分 2.2：发送消息与查看回复（2026-07-27 新增）──
+  messageFlowWiki:
+    title: 发送消息与查看回复
+  messageFlow:
+    intro: 在输入框写好内容后点发送，AI 会一边思考一边逐字输出回复。你可以随时中断、引用之前的消息、或添加图片附件。
+    # 主视觉
+    layoutTitle: 发送与回复的完整流程
+    layoutSubtitle: 输入消息 → AI 流式回复 → 查看结果
+    diagramInputLabel: 发送消息的 4 个动作
+    blockQuoteLabel: 引用预览
+    blockQuoteDesc: 引用消息时显示
+    blockAttachLabel: 附件预览
+    blockAttachDesc: 图片/文件缩略图
+    blockInputFieldLabel: 输入消息
+    blockInputFieldDesc: 多行可达 200 高度
+    blockToolbarLabel: 工具栏
+    blockToolbarDesc: 附件 + 上下文 + 设置 + 模型
+    diagramStreamLabel: AI 回复的 3 个阶段
+    stream1Label: 点发送
+    stream1Desc: 触发请求
+    stream2Label: 思考中
+    stream2Desc: 显示占位气泡
+    stream3Label: 逐字输出
+    stream3Desc: 实时显示回复
+    # 输入框要点
+    inputTipsTitle: 发送消息的几种方式
+    tip1Title: 键盘快捷键
+    tip1Body: 默认 Enter 键发送消息，Shift+Enter 换行。也可以在设置中改为 Ctrl+Enter 发送，避免误触。
+    tip2Title: 生成中仍可编辑
+    tip2Body: AI 回复期间输入框仍然可用，可以提前编辑下一条消息。只有发送按钮会暂时禁用，避免重复发送。
+    tip3Title: 引用回复
+    tip3Body: 点击任意消息的「引用」按钮，消息内容会作为引用预览显示在输入框上方。发送时引用会自动附在你的消息前面，让 AI 知道你在回复哪条消息。
+    # 流式输出体验
+    streamTitle: AI 回复的流式体验
+    streamBody: 发送消息后，AI 的回复会逐字显示在气泡里，就像真人在打字。回复期间会显示停止按钮，点击可随时中断。如果中断后又想继续，点击用户消息上的「继续生成」按钮即可让 AI 接着写完。如果出错，错误信息会保留在助手消息卡片中，不会丢失。
+
+  # ── 第二部分 2.3：消息操作（2026-07-27 新增）──
+  messageActionsWiki:
+    title: 消息操作
+  messageActions:
+    intro: 点击任意消息气泡会显示操作按钮，再次点击或等待 3 秒后自动隐藏。最后一条 AI 回复的操作按钮始终显示，方便快速操作。
+    # 主视觉
+    bubbleTitle: 消息气泡与操作按钮
+    bubbleSubtitle: 6 种操作 + 显示策略
+    diagramBubbleTitle: 消息气泡结构
+    userBubbleLabel: 用户消息气泡
+    assistantBubbleLabel: 助手消息气泡（含操作按钮行）
+    opCopy: 复制
+    opEdit: 编辑
+    opRegenerate: 重新生成
+    opContinue: 继续生成
+    opQuote: 引用
+    opDelete: 删除
+    diagramStrategyTitle: 按钮显示策略
+    diagramStrategyDesc: 点击消息切换显示/隐藏，3 秒后自动隐藏（最后一条 AI 回复按钮始终显示）。
+    # 6 种操作
+    opsTitle: 6 种操作说明
+    op1Title: 复制
+    op1Body: 复制消息原文到剪贴板，可直接粘贴到其他应用。
+    op2Title: 编辑（仅用户消息）
+    op2Body: 修改你之前发过的消息。编辑后会基于新内容重新生成回复，原回复会作为分支保留，可通过左右箭头切换查看。
+    op3Title: 重新生成（仅助手消息）
+    op3Body: 让 AI 重新写一条回复。原回复会作为分支保留，可通过左右箭头切换查看不同版本。
+    op4Title: 继续生成（仅用户消息）
+    op4Body: 如果 AI 之前的回复被中断或没写完，点击此按钮让 AI 从中断处继续写完。
+    op5Title: 引用
+    op5Body: 将消息作为引用附在下一条消息前，让 AI 知道你在回复哪条消息。引用预览显示在输入框上方，可随时关闭。
+    op6Title: 删除
+    op6Body: 删除该消息及其后续分支。删除需二次确认，防止误操作。
+    # 分支说明
+    forkTitle: 分支机制
+    forkBody: 编辑用户消息或重新生成都会创建分支。分支指示器显示「2/3」等当前位置，点击左右箭头可在不同版本之间切换查看，原版本不会丢失。
+
+  # ── 第二部分 2.4：消息导航（2026-07-27 新增）──
+  messageNavWiki:
+    title: 消息导航
+  messageNav:
+    intro: 长对话中滚动不方便，4 个浮动按钮帮助你快速跳到对话开头、结尾或下一条用户消息。按钮在滚动停止 2 秒后自动隐藏，不遮挡内容。
+    # 主视觉
+    buttonsTitle: 4 个浮动按钮 + 自动隐藏
+    buttonsSubtitle: 双箭头跳端点 / 单箭头翻消息
+    diagramButtonsTitle: 4 个浮动按钮（从上到下）
+    btnJumpTop: 跳到顶部
+    btnJumpTopDesc: 双箭头向上 · 跳到最早消息
+    btnPrevUser: 上一条用户消息
+    btnPrevUserDesc: 单箭头向上 · 翻到前一条用户消息
+    btnNextUser: 下一条用户消息
+    btnNextUserDesc: 单箭头向下 · 翻到下一条用户消息
+    btnJumpBottom: 跳到底部
+    btnJumpBottomDesc: 双箭头向下 · 跳到最新消息
+    diagramHideTitle: 自动隐藏时序
+    timeline1: 滚动中
+    timeline2: 停止滚动
+    timeline3: 2 秒后自动隐藏
+    # 4 个按钮说明
+    opsTitle: 4 个按钮的图标含义
+    btn1Title: 跳到顶部（双箭头向上）
+    btn1Body: 快速回到对话最早的消息。适合查看对话开头的内容。
+    btn2Title: 上一条用户消息（单箭头向上）
+    btn2Body: 跳到前一条你发的消息。便于回溯自己之前的提问，比手动滚动快很多。
+    btn3Title: 下一条用户消息（单箭头向下）
+    btn3Body: 跳到下一条你发的消息。便于快速浏览问答节奏，跳过 AI 长回复。
+    btn4Title: 跳到底部（双箭头向下）
+    btn4Body: 快速回到最新消息。AI 流式输出期间也可用，方便跳回查看实时生成的内容。
+    # 自动隐藏
+    hideTitle: 自动隐藏机制
+    hideBody: 浮动按钮在滚动停止 2 秒后会自动隐藏，避免遮挡消息内容。滚动时按钮会立即重新出现。按钮采用半透明设计，减少视觉干扰。
+    # 批 K：会话内搜索（手册面补账）
+    searchTitle: 会话内搜索
+    searchBody: 除了浮动按钮，还能按内容找消息：从右上角菜单或 Ctrl+F（macOS 为 Cmd+F）唤起「会话内搜索」，按 Esc 收起。输入即显示命中数，Enter / Shift+Enter 在上一处、下一处之间跳转，定位到的消息会短暂高亮提示。搜索只匹配当前分支可见的消息，切换分支后命中会同步过滤。
+
+  # ── 第二部分 2.5：会话设置（2026-07-27 新增）──
+  sessionSettingsWiki:
+    title: 会话设置
+  sessionSettings:
+    intro: 每个会话都可以单独配置模型、提示词、温度等参数。尚未单独修改过的字段按打开会话那一刻的全局值快照（此后改全局不影响该会话），修改后以会话值为准。
+    # 主视觉
+    priorityTitle: 配置优先级
+    prioritySubtitle: 会话级配置 > 全局默认
+    diagramPriorityTitle: 配置优先级
+    level1Label: 会话级
+    level1Desc: 单独配置优先
+    level2Label: 全局默认
+    level2Desc: 设置页统一配置
+    level3Label: 内置默认
+    level3Desc: 出厂值
+    diagramSectionsTitle: 会话设置包含 4 个区段
+    sectionModel: 模型与供应商
+    sectionModelDesc: 选择 API 供应商和模型
+    sectionPrompt: 提示词
+    sectionPromptDesc: 系统提示词 + 模板
+    sectionGen: 生成参数
+    sectionGenDesc: 温度 + Top P + 惩罚
+    sectionContext: 上下文窗口
+    sectionContextDesc: 最大上下文消息数
+    # 三级优先级说明
+    levelsTitle: 配置优先级说明
+    level1Title: 会话级（最高优先级）
+    level1Body: 在会话设置中单独配置的值会覆盖全局默认。适合某个会话需要用不同模型或不同温度的场景。
+    level2Title: 全局默认
+    level2Body: 在「设置」→「对话模式设置」→「默认配置」按钮中统一配置，所有新会话都会使用这些值。修改全局默认不会影响已打开过或单独配置过的会话（它们的值是打开时写入的快照）。
+    level3Title: 内置默认值
+    level3Body: 如果你从未配置过任何设置，应用会使用内置的合理默认值，比如温度 0.7、Top P 1.0。
+    # 重置为全局
+    resetTitle: 重置为全局当前值
+    # 批 L 快照铁律落地后的残留继承语义——重置=
+    # 写入此刻全局值的快照（此后互不影响），非「恢复使用全局配置」
+    resetBody: 每个会话级设置项旁都有重置按钮，点击后把该字段写为当前全局值（快照，此后互不影响）。如果你想统一管理所有会话的设置，建议在全局默认中配置，会话级只在必要时覆盖。
+
+  # ── 第二部分 2.6：上下文管理与压缩（2026-07-27 新增）──
+  compactionFlowWiki:
+    title: 上下文管理与压缩
+  compactionFlow:
+    intro: 对话太长会超出 AI 的记忆范围。LMStory 会在合适时机自动压缩早期对话——生成一段摘要替换旧消息，让 AI 记住关键信息又不会超载。对话模式使用 CompactionPoint 压缩策略，基于 token 阈值自动触发（本页介绍）；故事模式使用三段式预算（摘要前缀 + 原文区 + 检索区），由压缩触发线动态控制原文区上限，详见「故事模式原理 → 上下文预算」。
+    # 主视觉
+    flowTitle: 压缩如何发生
+    flowSubtitle: 自动触发 + 流式生成摘要
+    diagramTriggerTitle: 什么时候会压缩
+    diagramThresholdFormula: 当对话长度接近模型上限时自动触发（不同模型上限不同）
+    diagramFlowTitle: 压缩的 4 个步骤
+    flow1Label: 发送消息
+    flow1Desc: 系统检查对话长度
+    flow2Label: 接近上限
+    flow2Desc: 自动触发压缩
+    flow3Label: 生成摘要
+    flow3Desc: AI 总结早期对话
+    flow4Label: 替换上下文
+    flow4Desc: 摘要替换旧消息
+    # 触发条件
+    triggerTitle: 什么时候会触发压缩
+    # 交付后对话模式也有圆环+手动压缩+撤销——
+    # 删除「你不需要手动操作」（与入口卡 subtitle「自动压缩、手动压缩」矛盾）
+    triggerBody: 当对话累计长度接近当前模型的上限时，下一次发送消息会自动触发压缩。不同模型的上限不同，从 8K 到 1M 以上不等。输入区左侧的小圆环就是用量指示：满刻度即压缩触发线，点开详情可看窗口用量、缓存命中率与最近一轮 token 明细；不想等自动触发时，可从会话菜单「手动压缩」或详情面板「立即压缩」提前压，压缩后摘要卡还提供「撤销压缩」恢复原文。
+    # 流程说明
+    stepsTitle: 压缩后你看到什么
+    step1Title: 出现摘要消息
+    step1Body: 压缩完成后，对话中会出现一条特殊样式的「摘要」消息，内容是 AI 对早期对话的总结，包含讨论了什么、关键决策、当前在做什么等。
+    step2Title: 摘要可展开编辑
+    step2Body: 摘要消息默认折叠显示标题，点击可展开查看完整内容。如果对摘要不满意，可以编辑修改，或删除后重新生成。
+    step3Title: 后续对话不受影响
+    step3Body: 压缩后你可以继续正常对话。AI 会基于摘要 + 最新消息继续回复，不会感觉到上下文断裂。
+    # 失败处理
+    failedTitle: 压缩失败怎么办
+    failedBody: 压缩可能因为网络问题或模型超载失败。失败时会显示一张「压缩失败」卡片，点击「重试」可重新触发压缩。失败不影响现有对话，你可以继续发送新消息，系统会在下次发送时再次尝试压缩。
+
+  # 记忆机制子页内容
+  memory:
+    intro: >-
+      故事模式的核心能力是「记忆」——它真的能记住之前发生过什么。但故事模式不是把整轮对话存下来当记忆，而是把每轮对话提炼成结构化数据再存。记忆分两类，按「内容性质」分类，不按时间维度分层。
+    twoTypesTitle: 两种记忆：日记本 vs 人物卡
+    twoTypesBody: >-
+      经历类记忆像日记本——「那天傍晚勇者去了古碑前」——这件事发生过就发生过，永远记着，不会再变。每轮固定生成 1 条。事实类记忆像人物卡——「勇者的等级是 5」——这件事是可以变的，下一轮升级成 6 了，就要把 5 改成 6，旧值进审计日志。
+    experientialTitle: 经历类记忆：剧情日记
+    experientialBody: >-
+      存在 experiential_memories 表，以追加为主。每轮事件微摘要包含 5W1E、叙事时间、重要性、标签和检索数据。对话达到上下文压缩阈值时，系统同时维护两种不同产物：累积压缩摘要用于替代早期原文并延续当前上下文；分段宏摘要概括本次新压缩的连续事件，并作为 macro 记忆参与长期检索。首次压缩可直接以压缩摘要建立 macro 记录。
+    factualTitle: 事实类记忆：人物卡
+    factualBody: >-
+      存在实体表 + 属性表 + 审计历史三张表，使用改写（upsert）+ 审计日志。当前实体类型是角色、地点、物品、世界设定、组织、其他；宠物和 NPC 归入角色，世界规则归入世界设定。每个实体一条主记录，每项属性按 entityId 隔离，旧值进入审计历史。这能减少多实例串台、设定漂移和改名失效。
+    retrievalTitle: 哪些内容会被向量化检索？
+    retrievalBody: >-
+      写入时：AI 提炼出的「5W1E 6 字段摘要」会被向量化，不是关键词，也不是整轮对话正文。拼接格式是「时间：xxx 地点：xxx 人物：xxx 事件：xxx 意义：xxx 补充：xxx」，空字段省略。然后这段文本会被送到 embedding API 转成向量。为什么不直接向量化整轮对话正文？因为正文太长，包含很多无关信息（寒暄、动作描写、心理活动），会稀释语义焦点。AI 提炼后的摘要已经抓住了「这一轮到底发生了什么」，向量化的质量更高。例外：宏摘要（macro_summary）继续用单字段 summary 向量化，不用 5W1E 格式。
+    retrievalQueryTitle: 检索时用什么作为查询源？
+    retrievalQueryBody: >-
+      用第 2 步提取的关键词，不是你的原始消息，也不是整轮对话正文。检索分 5 路并行：角色/物品/地点 3 类关键词走全文精确匹配（各自一路）；动作/情节 2 类关键词走向量语义匹配（拼接后送 embedding API，再找向量距离最近的历史记忆；某类为空时该路自动跳过）。为什么用关键词而不是你的原始消息？因为你的原始消息可能很长（「我走到古碑前，仔细端详上面的纹路，突然碑文显现了，我吓了一跳」），里面有大量无关动作。提取关键词后聚焦在「古碑、后山、碑文」这种核心元素上，检索精度更高。
+    factualGuardTitle: 事实层的三重防护
+    factualGuardBody: >-
+      防止 AI 乱改事实，写入时有三重防护。第 1 层：提示词约束「尽量追加，有冲突时才修改」——防 AI 把「追加新技能」误标成「修改技能列表」。第 2 层：代码检测——key 已存在且值真的不同才允许修改——防 AI 把「追加」误标成「修改」。第 3 层：关键属性（重要性 ≥4）需 confidence ≥4 才能修改——防止低置信度的修改覆盖重要设定。
+    factualHealthTitle: 5 层健康度防护
+    factualHealthBody: >-
+      防止属性膨胀，5 层防护。第 1 层：属性 schema 白名单——防止 AI 给角色瞎加属性（比如给狗加「学历」）。第 2 层：提示词约束「临时状态≠事实」——防止把「旺财今天有点累」也存成事实。第 3 层：系统级去重（编辑距离/包含关系）——防止同一属性被反复添加。第 4 层：同实体最近 3 轮最多 4 次更新——防止 AI 反复改同一属性。第 5 层：单值最长 500 字——防止属性值无限膨胀。
+    factualChangePanelTitle: 本轮事实变更
+    factualChangePanelBody: >-
+      每轮对话生成后，摘要小窗之后会展示「事实层变更小窗」，列出本轮对事实层做了什么：新增了哪些实体、更新了哪些属性（含变更前与变更后）、追加了什么、归档了谁。点击单条可查看完整详情。如果本轮确实没有任何事实变更，也会显示「本轮无事实变更」占位，让你清楚知道这一轮记忆库没有变化。
+    vectorizationThresholdTitle: 记忆检索门槛
+    vectorizationThresholdBody: >-
+      并非所有记忆都会被检索。系统按重要性（1-5 分）分级：低于「存储索引门槛」（默认 3 分）的记忆不建索引（无法被检索）；达到「向量化门槛」（默认 4 分）的记忆才会生成语义向量，支持按意思模糊查找；介于两者之间的记忆仅支持关键词精确匹配。如果你觉得某些 2 分的记忆也很有价值、应该能被检索到，可以在「设置 → 故事模式设置 → 工具与记忆」里同时把两个门槛调到 2（该页在「配置显示模式=进阶」下可见；配置显示模式开关位于设置 → 通用页底，默认简单）。
+
+  # 失败处理子页内容
+  # v0.2.2：与 FailureBar 实际 UI 对齐
+  # - 默认 3 次 AI 请求（开启审查阶段后 4 次），不再写死 4 次
+  # - 按钮名称对齐：整轮重试 / 从中断处继续 / 临时降级为关键词检索 / 清空本轮
+  # - 输入框行为：失败时输入框仍可输入，仅发送按钮禁用（非整框禁用）
+  # - 补充「从中断处继续」按钮说明：保留已完成阶段产出从失败阶段继续
+  # - 补充「清空本轮」按钮说明：回填用户消息到输入框
+  failure:
+    intro: >-
+      故事模式每轮对话默认发起 3 次 AI 请求 + 1 次本地检索 + 1 次向量化（开启审查阶段后为 4 次 AI 请求）。调用次数多了，失败的概率也会高。但故事模式的失败处理有一个核心原则：要么全部成功，要么全部失败。常见错误码速查与场景排查，参见：附录 → 故障排除 FAQ。
+    atomicityTitle: 核心原则：原子事务
+    atomicityBody: >-
+      每一轮对话是一个原子事务——提取→检索→生成→审查→摘要→入库，要么全成功要么全失败。关键区分：数据回滚 ≠ UI 清空。失败时数据库绝不写入（事务回滚）。但 UI 保留已显示的中间产物（生成内容、检索结果、半截回复），让你能看到失败发生在哪一步。不降级质量：不会拿生成内容充当最终回复，不会静默跳过检索。
+    retryTableTitle: 各阶段失败的处理
+    retryTableBody: >-
+      生成失败：重试 2 次，仍失败则整轮失败让你重试。提取关键词失败：重试 2 次，仍失败则整轮失败让你重试。检索两路都失败：重试 1 次，仍失败则整轮失败让你重试。检索单路失败：不重试，用另一路结果继续。审查失败：重试 2 次，仍失败则整轮失败让你重试。摘要失败：重试 2 次，仍失败则整轮失败让你重试。向量化失败：自动重试 1 次，仍失败则让你选——整轮重试/临时降级为关键词检索/清空本轮（外加从中断处继续）。持久化失败：不重试，事务回滚，整轮失败。
+    uiRetentionTitle: 失败时的 UI 保留
+    uiRetentionBody: >-
+      你能看到哪一步失败：生成失败 → 生成面板（已显示的半截生成内容）。提取失败 → 生成面板 + 提取小窗。检索失败 → 生成/提取小窗 + 检索小窗。审查失败 → 半截回复 + 已完成的生成/提取/检索小窗。摘要失败 → 完整回复 + 生成/提取/检索小窗 + 摘要小窗。持久化失败 → 完整回复 + 所有中间产物小窗。所有失败情况统一显示：失败提示 + 失败栏（按失败类型提供操作按钮）。失败时输入框仍可输入，仅发送按钮禁用——你需要先点「整轮重试」或「清空本轮」恢复到 idle 才能发送新消息。
+    manualRetryTitle: 失败栏的按钮分别做什么
+    manualRetryBody: >-
+      失败栏会根据失败类型显示操作按钮：「整轮重试」——清掉所有已显示的中间产物，保留你的消息，从头开始整轮六步生成（不从失败步骤继续，因为中间产物可能已部分生成，继续会导致状态不一致）；「从中断处继续」——保留已完成阶段产出（如生成内容、检索结果），从失败阶段继续重试，适合失败发生在靠后阶段时省前面的 AI 调用；「续写」——生成失败且已有半截正文时出现，带着半截正文继续生成，不重复已有内容；「以此收稿」——生成/审查失败且半截正文可用时出现，把半截正文直接作为本轮定稿，照常走完摘要与入库；「临时降级为关键词检索」——仅 E104 嵌入模型调用失败时显示，跳过向量检索继续本轮（仍走 FTS5 关键词检索）；「清空本轮」——清掉所有中间产物，把你的消息回填到输入框，方便你修改后重新发送。
+    factualFallbackTitle: 事实层的特殊失败降级
+    factualFallbackBody: >-
+      事实层的失败处理和经历层不一样。检索阶段（绝不阻塞）：事实层检索的代码用 try-catch 全包，任何异常都返回空结果，不抛错。即使事实层检索挂了，经历层检索照常进行，审查阶段照常进行（只是少了「世界设定」区块）。写入阶段（单变更容错）：每个事实 delta 独立 try-catch，单个失败只记日志，不传播。即使事实层写入部分失败，经历记忆始终能写入。为什么这么设计？因为 AI 输出格式问题频发（字段缺失、entityId 不存在等），如果任一 delta 失败就整轮回滚，会导致「新对话记忆库一直为空」——这是最严重的可用性问题。所以牺牲少量原子性换取可用性。
+
+  # ── 第三部分 3.1：故事模式与对话模式的区别（2026-07-27 新增）──
+  storyVsChatWiki:
+    title: 故事模式与对话模式的区别
+  storyVsChat:
+    intro: LMStory 有三种模式——对话像「工具」，故事像「沉浸式叙事」，导演像「把世界交给 AI 总编辑」（实验）。三种模式入口与界面独立，按需选择。
+    # 主视觉
+    compareTitle: 三种模式视觉对比
+    compareSubtitle: 4 个维度看出明显差异
+    # 示意图标注
+    columnChat: 对话模式
+    columnStory: 故事模式
+    columnDirector: 导演模式
+    directorEntry: 首页「新导演」卡片（默认开启）
+    directorPalette: 跟随全局外观 + 警示色点缀
+    directorFont: 衬线字体（正文唯一成果）
+    directorInput: 输入框文案：给导演的指令
+    chatEntry: 首页「新建对话」卡片入口
+    chatPalette: 中性色 + 单一强调色
+    chatFont: 无衬线字体（Inter）
+    chatInput: 输入框文案：发送消息
+    storyEntry: 首页「新建故事」卡片入口
+    storyPalette: 跟随全局外观（衬线叙事正文）
+    storyFont: 衬线字体（叙事正文）
+    storyInput: 输入框文案：推动故事发展
+    # 模式定位
+    positioningTitle: 两种模式的定位
+    chatModeTitle: 对话模式 = 工具
+    chatModeBody: 像常见的 AI 对话工具，重点在「高效完成对话」。适合提问、写作、翻译、查资料等场景。界面克制安静，让工具消失于任务。
+    storyModeTitle: 故事模式 = 沉浸
+    storyModeBody: 为长线角色扮演和叙事设计，重点在「代入感」。会自动记忆剧情、检索过往事件、维护角色设定。叙事正文用衬线字体强化氛围，配色跟随全局外观设置。
+    directorModeTitle: 导演模式 = 执笔（实验）
+    directorModeBody: 你写「项目规则」，AI 总编辑在幕后自主检索记忆、维护设定、撰写正文——正文是唯一成果。适合想看 AI 如何理解你的世界、或想半托管推进剧情的时候。默认开启，可在设置中关闭。
+    # 何时选哪个
+    whenTitle: 什么时候选哪个
+    whenBody: 想用 AI 完成一次性任务（写邮件、查资料、翻译）选对话模式；想亲自推进长线故事（角色扮演、互动小说、世界观探索）选故事模式；想写好规则后让 AI 全权执笔、自己只把关纠偏，选导演模式。三种模式互不干扰，可以同时拥有多个会话。
+    # 模式切换
+    switchTitle: 怎么切换模式
+    switchBody: 没有独立的模式切换开关。在首页点击「新建对话」进入对话模式，点击「新建故事」进入故事模式，点击「新导演」进入导演模式（默认开启，可在设置中关闭）。已有会话在侧边栏中按模式图标区分（对话/故事/导演），点击即可切换到对应模式的会话。
+
+  # ── 第三部分 3.2：创建第一个故事（2026-07-27 新增）──
+  firstStoryWiki:
+    title: 创建第一个故事
+  firstStory:
+    intro: 第一次用故事模式？从首页点「新建故事」开始，三步就能开启你的第一个故事。
+    # 主视觉
+    flowTitle: 创建故事的 3 步流程
+    flowSubtitle: 从点击新建到首条消息
+    # 示意图标注
+    flow1Label: 点击新建故事
+    flow1Desc: 首页「新建故事」入口卡片
+    flow2Label: 配置模型与提示词
+    flow2Desc: 至少配置一个可用阶段模型
+    flow3Label: 发送首条消息
+    flow3Desc: 启动六步生成
+    # Banner 提示
+    bannerTitle: 嵌入模型未配置
+    bannerDesc: 仅用关键词检索，配置后可启用语义检索提升记忆召回精度
+    bannerAction: 去配置
+    # 3 步详解
+    stepsTitle: 3 步详解
+    step1Title: 点击新建故事
+    step1Body: 在首页点击「新建故事」卡片，进入故事模式的新会话。第一次进入会显示空状态引导，提示你输入一句话开始故事。
+    step2Title: 配置模型和提示词
+    step2Body: 打开会话设置，在「分步骤模型配置」中至少配置 generating 或 extracting 的可用模型。每个阶段优先使用会话级配置，其次使用全局同阶段配置；未单独配置的其他阶段会复用当前有效的 extracting/generating 模型。两者都不可用时才会报配置错误 E010。
+    step3Title: 发送首条消息
+    step3Body: 在输入框写一句话推动故事发展，点发送即可。AI 会自动走完六步生成流程，输出最终回复。第一次回复可能稍慢，因为要建立初始记忆。
+    # 系统提示词
+    promptTitle: 系统提示词
+    promptBody: 故事模式有内置的默认角色设定，留空时会自动使用。如果想自定义世界观、角色、风格，可以在会话设置的「提示词」区段填写。也可以从模板库选择预设模板。
+    # 嵌入模型
+    embeddingTitle: 嵌入模型
+    embeddingBody: 嵌入模型用于把记忆文本转成向量，是语义检索的基础。未配置时故事模式仍可工作，但只能用关键词检索，记忆召回精度会降低。配置方法：打开「设置」→「故事模式设置」→「模型配置」→「嵌入模型」。
+    # 首条消息
+    firstMessageTitle: 首条消息怎么写
+    firstMessageBody: 写一句话交代场景或动作即可，比如「我推开酒馆的门，闻到一股陈年酒香」。不需要写完整设定——AI 会自动提炼关键信息存入记忆，后续剧情会基于这些记忆继续发展。
+
+  # ── 第三部分 3.4：故事模式消息操作（2026-07-27 新增）──
+  storyMessageActionsWiki:
+    title: 故事模式消息操作
+  storyMessageActions:
+    intro: 故事模式下点击任意消息会显示操作按钮。和对话模式相比，操作种类更少（无引用、无继续生成），但有 Fork 窗口限制——只能操作最近几轮的消息。
+    # 主视觉
+    diagramTitle: 4 种操作 + Fork 窗口
+    diagramSubtitle: 操作按钮 + 窗口限制
+    # 示意图标注
+    diagramOpsTitle: 4 种操作
+    opCopy: 复制
+    opRegenerate: 重新生成
+    opEditResend: 编辑重发
+    opDeleteRound: 删除整轮
+    diagramWindowTitle: Fork 窗口限制
+    diagramWindowDesc: 只能操作最近 N 轮的消息，窗口外的消息按钮变灰
+    # 4 种操作详解
+    opsTitle: 4 种操作说明
+    op1Title: 复制
+    op1Body: 复制消息原文到剪贴板。复制始终可用，不受 Fork 窗口限制。
+    op2Title: 重新生成（仅助手消息）
+    op2Body: 让 AI 重新走一遍六步生成流程，写一条新的回复。注意：原回复会被新回复直接替换，不会保留旧版本（与对话模式的分支 Fork 不同）。
+    op3Title: 编辑重发（仅用户消息）
+    op3Body: 修改你之前发过的消息，修改后会基于新内容重新走六步生成。注意：该轮原回复会被直接替换，不会保留旧版本。
+    op4Title: 删除整轮
+    op4Body: 删除这一轮对话（你的消息 + AI 的回复 + 所有中间产物）。删除需二次确认，且只能删除 Fork 窗口内的轮次。
+    # Fork 窗口限制
+    windowTitle: Fork 窗口限制
+    windowBody: 故事模式下，只有最近几轮的消息可以编辑或重新生成，更早的消息按钮会变灰。这是为了保护已固化的记忆——早期轮次的事件可能已被提炼成事实记忆，修改会导致记忆不一致。复制始终可用，不受窗口限制。
+    # 与对话模式差异
+    diffTitle: 与对话模式的差异
+    diffBody: 故事模式没有「引用」按钮（沉浸式叙事不需要引用上下文）；没有「继续生成」按钮（六步生成是完整的，不会出现「没写完」的情况）；增加了 Fork 窗口限制（保护记忆一致性）。其他操作（复制/编辑/重新生成/删除）的用法与对话模式一致。
+
+  # ── 第三部分 3.6：故事会话设置（2026-07-27 新增）──
+  storySessionSettingsWiki:
+    title: 故事会话设置
+  storySessionSettings:
+    intro: 故事模式的会话设置比对话模式复杂——六步生成的每个步骤都可以独立配置模型，还有上下文预算、审查阶段、推荐回复等区段。
+    # 主视觉
+    diagramTitle: 4 步骤模型 + 10 个区段
+    diagramSubtitle: 分步骤模型独立配置 + 完整设置区段
+    # 示意图标注
+    diagramPhasesTitle: 4 步骤模型独立配置
+    phaseGenerating: 生成回复
+    phaseExtracting: 关键词提取
+    phaseReviewing: 审查
+    phaseSummarizing: 事件摘要
+    diagramPhasesDesc: 每个步骤可配不同模型，简单任务用小模型降本
+    diagramSectionsTitle: 会话设置包含 10 个区段
+    sectionPhaseModels: 分步骤模型配置
+    sectionPhaseModelsDesc: 4 步骤独立配置
+    sectionPrompt: 提示词
+    sectionPromptDesc: 系统提示词 + 模板
+    sectionGen: 生成参数
+    sectionGenDesc: 温度 + Top P + 惩罚 + 思考预算
+    sectionContext: 上下文窗口
+    sectionContextDesc: 单次请求 Token 上限
+    sectionContextBudget: 上下文预算
+    sectionContextBudgetDesc: 原文区下限 + 检索区比例
+    sectionToolCalling: 工具调用
+    sectionToolCallingDesc: 控制结构化输出阶段的解析格式
+    sectionReview: 审查阶段
+    sectionReviewDesc: 开关审查阶段
+    sectionSuggestReply: 推荐回复
+    sectionSuggestReplyDesc: 模型 + 提示词覆盖
+    sectionMemory: 记忆管理
+    sectionMemoryDesc: 重建向量索引
+    # 4 步骤模型
+    phaseModelsTitle: 分步骤模型配置
+    phaseModelsBody: 故事模式每轮默认有 3 次 AI 请求（提取/生成/摘要），开启审查后为 4 次。每个阶段优先使用会话级配置，再使用全局同阶段配置；未单独配置的阶段复用有效的 extracting/generating 模型。只有两者都不可用时才会报 E010。
+    # 10 个区段说明（v0.3 新增角色卡/世界书区段）
+    sectionsTitle: 10 个区段说明
+    section1Title: 分步骤模型配置
+    # JT-1：批七快照宪法后「恢复使用全局」继承语义不存在——重置=写当前快照
+    section1Body: 为六步生成的各阶段选择模型，是故事模式独有的配置。每个步骤可单独覆盖全局配置，重置按钮把该步骤写为当前全局值的快照（此后改全局不影响该会话）。
+    section2Title: 提示词
+    section2Body: 系统提示词控制 AI 的角色设定和叙事风格。留空时使用内置默认角色设定。可从模板库选择预设模板，也可手动输入。
+    section3Title: 生成参数
+    section3Body: >-
+      温度（控制随机性，0=确定 2=随机）、Top P（核采样）、最大 Token 数、存在惩罚（鼓励新话题）、频率惩罚（减少重复）、思考预算（控制模型推理深度）。这些参数仅作用于生成和审查阶段两个阶段；关键词提取、事件摘要等结构化任务阶段使用固定参数，不受此处配置影响，也不消耗思考预算。每个参数都可单独覆盖全局配置。
+    section4Title: 上下文窗口
+    section4Body: >-
+      单次请求 Token 上限控制每次发送给 AI 的最大 token 数，避免触发供应商的 TPM（每分钟 token 数）限制。留空时使用模型窗口大小，实际生效值取配置值与模型窗口的较小者。故事模式使用三段式上下文预算（摘要前缀 + 原文区 + 检索区），由压缩触发线动态控制原文区上限——当对话累计长度接近触发线时自动压缩早期对话为摘要前缀，不再需要硬性消息数截断。详见「故事模式原理 → 上下文预算」。
+    section5Title: 上下文预算
+    section5Body: >-
+      控制原文区下限和检索区比例两个参数。原文区下限（null=动态计算，非 null=自定义比例）保证近期对话至少保留多少比例不被压缩；检索区比例控制从记忆库检索多少上下文注入（0=完全关闭检索，0.15=默认）。两个参数都可会话级覆盖全局配置。详见「故事模式原理 → 上下文预算」。
+    section6Title: 工具调用
+    section6Body: 控制 AI 提取关键词和生成摘要时的输出格式。默认启用（兼容性更好），遇到不支持工具调用的模型时可关闭，AI 会直接输出 JSON 文本。
+    section7Title: 审查阶段
+    section7Body: >-
+      开关第二道生成阶段。关闭时生成即最终（3 次 AI 请求），开启后在生成内容基础上再做一次审查修订（4 次 AI 请求）。开启会提升质量但增加成本和延迟。思考预算仅在此阶段和生成阶段生效，其他阶段不消耗思考预算。详见「故事模式原理 → 审查阶段」。
+    section8Title: 推荐回复
+    section8Body: >-
+      为本会话单独覆盖推荐回复的模型和提示词。模型留空时自动用生成阶段的模型，所以不配也能用。详见「推荐回复与输入助手」。
+    section9Title: 记忆管理
+    section9Body: 记忆管理位于会话设置顶部。它显示两类待补齐记忆的数量：达到向量化重要性阈值但尚无 embedding 的记忆，以及已向量化但与当前嵌入模型维度不匹配的记忆（换嵌入模型后出现）；重建会逐条调用嵌入模型 API，并可进入记忆库查看或编辑记录。
+    section10Title: 角色卡/世界书
+    section10Body: >-
+      应用导入的角色卡与世界书：从资源库选择并应用，作为只读「种子」设定参与世界运转，显示「已应用 N 个实体」，可随时取消应用。应用后的内容作为只读基线参与运转，AI 的剧情变化会以独立「演变」条目与基线并存（记忆库中有基线/演变行级徽标）。详见「角色卡与世界书（资源库）」条目。
+    # 失败状态下可修改
+    failedEditTitle: 失败状态下可修改配置
+    failedEditBody: 故事模式失败后允许修改模型、温度等配置后再重试。只有 idle 和 failed 状态下可编辑，生成中无法修改（避免配置变更导致状态不一致）。
+
+  # ── 第三部分 3.8：推荐回复与输入助手（2026-07-29 新增）──
+  storySuggestReplyWiki:
+    title: 推荐回复与输入助手
+  storySuggestReply:
+    intro: 故事模式输入框上方有一行小按钮，帮你处理「打字麻烦」和「不知道怎么接话」两个痛点。前两个是符号按钮（引号、括号），第三个是 AI 推荐回复——会根据当前剧情生成 3 条候选给你选。
+    # 主视觉
+    diagramTitle: 输入框上方的工具栏
+    diagramSubtitle: 3 个按钮左对齐，随时可用
+    # 示意图标注
+    diagramToolbarTitle: 工具栏 3 按钮
+    btnQuote: 添加引号
+    btnParen: 添加括号
+    btnSuggest: 推荐回复
+    # 引号与括号
+    symbolsTitle: 引号与括号按钮
+    symbolsBody: 写故事时经常要输入对话（"…"）或旁白注释（…）。点一下按钮，就会在光标位置插入一对英文引号或英文括号，光标会自动跳到中间，直接打字就行。比手切键盘切符号快很多。
+    # 推荐回复基础
+    suggestIntroTitle: 推荐回复按钮
+    suggestIntroBody: 不知道怎么接话，或者想偷懒时，点「推荐回复」按钮。AI 会读取最近一轮对话（你的上一句 + AI 的回复），加上前两轮的剧情摘要，生成 3 条候选回复浮在输入框上方。点其中一条就填进输入框，可以直接发送，也可以再改改。
+    # 生成中
+    generatingTitle: 生成中
+    generatingBody: 点按钮后，工具栏会显示「正在生成中…」的小动画。AI 只读最近一轮对话和前两轮摘要，所以很省 token，通常几秒就出结果。生成期间你仍然可以打字、点其他按钮。
+    # 候选气泡
+    bubblesTitle: 候选气泡的操作
+    bubblesBody: 3 条候选回复会以浮动气泡形式纵向排列在输入框上方。每条气泡点击后会填进输入框（覆盖原内容）。气泡可以折叠收起（点头部「推荐回复」一栏的折叠按钮），也可以点叉号关闭。发送消息后气泡会自动消失——因为这一轮已经结束了。
+    # 生命周期
+    lifecycleTitle: 气泡什么时候消失
+    lifecycleBody: 气泡不会因为你切换页面、滚动历史消息、或者点开设置而消失。只要还在当前对话轮次（你还没发送消息），气泡就一直在，可以反复切换候选。只有三种情况会清空气泡：发送消息、点叉号关闭、或者切换到别的对话。
+    # 配置
+    configTitle: 推荐回复的配置
+    configBody: 推荐回复用什么模型、提示词、温度、字数都可以配。在「设置 → 故事模式 → 推荐回复」里能改全局默认；在某个对话的「会话设置 → 推荐回复」区段可以为这个对话单独覆盖。模型留空时会自动用生成阶段的模型，所以不配也能用。
+    # 省token
+    tokenTitle: 为什么很省 token
+    tokenBody: 推荐回复只读最近 1 轮完整对话和前 2 轮摘要，不读取全部历史。当前默认生成 3 条候选，共用 600 token 上限，单条最多 150 字；候选数、token 和单条字数都可在设置中调整。
+
+  # ── 第三部分 3.7：记忆库浏览器（2026-07-27 新增）──
+  memoryBrowserWiki:
+    title: 记忆库浏览器
+  memoryBrowser:
+    intro: 记忆库是故事模式的「大脑」——所有 AI 自动提炼的经历和事实都存在这里。你可以随时查看、搜索、编辑或删除任何一条记忆。
+    # 主视觉
+    diagramTitle: 双 Tab + 完整 CRUD
+    diagramSubtitle: 经历类 vs 事实类 + 搜索/新增/编辑/删除
+    # 示意图标注
+    diagramTabsTitle: 双 Tab 分类
+    tabExperience: 经历类记忆
+    tabExperienceDesc: 剧情事件，按轮次排列
+    tabFactual: 事实类记忆
+    tabFactualDesc: 角色/地点/物品的属性
+    diagramOpsTitle: 7 种操作
+    opSearch: 搜索
+    opAdd: 新增
+    opEdit: 编辑
+    opDelete: 删除
+    opMulti: 多选
+    opForceInject: 强制注入
+    opAiMerge: AI 合并
+    # 双 Tab 说明
+    tabsTitle: 双 Tab 说明
+    tab1Title: 经历类记忆（剧情日记）
+    tab1Body: 按对话轮次排列，每轮 1 条微摘要。包含时间/地点/人物/事件/意义/补充 6 字段。宏摘要（macro）是覆盖多轮的聚合版本，会在列表中标注「宏观」标签。
+    tab2Title: 事实类记忆（人物卡）
+    # 分组清单对齐实际（六类；宠物/NPC 归入角色）
+    tab2Body: 按实体（角色/地点/物品/设定/组织/杂项；宠物与 NPC 归入角色）分组展示。每个实体下挂载若干属性，比如「勇者·等级·5」。支持展开实体查看所有属性，可单独编辑或删除某个属性。
+    # 4 种操作
+    opsTitle: 7 种操作说明
+    opsBody: 搜索：在当前 Tab 内按关键字过滤记忆。新增：手动添加经历或实体。编辑：修改记忆内容（重要性、事件描述等）。删除：删除单条记忆，需二次确认，不可恢复。多选：批量勾选整理。强制注入：勾选后该实体每轮必进上下文，不再依赖检索评分。AI 合并：在事实 Tab 勾选 2 条以上重复实体，AI 生成整合方案供预览确认，确认后规范条目更新、其余归档（可恢复）。只读资源（世界书/角色卡投影）不可编辑删除，仅可取消应用；属性行分「基线」（只读）与「演变」（AI 随剧情新增），「新增属性」会落为演变行；被 AI 归档的实体可从菜单恢复。实体卡徽标：「来源」=种子出身或 AI 自动提取，「常驻·世界/常驻·指令」=每轮必进上下文；菜单「停用注入」可暂时不参与上下文（浏览与检索不受影响），可恢复。记忆索引健康条提示「缺行」与「嵌入维度不匹配」两类缺口，均可一键重建补齐，索引完整时自动隐藏。经历 Tab 顶部「全部/活跃/已归档」三档筛选（归档记忆不参与检索）。
+    # 进入入口
+    entryTitle: 怎么进入记忆库
+    entryBody: 在故事或导演会话页右上角打开菜单并进入「会话设置」，顶部就是「记忆管理」区段；点击「查看记忆库」即可进入独立全屏页面。两种模式共用同一记忆库。
+
+  # ── 5.1 API 供应商管理（2026-07-27 新增）──
+  apiProviderWiki:
+    title: API 供应商管理
+  apiProvider:
+    intro: API 供应商是提供 AI 模型服务的平台（比如 OpenAI、DeepSeek）。你需要先添加一个供应商并填入 API Key，才能在对话中使用 AI 模型。
+    # 主视觉
+    diagramTitle: 内置模板 + 自定义创建
+    diagramSubtitle: 7 个内置模板 + 2 步自定义流程
+    diagramBuiltinTitle: 7 个内置模板
+    builtinOpenAI: OpenAI
+    builtinDeepSeek: DeepSeek
+    builtinOpenRouter: OpenRouter
+    builtinClaude: Anthropic Claude
+    builtinGemini: Google Gemini
+    builtinNvidia: NVIDIA NIM
+    builtinAgnes: Agnes AI
+    builtinCustom: 自定义
+    diagramCustomTitle: 自定义 2 步流程
+    customStep1: 选模板或自定义
+    customStep1Desc: 选模板只填名称即可
+    customStep2: 命名 + 创建
+    customStep2Desc: 协议从模板继承
+    # 步骤说明
+    stepsTitle: 供应商详情页 5 个区块
+    step1Title: 名称
+    step1Body: 供应商显示名称，可随时修改。
+    step2Title: 协议
+    step2Body: 创建后锁定不可修改。内置供应商继承模板；自定义时当前可选 OpenAI-compatible、Anthropic、Gemini 3 类已实现协议。OpenAI Responses 仍在计划中，不会出现在可用选项里。
+    step3Title: API Host
+    step3Body: 供应商服务地址。内置供应商已预填，自定义时需手动填写。开启手动模式后可输入完整 URL。
+    step4Title: API Key
+    step4Body: 从供应商官网获取密钥并仅在本机保存。点「测试连接」会请求该供应商的模型列表来验证地址和凭据，不消耗生成 Token；部分非标准手动端点可能不支持此请求。
+    step5Title: 高级参数
+    step5Body: 面向高级用户的协议特有参数（如 thinking、thinkingConfig、extra_headers），以 JSON 对象透传给出网适配器。留空表示无自定义参数；重置供应商为模板默认值时会一并清空。普通用户无需理会。
+    # 模型管理
+    modelsTitle: 模型管理
+    modelsBody: 每个供应商下可管理多个模型。点「获取模型列表」从供应商拉取，或点「+」手动添加。拉取后可勾选要保留的模型，避免数百个模型挤满列表。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 通用设置 → 供应商 → 进入供应商列表 → 点「+」新建 / 点列表项进入详情。
+
+  # ── 5.2 模型选择策略（2026-07-27 新增）──
+  modelStrategyWiki:
+    title: 模型选择策略
+  modelStrategy:
+    intro: 模型选择决定 AI 用哪个模型回复你。LMStory 支持全局默认 + 会话级覆盖 + 故事模式 4 步骤独立配置，灵活适配不同场景。
+    # 主视觉
+    diagramTitle: 3 层模型配置
+    diagramSubtitle: 全局默认 → 会话级覆盖 → 故事 4 步骤
+    diagramLayersTitle: 3 层优先级
+    layer1Label: 全局默认
+    layer1Desc: 所有新会话的起点
+    layer2Label: 会话级覆盖
+    layer2Desc: 单个会话特殊配置
+    layer3Label: 故事 4 步骤
+    layer3Desc: 每步独立模型
+    diagramStoryTitle: 故事模式 4 步骤
+    storyGenerating: 生成
+    storyExtracting: 提取
+    storyReviewing: 审查
+    storySummarizing: 摘要
+    # 步骤说明
+    stepsTitle: 3 种配置入口
+    step1Title: 对话模式默认模型
+    step1Body: 设置 → 对话模式设置 → 默认模型。所有对话模式新会话都会使用此模型，未配置时自动选第一个有 chat 能力的供应商。
+    step2Title: 故事模式 4 步骤模型
+    step2Body: 设置 → 故事模式设置 → 模型配置。生成/提取/审查/摘要可独立配置；会话级优先于全局同阶段，未配置的阶段复用当前有效的 extracting/generating 模型。两者都不可用时才会报 E010。
+    step3Title: 会话级覆盖
+    step3Body: 在聊天页点会话标题菜单 → 会话设置。每个字段右侧有「重置为全局当前值」按钮，点击后用当前全局值覆盖会话级字段。导演会话同理；导演会话设置里另有「主模型」——导演自主执行用的模型，未单独配置时使用全局「生成」模型。
+    # 嵌入模型
+    embeddingTitle: 嵌入模型
+    embeddingBody: 故事模式特有的独立模型，用于将记忆转为向量以支持语义检索。设置 → 故事模式设置 → 模型配置 → 嵌入模型。未配置时降级为关键词检索。
+    # 标题模型
+    titleModelTitle: 会话标题模型
+    titleModelBody: 跨模式共享，专门用于给会话生成标题。未配置时先用当前生成模型生成标题，失败时降级为回复内容前几个字。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 对话模式：设置 → 对话模式设置 → 默认模型。故事模式：设置 → 故事模式设置 → 模型配置。
+
+  # ── 4.5 上下文预算（v0.2.2 新增）──
+  contextBudgetWiki:
+    title: 上下文预算
+  contextBudget:
+    intro: >-
+      故事模式每轮发送给 AI 的内容由三部分组成：摘要前缀 + 原文区 + 检索区。上下文预算就是控制这三部分大小的全局配置。配置得当可以在保证记忆质量的同时控制成本。
+    # 主视觉
+    diagramTitle: 上下文的三段式结构
+    diagramSubtitle: 摘要前缀 + 原文区 + 检索区
+    diagramPrefixLabel: 摘要前缀
+    diagramPrefixDesc: 压缩后的旧对话摘要
+    diagramRecentLabel: 原文区
+    diagramRecentDesc: 最近几轮原文
+    diagramRetrievalLabel: 检索区
+    diagramRetrievalDesc: 检索到的相关记忆
+    param1Title: 压缩触发线
+    param1Body: >-
+      当对话累计长度达到「单次请求 Token 上限 × 压缩触发线」时自动触发压缩。默认 0.5，比如上限 8000、触发线 0.5，则累计到 4000 token 时压缩。值越大越晚压缩（保留更多原文），值越小越早压缩（更省 token 但记忆更早变成摘要）。
+    param2Title: 原文区下限
+    param2Body: >-
+      压缩后保留的最近原文最少占「单次请求 Token 上限」的比例。比如上限 8000、下限 0.3，则至少保留 2400 token 的最近原文。留空时显示「动态」，由系统根据剩余空间自动调整。
+    param3Title: 检索区比例
+    param3Body: >-
+      检索区占「单次请求 Token 上限」的比例。比如上限 8000、检索区 0.15，则检索区最多 1200 token。下限为 0，设为 0 表示完全关闭检索（只靠原文和摘要）。关闭检索会显示红色警告——故事模式将失去记忆召回能力，只记得摘要和最近原文里提到的事。
+    # effectiveContextLimit
+    limitTitle: 单次请求 Token 上限
+    limitBody: >-
+      三个比例的计算基准。留空时使用模型窗口大小，实际生效值取配置值与模型窗口的较小者。建议设置为模型 TPM 限制的 80% 左右，避免触发 429 限流。
+    # 配置入口
+    entryTitle: 怎么配置
+    entryBody: >-
+      全局配置：设置 → 故事模式设置 → 上下文预算。会话级覆盖：会话设置 → 上下文预算区段，每个参数可单独覆盖全局值，重置按钮把该参数写为当前全局值的快照（此后改全局不影响该会话）。
+    # 上下文用量与手动压缩
+    usageTitle: 上下文用量与手动压缩
+    usageBody: >-
+      故事模式输入区工具栏末端有一个圆环，实时显示最近的上下文用量：环的满刻度是压缩触发线（不是模型窗口），用量接近满刻度时自动压缩就会触发。点开圆环可查看窗口用量、缓存命中率、最近请求的 token 明细；对话太短时按钮提示暂不值得压缩，生成中按钮置灰。详情面板底部的「立即压缩」可不等触发线提前手动压缩——摘要会流式生成，完成后旧对话被一条前情摘要替代，与新对话合并展示。压缩摘要卡展开后有「撤销压缩」：被归档的旧对话完整恢复、摘要删除，多次压缩逐次回剥。导演模式的输入区有同一个圆环，口径一致（导演侧该旋钮称为「上下文压缩阈值」）。
+
+  # ── 4.6 审查阶段（v0.2.2 新增）──
+  finalReviewWiki:
+    title: 审查阶段
+  finalReview:
+    intro: >-
+      审查阶段是故事模式六步生成流程中的可选阶段。开启后，生成完毕会多一次 AI 审查调用，检查事实一致性后再输出最终回复。关闭时生成即最终，省一次 AI 调用。
+    # 主视觉
+    diagramTitle: 开启 vs 关闭的区别
+    diagramSubtitle: 3 次 AI 请求 vs 4 次 AI 请求
+    diagramOffTitle: 关闭审查阶段（3 次 AI 请求）
+    # 步骤序对齐管线真实顺序
+    # （提取→检索→生成，extracting 前置）——此前把「生成」
+    # 排在最前，暗示「先写正文再查资料」。
+    offStep1: 关键词提取 + 检索
+    offStep2: 生成
+    offStep3: 事件摘要 + 入库
+    diagramOnTitle: 开启审查阶段（4 次 AI 请求）
+    onStep1: 关键词提取 + 检索
+    onStep2: 生成
+    onStep3: 审查阶段（检查事实一致性）
+    onStep4: 事件摘要 + 入库
+    # 开关作用
+    toggleTitle: 开关的作用
+    toggleBody: >-
+      开启审查阶段后，生成完毕会增加一次审查调用：AI 会对比生成内容与检索到的记忆，检查是否有事实冲突（比如角色等级、地点、时间等设定是否一致）。发现冲突时会修正后输出最终回复。关闭时生成内容直接作为最终回复，速度更快、成本更低，但可能保留事实漂移。
+    # 与思考预算的关系
+    budgetTitle: 与思考预算的关系
+    budgetBody: >-
+      思考预算（reasoningEffort）作用于生成和审查阶段两个阶段。开启审查阶段后，审查阶段也会消耗思考预算——审查更深入但更慢更贵。关闭审查阶段时，思考预算只作用于生成阶段。关键词提取、事件摘要等结构化任务阶段始终不消耗思考预算。
+    # 配置建议
+    adviceTitle: 什么时候开启
+    adviceBody: >-
+      重视设定一致性、玩长线故事时建议开启——审查能拦截大部分事实漂移。追求响应速度、或使用便宜小模型时可以关闭。会话级可在会话设置中单独覆盖全局开关。
+    # 配置入口
+    entryTitle: 怎么配置
+    entryBody: >-
+      全局配置：设置 → 故事模式设置 → 审查阶段。会话级覆盖：会话设置中「审查阶段」开关，可选择「使用全局设置」「开启」「关闭」；选「使用全局设置」会把当前全局值写为该会话的快照（此后改全局不影响该会话）。
+
+  # ── 5.8 生成参数（v0.2.2 新增）──
+  generationParamsWiki:
+    title: 生成参数
+  generationParams:
+    intro: >-
+      生成参数控制 AI 写回复时的「风格」。LMStory 把这些参数集中在一个全局配置页，会话级可单独覆盖。重要：这些参数只作用于生成和审查阶段两个阶段，关键词提取、事件摘要等结构化任务阶段使用固定参数，确保输出稳定。
+    # 主视觉
+    diagramTitle: 5 个生成参数
+    diagramSubtitle: 都只作用于生成和审查阶段
+    param1Title: 温度（temperature）
+    param1Body: >-
+      控制随机性。0 = 完全确定（每次回复几乎一样），2 = 非常随机。故事模式建议 0.7-0.9，既有创意又不会跑偏。温度越高剧情越出人意料，越低越稳定可预测。
+    param2Title: Top P（核采样）
+    param2Body: >-
+      与温度类似的随机性控制，但更稳定。只从概率累计达到 P 的候选词里采样。1.0 = 不限制，0.1 = 只从最可能的 10% 候选词里选。通常和温度二选一调整，不需要同时改。
+    param3Title: 最大 Token 数（maxTokens）
+    param3Body: >-
+      单次回复的最大长度上限，默认 8192。这是上限不是目标——AI 会在合理位置自然结束。设为 0 时 LMStory 不添加应用层输出上限，实际长度仍受模型和供应商限制。若模型 TPM 紧张可适当调低。
+    param4Title: 存在惩罚（presencePenalty）
+    param4Body: >-
+      鼓励 AI 聊新话题。0 = 不惩罚，正值 = 已经出现过的内容会被打压。默认 0.6，适合防止 AI 反复提同一件事。调低则剧情更连贯但可能重复，调高则更多新话题但可能跳跃。
+    param5Title: 频率惩罚（frequencyPenalty）
+    param5Body: >-
+      减少 AI 重复用词。0 = 不惩罚，正值 = 高频词会被打压。默认 0.3，适合防止 AI 反复用同一句话或动作描写。调低用词更丰富但可能重复，调高用词更多样但可能生硬。
+    # 作用范围
+    scopeTitle: 作用范围（重要）
+    scopeBody: >-
+      这 5 个参数只作用于生成和审查阶段。关键词提取、事件摘要、宏摘要等结构化任务阶段使用固定参数（温度 0、无惩罚），确保 JSON 输出格式稳定、不漂移。所以调整这些参数不会影响记忆质量，只会影响最终回复的文风。
+    # 配置入口
+    entryTitle: 怎么配置
+    entryBody: >-
+      全局配置：设置 → 故事模式设置 → 生成参数。会话级覆盖：会话设置 → 生成参数区段，每个参数可单独覆盖全局值。
+
+  # ── 5.3 提示词模板系统（2026-07-27 新增）──
+  promptTemplateWiki:
+    title: 提示词模板系统
+  promptTemplate:
+    intro: 提示词模板是预设的系统提示词，可复用避免每次重写。比如保存一个「翻译助手」模板，新建会话时一键应用。
+    # 主视觉
+    diagramTitle: 2 种可用类型 + CRUD 操作
+    diagramSubtitle: 系统提示词 / 压缩模板
+    diagramTypesTitle: 2 种可用模板类型
+    typeSystem: 系统提示词
+    typeSystemDesc: 对话模式系统提示词
+    typeConsolidation: 压缩模板
+    typeConsolidationDesc: 事件摘要合并用
+    diagramOpsTitle: 4 种操作
+    opCreate: 新增
+    opEdit: 编辑
+    opCopy: 复制
+    opDelete: 删除
+    # 步骤说明
+    stepsTitle: 模板管理操作
+    step1Title: 创建模板
+    step1Body: 点右下角「+」按钮，输入名称、选类型、写内容。名称必填，类型创建后不可修改。
+    step2Title: 编辑模板
+    step2Body: 点模板卡片的「编辑」按钮。内置模板可编辑但不可删除，编辑时显示「内置模板」提示。
+    step3Title: 复制模板
+    step3Body: 点「复制」按钮创建副本，名称自动加后缀。适合基于内置模板快速创建自定义版本。
+    step4Title: 删除模板
+    step4Body: 点「删除」按钮，仅自定义模板可删除。内置模板不显示删除按钮。
+    # 内置模板
+    builtinTitle: 内置模板
+    builtinBody: 初始化时自动创建，标记「内置」徽章。不可删除但可编辑或复制创建自定义版本。
+    # 应用模板
+    applyTitle: 怎么应用模板
+    applyBody: 在会话设置面板的系统提示词字段，可从 systemPrompt 类型模板中选择。故事模式的 10 段提示词在故事模式设置页单独管理。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 提示词模板，进入列表后可编辑或复制内置模板。
+
+  # ── 5.4 故事模式提示词自定义（2026-07-27 新增）──
+  storyPromptCustomWiki:
+    title: 故事模式提示词自定义
+  storyPromptCustom:
+    intro: 故事模式当前有 10 段可自定义提示词，覆盖角色设定、生成、提取、审查、摘要、记忆与事实注入等环节。
+    # 主视觉
+    diagramTitle: 10 段提示词 + 编辑预览
+    diagramSubtitle: 生成流程 + 记忆与事实扩展
+    diagramListTitle: 10 段提示词列表
+    segDefaultRole: 默认角色
+    segGenerate: 生成后缀
+    segExtractKw: 关键词提取
+    segReview: 审查后缀
+    segExtractSummary: 事件摘要
+    segMacroSummary: 宏摘要
+    segGenerateInject: 生成注入
+    segMemoriesInject: 记忆注入
+    segExtractFacts: 事实提取
+    segFactInject: 世界设定注入
+    diagramEditorTitle: 编辑器 3 个区块
+    editorField: 编辑区
+    editorFieldDesc: 等宽字体 + 字数统计
+    editorScene: 使用场景
+    editorSceneDesc: 灯泡图标 + 说明
+    editorDefault: 默认值预览
+    editorDefaultDesc: 对比查看
+    # 步骤说明
+    stepsTitle: 10 段提示词说明
+    step1Title: 默认角色设定
+    step1Body: 故事开篇的 AI 角色定位，所有步骤共享。决定 AI 用什么口吻讲故事。
+    step2Title: 生成后缀
+    step2Body: generating 步骤的提示词，控制纯文本生成的风格。
+    step3Title: 关键词提取
+    step3Body: extracting 步骤的提示词，控制如何从对话中提取关键词。工具调用模式。
+    step4Title: 审查后缀
+    step4Body: reviewing 步骤的提示词，控制纯文本回复的审查风格。
+    step5Title: 事件摘要
+    step5Body: summarizing 步骤的提示词，控制每轮事件摘要的生成。工具调用模式。
+    step6Title: 宏摘要
+    step6Body: 覆盖多轮的聚合摘要，控制长剧情的整体回顾风格。
+    step7Title: 生成内容注入前缀
+    step7Body: reviewing 步骤中生成内容注入到回复生成时的前缀。
+    step8Title: 记忆注入标题
+    step8Body: reviewing 步骤中检索到的记忆注入时的标题。
+    step9Title: 事实提取
+    step9Body: summarizing 步骤提取实体与属性变更时使用的工具提示词。
+    step10Title: 世界设定注入标题
+    step10Body: generating/reviewing 请求中注入当前事实设定时使用的区块标题。
+    # 预览
+    previewTitle: 拼接预览
+    previewBody: 点底部「预览拼接效果」按钮，可查看 4 步生成中实际发送给 AI 的完整 messages 列表，使用 mock 数据展示。
+    # 修改检测
+    dirtyTitle: 修改检测
+    dirtyBody: 编辑器中文字与已保存值不一致时，「保存」按钮才可点击。未保存离开会弹确认对话框，避免误操作丢失修改。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 故事模式设置 → 提示词模板 → 进入 10 段列表 → 点任一段进入编辑器（「提示词模板」卡在「配置显示模式=进阶」下可见，开关位于设置 → 通用页底）。
+
+  # ── 5.5 外观与主题（2026-07-27 新增）──
+  appearanceWiki:
+    title: 外观与主题
+  appearance:
+    intro: LMStory 外观由三根轴自由组合：主题结构（经典 / 琉璃 / 印刻 / 漫游）× 配色族（经典 / 波尔多）× 主题模式（深色 / 浅色 / 跟随系统），另有 12–22 共 11 档字体大小。设置即时生效，无需重启。
+    # 主视觉
+    diagramTitle: 外观三轴 + 字体 11 档
+    diagramSubtitle: 结构×配色×深浅 任意组合 + 12-22 px
+    diagramThemeTitle: 3 种主题模式
+    themeDark: 深色
+    themeDarkDesc: 夜间护眼
+    themeLight: 浅色
+    themeLightDesc: 日间清晰
+    themeSystem: 跟随系统
+    themeSystemDesc: 自动切换
+    diagramFontTitle: 字体大小 11 档
+    fontMin: 12 px
+    fontMinDesc: 紧凑
+    fontDefault: 15 px
+    fontDefaultDesc: 默认值
+    fontMax: 22 px
+    fontMaxDesc: 大字
+    # 步骤说明
+    stepsTitle: 3 个设置区块
+    step1Title: 主题结构与配色族
+    step1Body: 结构四选一：经典（清晰平面）/ 琉璃（柔和材质）/ 印刻（利落描边与按压）/ 漫游（叙事展厅）。配色二选一：经典 / 波尔多（酒红）。结构、配色与深浅可自由组合，切换后即时生效。
+    step2Title: 主题模式
+    step2Body: 三选一：深色（夜间护眼）/ 浅色（日间清晰）/ 跟随系统（自动切换）。故事与导演会话跟随全局明暗，不再有独立的「夜航主题」。
+    step3Title: 字体大小
+    step3Body: 滑块调节 12-22 px 共 11 档，默认 15 px，对三种模式的消息正文统一生效。等于默认值时显示「默认」徽章，下方实时预览。
+    # 无障碍与大屏
+    a11yTitle: 无障碍与大屏
+    a11yBody: 减弱动态跟随系统开关（动效集中降级）；桌面端键盘焦点环可见、纯图标按钮带可读名；宽窗口下内容列自动收窄居中（版心），叙事正文限宽保护阅读节奏；桌面快捷键单源注册（Ctrl+N 新对话、Ctrl+Shift+N 新故事、Ctrl+, 设置、Ctrl+K 全局搜索、Ctrl+F 会话内搜索，浮层内 Esc 逐层关闭）。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 通用设置 → 外观。
+
+  # ── 5.6 语言与输入（2026-07-27 新增）──
+  languageInputWiki:
+    title: 语言与输入
+  languageInput:
+    intro: LMStory 界面语言支持简体中文与 English，切换即时生效并保留选择；跟随系统为占位预告。桌面端发送键和换行键可独立配置，移动端显示"回车发送"和"回车换行"两个选项。
+    # 主视觉
+    diagramTitle: 语言 3 选 1 + 发送键/换行键
+    diagramSubtitle: 中文可用 / English 可用 / 跟随系统预告
+    diagramLangTitle: 3 种语言选项
+    langZh: 中文（简体）
+    langZhDesc: 简体中文
+    langEn: English
+    langEnDesc: 当前可用
+    langSystem: 跟随系统
+    langSystemDesc: 敬请期待
+    diagramSendKeyTitle: 发送键 + 换行键
+    sendKeyEnter: Enter 发送
+    sendKeyEnterDesc: 默认值
+    sendKeyShiftEnter: Shift+Enter 发送
+    sendKeyShiftEnterDesc: 换行键另选
+    sendKeyCtrlEnter: Ctrl+Enter 发送
+    sendKeyCtrlEnterDesc: 换行键另选
+    sendKeyButton: 按钮发送
+    sendKeyButtonDesc: 回车换行
+    newlineKeyEnter: Enter 换行
+    newlineKeyShiftEnter: Shift+Enter 换行
+    newlineKeyCtrlEnter: Ctrl+Enter 换行
+    newlineKeyAltEnter: Alt+Enter 换行
+    # 步骤说明
+    stepsTitle: 2 个设置区块
+    step1Title: 界面语言
+    step1Body: 三选一：中文（简体）/ English / 跟随系统（敬请期待）。中英文切换即时生效，重启后保留选择。
+    step2Title: 发送键与换行键
+    step2Body: 桌面端发送键三选一（Enter / Shift+Enter / Ctrl+Enter），换行键四选一（Enter / Shift+Enter / Ctrl+Enter / Alt+Enter），两者不能相同。移动端显示"回车发送"和"回车换行"两个选项。回车发送模式下部分输入法长按发送键可换行。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 通用设置 → 语言与输入。
+
+  # ── 5.7 高级设置（2026-07-27 新增）──
+  advancedSettingsWiki:
+    title: 高级设置
+  advancedSettings:
+    intro: 高级设置包含默认思考预算、超时配置、会话标题模型 3 个区块。这些选项影响 AI 响应质量和网络稳定性。
+    # 主视觉
+    diagramTitle: 3 个高级区块
+    diagramSubtitle: 思考预算 / 超时 / 标题模型
+    diagramBlocksTitle: 3 个区块
+    blockReasoning: 默认思考预算
+    blockReasoningDesc: 5 档选择
+    blockTimeout: 超时配置
+    blockTimeoutDesc: 连接 + 响应
+    blockTitleModel: 会话标题模型
+    blockTitleModelDesc: 跨模式共享
+    diagramReasoningTitle: 5 档思考预算
+    reasoningNone: 未配置
+    reasoningNoneDesc: 由模型决定（默认）
+    reasoningDisabled: 禁用
+    reasoningDisabledDesc: 显式关闭
+    reasoningLow: 低
+    reasoningLowDesc: 快速思考
+    reasoningMedium: 中
+    reasoningMediumDesc: 平衡
+    reasoningHigh: 高
+    reasoningHighDesc: 深度推理
+    # 步骤说明
+    stepsTitle: 3 个区块说明
+    step1Title: 默认思考预算
+    step1Body: 5 档选择：未配置（默认，由模型决定）/ 禁用 / 低 / 中 / 高。仅对支持 reasoning 的模型生效，不同模型映射不同（OpenAI o-series 用 reasoning_effort，Claude 用 thinking.budget_tokens）。仅对新会话生效，会话级可覆盖。
+    step2Title: 超时配置
+    step2Body: 两个滑块：连接超时（5-60 秒，默认 15 秒）+ 响应超时（10-300 秒，默认 30 秒）。故事模式与导演模式的每次 AI 请求都使用此超时设置。
+    step3Title: 会话标题模型
+    step3Body: 跨模式共享，专门用于给会话生成标题。未配置时先用当前生成模型生成标题，失败时降级为回复内容前几个字。
+    # 流式输出
+    streamTitle: 流式输出开关
+    streamBody: 位于「对话模式设置 → 新对话默认生成参数」区块底部。默认开启，关闭后 AI 会等全部生成完才显示。会话级可覆盖。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 默认思考预算 / 超时配置 / 会话标题模型：设置 → 通用设置 → 高级。流式输出开关：设置 → 对话模式设置 → 新对话默认生成参数。
+
+  # ── 6.1 数据导出与导入（2026-07-27 新增）──
+  dataExportWiki:
+    title: 数据导出与导入
+  dataExport:
+    intro: 把会话及其关联故事数据、API 供应商配置、配置覆盖值备份成 JSON 文件，可在另一台设备或重装后恢复。主题、语言、诊断开关、新手引导状态等设备偏好不在「个人偏好」备份范围内。
+    # 主视觉
+    diagramTitle: 备份内容与流程
+    diagramSubtitle: 三类内容 + 两种流程
+    diagramExportTitle: 导出：3 类内容可选
+    exportItemSessions: 会话
+    exportItemSessionsDesc: 标题、消息、分支、记忆与轮次数据
+    exportItemPresets: API 供应商
+    exportItemPresetsDesc: baseUrl + 模型列表
+    exportItemPreferences: 个人偏好
+    exportItemPreferencesDesc: user_overrides 配置覆盖值
+    exportApiKeySwitch: API Key 独立开关
+    exportApiKeySwitchDesc: 仅当选供应商时可用
+    diagramImportTitle: 导入：2 种模式
+    importModeAppend: 追加
+    importModeAppendDesc: 已存在的跳过，不覆盖
+    importModeOverwrite: 覆盖
+    importModeOverwriteDesc: 仅清空备份中包含的类别后再导入
+    # 步骤说明
+    stepsTitle: 导出 4 步
+    step1Title: 选择内容
+    step1Body: 在「数据管理 → 导出」中勾选要备份的内容。会话默认勾选，API 供应商和个人偏好按需勾选。
+    step2Title: 是否带 API Key
+    step2Body: 仅当勾选 API 供应商时启用此开关。建议平时关闭，仅在迁移设备时临时打开。带 Key 的备份文件请妥善保管。
+    step3Title: 生成备份文件
+    step3Body: 点击「导出」后系统组装 JSON（backupVersion=3）。桌面端会弹出系统保存对话框选择保存位置（保存成功后可「打开所在文件夹」）；移动端分享为 lmstory_backup_时间戳.json 文件。v3 备份额外包含角色卡、世界书、自建提示词模板与导演模式事件日志。
+    step4Title: 导入恢复
+    step4Body: 在「数据管理 → 导入」中选择备份文件，再选择「追加」或「覆盖」模式。导入完成会显示各类导入/跳过数量摘要。旧版 v2/v1 备份文件可直接导入（自动兼容）。
+    # 自动备份
+    autoBackupTitle: 自动备份
+    autoBackupBody: 开启后，应用启动一段时间会自动检查：距上次备份超过 24 小时且存在会话数据时，静默导出一份全量备份到应用文档目录的 backups/ 文件夹（应用私有存储，文件管理器不可见；不含 API Key），只保留最近 3 份。可在「数据管理」页开关，也可随时点「立即备份」或「打开备份目录」。
+    # 单会话导出
+    singleSessionTitle: 单会话导出
+    singleSessionBody: 在会话列表中长按某个会话，或会话内菜单选择「导出对话」，可选 JSON（含该会话关联数据）、Markdown 或纯文本。JSON 适合迁移恢复，另外两种适合阅读分享。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 数据管理 → 导出 / 导入。单会话导出：会话列表长按菜单或会话内菜单。
+
+  # ── 6.2 数据恢复与表修复（2026-07-27 新增）──
+  dataRecoveryWiki:
+    title: 数据恢复与表修复
+  dataRecovery:
+    intro: 数据库偶尔会因为异常退出或版本升级出现孤立消息或表结构不完整。这两项工具不删除任何有效数据，可安全使用。
+    # 主视觉
+    diagramTitle: 两种修复工具
+    diagramSubtitle: 都不丢数据
+    diagramRecoveryTitle: 孤立消息恢复
+    recoveryStep1: 扫描
+    recoveryStep1Desc: 找出 sessionId 已不存在的消息
+    recoveryStep2: 重组
+    recoveryStep2Desc: 创建新会话 + 迁移消息
+    recoveryResult: 按组展示
+    recoveryResultDesc: 每组生成一个「恢复的会话」
+    diagramRepairTitle: 表结构修复
+    repairStrategy: 纯增量策略
+    repairStrategyDesc: CREATE IF NOT EXISTS + ALTER ADD COLUMN
+    repairAction1: 创建缺失的表
+    repairAction1Desc: 按当前 schema 补齐
+    repairAction2: 补齐缺失的列
+    repairAction2Desc: 处理 SQLite ALTER 限制
+    repairAction3: 重建索引 + FTS5
+    repairAction3Desc: 含事实层和向量索引
+    # 步骤说明
+    stepsTitle: 修复流程
+    step1Title: 先做备份
+    step1Body: 修复前系统会提示先备份数据，避免意外。可前往「导出」生成 JSON 备份后再回来。
+    step2Title: 执行扫描
+    step2Body: 「数据恢复」会扫描所有 sessionId 不在 chat_sessions 表中的消息，按 sessionId 分组展示。无孤立时显示「未发现」。
+    step3Title: 确认恢复
+    step3Body: 扫描结果展示孤立组数和总消息数，确认后对每组创建新会话（标题格式「恢复的会话 YYYY-MM-DD」），迁移消息并删除原孤立记录。
+    step4Title: 修复表结构
+    step4Body: 「修复表结构」会纯增量补齐缺失的表、列、索引、FTS5 虚拟表。修复后弹出详细报告：新建表名 / 新增「表名.列名」列表 / 更新后的 schemaVersion。无变更时显示「无变更」。
+    # 区别说明
+    diffTitle: 与「清除所有数据」的区别
+    diffBody: 修复 = 纯增量（CREATE IF NOT EXISTS + ALTER ADD COLUMN），绝不删除已有数据。清除 = DROP + CREATE，会清空所有会话和消息。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 数据管理 → 数据恢复 / 修复表结构。
+
+  # ── 6.3 清除所有数据（2026-07-27 新增）──
+  clearDataWiki:
+    title: 清除所有数据
+  clearData:
+    intro: 一键清空所有会话及其消息、分支、压缩点、故事记忆、轮次产物、失败历史和全文索引。API 供应商、模型模板、API Key 与本机偏好设置会保留。操作不可逆，请务必先备份。
+    # 主视觉
+    diagramTitle: 清空范围与流程
+    diagramSubtitle: 会清空什么 / 会保留什么
+    diagramClearTitle: 会清空的会话关联数据
+    clearTableSessions: 会话和消息
+    clearTableSessionsDesc: chat_sessions / chat_messages / 分支
+    clearTableMemory: 故事模式记忆
+    clearTableMemoryDesc: 经历类 / 事实层 / 中间产物
+    clearTableFailure: 失败历史
+    clearTableFailureDesc: failure_logs 表
+    clearTableCompaction: 压缩点
+    clearTableCompactionDesc: compaction_points 表
+    diagramKeepTitle: 会保留
+    keepPresets: API 供应商
+    keepPresetsDesc: api_presets 表
+    keepTemplates: 提示词模板
+    keepTemplatesDesc: templates 表
+    # 步骤说明
+    stepsTitle: 清空流程
+    step1Title: 二次确认
+    step1Body: 红色危险卡片，点击后弹出确认对话框。需要明确确认才会执行，避免误触。
+    step2Title: DROP + CREATE
+    step2Body: 在单一事务内删除并重建会话关联关系表、索引与 FTS 虚表。实现对象数量可能随 Schema 演进，因此不以固定表数作为用户承诺。
+    step3Title: 保留配置
+    step3Body: api_presets 和 templates 不在清理范围；SharedPreferences 与安全存储也不会清空，因此 API Key、主题、语言、诊断设置和新手引导状态等本机偏好会保留。
+    step4Title: 刷新统计
+    step4Body: 执行完成后刷新存储统计：会话数、消息数归零，数据库文件大小不会立即缩小（SQLite 特性），但新数据会复用空间。
+    # 警告
+    warningTitle: 重要提示
+    warningBody: 此操作不可逆。如需迁移数据请先用「导出」生成备份。仅清除当前设备数据，不影响云端或他人。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 数据管理 → 清除所有数据（红色卡片）。
+
+  # ── 6.4 诊断信息（2026-07-27 新增）──
+  diagnosticsWiki:
+    title: 诊断信息
+  diagnostics:
+    intro: 排查问题时查看运行日志、失败历史、调试开关。日志和失败历史相互独立：日志是全量文本记录，失败历史是结构化数据库记录。
+    # 主视觉
+    diagramTitle: 5 个区块
+    diagramSubtitle: 状态 / 级别 / 调试 / 日志 / 失败
+    diagramOverviewTitle: 状态概览
+    overviewFailure: 失败记录数
+    overviewFailureDesc: 大于 0 时红色高亮
+    overviewLevel: 当前日志级别
+    overviewLevelDesc: debug/info/warn/error
+    diagramLevelTitle: 日志级别
+    levelDebug: debug
+    levelInfo: info
+    levelWarn: warn
+    levelError: error
+    diagramDebugTitle: 调试开关（故事模式专用）
+    debugPrompts: 记录完整提示词
+    debugResponses: 记录最终回复
+    debugMemories: 记录检索到的记忆
+    debugKeywords: 记录提取的关键词
+    debugPayloads: 记录完整请求负载
+    diagramLogTitle: 运行日志
+    logSource: FileLogSink 文件
+    logSourceDesc: 同步写入 + 大小轮转 10MB
+    logTail: 末尾 500 行
+    logTailDesc: Isolate 反向随机读取
+    logColor: 按级别着色
+    logColorDesc: ERROR 红 / WARN 琥珀 / DEBUG 灰
+    diagramFailureTitle: 失败历史
+    failureSource: failure_logs 表
+    failureSourceDesc: 最近 50 条结构化记录
+    failureDetail: 点击展开详情
+    failureDetailDesc: 含错误码/阶段/HTTP/原始异常
+    # 步骤说明
+    stepsTitle: 4 个常用操作
+    step1Title: 调整日志级别
+    step1Body: 切换 debug/info/warn/error 4 档，立即生效。排查问题时建议 debug，日常建议 info 或 warn。
+    step2Title: 开启调试开关
+    step2Body: 故事模式排障有 5 个开关，默认关闭以避免日志膨胀：提示词、回复、记忆、关键词和完整请求负载。
+    step3Title: 查看失败历史
+    step3Body: 列出最近 50 条失败记录，每条含会话 ID、模式、错误码、失败阶段、HTTP 状态、错误消息、原始异常。点击展开查看完整技术详情。
+    step4Title: 分享或清空
+    step4Body: 顶部「分享」按钮可分享当前同步写入的日志文件；「清空」会同时清空失败历史和日志文件（含轮转备份），需二次确认。
+    # 文件特性
+    fileTitle: 日志文件特性
+    fileBody: 同步写入（避免 null 字节）+ UTF-8 编码 + ASCII 控制字符过滤 + 每次启动清空历史 + 10MB 大小轮转保留 1 个备份。Web 平台无文件日志。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 设置 → 诊断信息。
+
+  # ── 7.1 故障排除 FAQ（2026-07-27 新增）──
+  faqWiki:
+    title: 故障排除 FAQ
+  faq:
+    intro: 收集用户最常遇到的问题和解决方法。错误卡片中的「错误码 + 错误分类 + 建议操作」三件套是排查起点，无法解决时再看本页。
+    # 主视觉
+    diagramTitle: 3 类错误码体系
+    diagramSubtitle: 按模式区分
+    diagramSimpleTitle: 对话模式 S001-S009
+    simpleCount: 9 个错误码
+    simpleCountDesc: 按错误分类直接映射
+    simpleStrategy: 无自动重试
+    simpleStrategyDesc: 失败即停，用户操作
+    diagramIntermediateTitle: 故事模式 E010-E018 + E104
+    intermediateCount: 8 个可见错误码
+    intermediateCountDesc: 分阶段错误 + 嵌入调用失败
+    intermediateStrategy: 含自动重试
+    intermediateStrategyDesc: 重试用尽才整轮失败
+    diagramCommonTitle: 以错误卡片实际显示为准
+    commonCount: 不按连续区间推断
+    commonCountDesc: 未显示的编号不是用户接口
+    commonStrategy: 视场景而定
+    commonStrategyDesc: 部分有自动重试
+    # 按场景分类 FAQ
+    scenesTitle: 常见场景 FAQ
+    scene1Title: 发送消息没反应
+    scene1Body: 先看错误卡片的错误码。config 类（对话模式 S001/故事模式 E010）= 配置不完整，去设置检查 API 供应商和模型；network/timeout 类（对话模式 S002/故事模式 E016）= 网络问题，切换 Wi-Fi/移动数据后重试。
+    scene2Title: 流式输出中途断了
+    scene2Body: 对话模式会保留已接收内容，可重新生成或编辑后重发。故事模式流式中断通常显示 E016 并按策略重试；整轮失败后半截正文保留为未完成稿件卡（可复制），失败栏可选「以此收稿」「续写」或整轮重试。各阶段失败行为参见「故事模式用法 → 失败处理」。
+    scene3Title: 故事模式整轮失败后消息会丢吗
+    scene3Body: 不会。用户消息完整保留，仅清空中间产物（生成内容/检索结果/摘要）。可点击「从中断处继续」保留已完成阶段产出，或「整轮重试」从头开始；生成阶段失败时半截正文会保留为未完成稿件卡，可「以此收稿」或「续写」。参见「故事模式用法 → 失败处理」。
+    scene4Title: 压缩对话失败
+    scene4Body: 对话模式会显示压缩失败卡片，可点「重试」或稍后再次发送；也可缩短对话或切换上下文窗口更大的模型。请以当前错误卡片的建议操作为准。
+    scene5Title: 嵌入模型调用失败（E104）
+    scene5Body: 故事模式特有。三选一：「重试」再调用一次；「临时降级为关键词检索」跳过 embedding 用 FTS5 继续；「中止」停止本轮。建议日常先配置嵌入模型。
+    scene6Title: API Key 无效（对话模式 S003）
+    scene6Body: 前往「设置 → 通用设置 → 供应商」→ 编辑对应供应商 → 更新 API Key。Key 仅存在本设备 flutter_secure_storage，不上传云端。
+    scene7Title: 上下文窗口不足
+    scene7Body: 两种处理：(1) 手动压缩对话——会话菜单 → 手动压缩，或点输入区圆环详情里的「立即压缩」；(2) 切换上下文窗口更大的模型——会话设置 → 模型。
+    scene8Title: 数据库表结构不完整
+    scene8Body: 先备份，再尝试「设置 → 数据管理 → 修复表结构」。该工具按当前 Schema 增量补齐表、列与索引；若仍失败，请保留日志并更新应用或报告问题。
+    # 2026-09-16：补导演模式选型 FAQ（附录页此前无导演场景条目）
+    scene9Title: 导演模式和故事模式怎么选
+    scene9Body: 看你想不想亲自执笔：故事模式是你写一句、AI 接一段，剧情由你亲自推进；导演模式（实验性，默认开启）是你定规则、纠方向、把关写入，AI 总编辑自主执笔。两者共用记忆库与角色卡/世界书。参见「导演模式 → 导演模式是什么」。
+    # 错误信息识别
+    identifyTitle: 错误信息识别指南
+    identifyBody: 每个错误卡片都包含三件套：错误码（对话模式 S 码/故事模式 E 码，如 S001、E010）+ 错误分类（如 config/network/auth）+ 建议操作（具体可执行步骤）。先看建议操作，多数问题可直接解决。
+    # 链接
+    linkTitle: 故事模式失败处理详解
+    linkBody: 故事模式的原子事务原则、各阶段失败处理、UI 保留时序、手动重试逻辑、事实层特殊失败降级等深度内容，请查看「故事模式用法 → 失败处理」。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 帮助 → 附录 → 故障排除 FAQ。
+
+  # ── 7.2 术语表（2026-07-27 新增）──
+  glossaryWiki:
+    title: 术语表
+  glossary:
+    intro: 项目中常见技术术语的通俗解释。全部用日常类比说明，不需要任何编程背景也能看懂。按使用场景分 3 组。
+    # 主视觉
+    diagramTitle: 3 组术语分类
+    diagramSubtitle: 按使用场景
+    diagramApiTitle: LLM / API 组
+    #  修复：术语表实际 16 条，宣传数字过期
+    apiCount: 8 个核心术语
+    apiCountDesc: 调用 AI 必备
+    apiExamples: API Key / baseUrl / SSE / Token
+    diagramMemoryTitle: 记忆 / 检索组
+    memoryCount: 8 个核心术语
+    memoryCountDesc: 故事模式核心
+    memoryExamples: CompactionPoint / 嵌入模型 / FTS5
+    diagramProjectTitle: 项目特定组
+    # 批二三词条接线页面后 21→24；v0.4.0 外观词条 +2
+    projectCount: 34 个核心术语
+    projectCountDesc: 三种模式（导演为实验）
+    projectExamples: 对话 / 故事 / 导演 / Fork / 世界书 / 角色卡
+    # LLM/API 术语
+    apiTitle: LLM / API 术语
+    apiKey:
+      term: API Key
+      desc: 调用 AI 服务的「通行证」，相当于 Java 后端的 token，每次请求都要带上，AI 服务商用它计费。
+    baseUrl:
+      term: baseUrl
+      desc: AI 服务的「接口地址前缀」，相当于 Java 后端的 http://localhost:8080/api，不同供应商有不同前缀。
+    sse:
+      term: SSE（Server-Sent Events）
+      desc: 服务器推送事件，让 AI 像打字机一样一个字一个字往外蹦。相当于 Java 中的 WebSocket 但只服务器→客户端单向。
+    stream:
+      term: 流式输出
+      desc: AI 边写边显示给用户看，不用等整段写完。底层用 SSE 实现。
+    token:
+      term: Token
+      desc: AI 处理文本的最小单位，类似 Java 字符串的字符但更细——一个汉字约 2 个 token，一个英文单词约 1 个 token。计费按 token 算。
+    contextWindow:
+      term: 上下文窗口
+      desc: AI 单次能「看到」的文本总量上限，类似 Java 方法参数不能无限长。从 8K 到 1M 以上不等，取决于模型。
+    temperature:
+      term: 温度（Temperature）
+      desc: AI 输出的「随机度」——0=每次回答都一样（适合查资料），1=每次回答都不同（适合创作）。默认 0.8 适合故事。
+    reasoningEffort:
+      term: 思考预算（Reasoning Effort）
+      desc: 某些模型（如 DeepSeek-R1）有「深度思考」能力，思考预算控制思考多深：disabled/low/medium/high。
+    # 记忆/检索术语
+    memoryTitle: 记忆 / 检索术语
+    compactionPoint:
+      term: CompactionPoint
+      desc: 上下文压缩「快照点」。对话太长时把早期消息压成一段摘要，类似 Java 中把日志归档——归档后只看摘要不看原始日志。
+    embedding:
+      term: 嵌入模型（Embedding Model）
+      desc: 把文字转成一组数字（向量）的 AI 模型。两段文字意思相近，数字就相近。是「语义检索」的基础。
+    vectorIndex:
+      term: 向量索引
+      desc: 把记忆文本转成向量后存的「索引表」，能按「意思相近」找记忆，不只是按「字面相同」。
+    fts5:
+      term: FTS5
+      desc: SQLite 自带的「全文检索」插件，类似 MySQL 的 FULLTEXT 索引。按关键词找记忆，找「古碑」能找到含「古碑」的记忆。
+    hybridSearch:
+      term: 混合检索（Hybrid Search）
+      desc: 同时用 FTS5（关键词）+ 向量（语义）两路找记忆，再合并结果。故事模式两路权重各 0.5。
+    factualMemory:
+      term: 事实层（Factual Memory）
+      desc: 存「世界设定」的记忆——角色属性、世界规则、地名等。长期不变，按 key-value 结构存。
+    experientialMemory:
+      term: 经历层（Experiential Memory）
+      desc: 存「剧情事件」的记忆——发生过的事。只追加不修改，类似 Java 的 append-only 日志。
+    eventSummary:
+      term: 事件摘要（EventSummary）
+      desc: 每轮对话结尾由 AI 生成的「剧情摘要」，含 5W1E 六字段（when/where/who/what/significance/extra）。存入经历层。
+    # 项目特定术语
+    projectTitle: 项目特定术语
+    simpleMode:
+      term: 对话模式（Simple）
+      desc: v0.1 交付，类 ChatBox 的自由对话工具。中性色 + 无衬线字体，工具消失于任务。
+    intermediateMode:
+      term: 故事模式（Intermediate）
+      desc: v0.2 交付，叙事沉浸模式。衬线叙事正文 + 跟随全局外观，自动记忆剧情。
+    advancedMode:
+      term: 导演模式（Advanced）
+      desc: 第三种模式（实验性，默认开启）：AI 总编辑按项目规则在幕后自主运转世界、执笔正文。具备监督模式、请示导演、事件日志等能力；旧独立 HUD 蓝图已废弃。
+    configDisplayMode:
+      term: 配置显示模式
+      desc: 设置 → 通用页底的「简单/进阶」开关（默认简单）。简单模式只显示常用配置（供应商、选模型、模板资源、剧情节奏等白话项）；进阶模式显示全部配置。切换即时生效；过滤只动展示层，被隐藏项已有值继续生效。
+    themeStructure:
+      term: 主题结构
+      desc: 「界面长什么样」的外观轴（v0.4.0 起）。经典=现行扁平语言；琉璃=磨砂玻璃材质（波尔多配色的原生载体）；棱角=粗黑描边票据语言（一期，按压有「按进纸里」手感）。设置 → 通用 → 外观选择，与配色自由搭配。
+    paletteFamily:
+      term: 配色族
+      desc: 「用什么配色」的外观轴（v0.4.0 起）。经典=日光/夜航两档；波尔多=深夜酒馆雅座（夜）+清晨画廊白墙（日）。任意结构 × 任意配色组合都成立。
+    projectRules:
+      term: 项目规则
+      desc: 导演模式的常驻背景规则（世界观、人设、文风、叙事守则）。整场会话生效，AI 不会改写；可从模板库直选一条快速开始。
+    supervisionMode:
+      term: 监督模式
+      desc: 开启后，导演每次写入记忆库都暂停并弹出确认卡，由你逐项「允许 / 拒绝」；关闭时这些写入自动执行。
+    askDirector:
+      term: 请示导演
+      desc: 导演主动向你发起的决策请求，弹出「导演决策」卡；可输入回答，也可「跳过」让它自行决定。
+    gmModel:
+      term: 导演主模型
+      desc: 导演自主执行所用的模型；未单独配置时使用全局「生成」模型。
+    storyAnchorTerm:
+      term: 剧情锚
+      desc: 导演维护的当前剧情位置（人物/地点/时间等），跨轮续写时快速回到现场；幕间回顾卡由它生成。
+    backstageTerm:
+      term: 台前 / 幕后
+      desc: 导演会话的过程分层：台前只有正文与一行过程；幕后是逐步骤的工作卡（翻阅前情、查证设定等），点幕后汇总行（「幕后 N 步 · 思考 M 段」）展开或收起。
+    eventLog:
+      term: 事件日志
+      desc: 导演每一步工作的流水记录；应用崩溃或重启后按它恢复现场、接着续写。
+    fourStepGen:
+      term: 六步生成
+      desc: 故事模式每轮对话的流程：extracting（提取关键词）→ retrieving（检索记忆）→ generating（生成）→ reviewing（审查，可选）→ summarizing（生成摘要）→ persisting（固化入库）；上下文接近上限时轮前先自动压缩。默认 3 次 AI 请求，开启审查阶段后为 4 次。
+    fork:
+      term: Fork（分支）
+      desc: 从某条消息「分叉」出一条新对话线，类似 Git 分支。可探索不同选择带来的不同剧情。
+    worldbook:
+      term: 世界书（World Book）
+      desc: 提前写好的设定词条集合（如货币规则、地理、魔法体系）。从资源库导入并应用到会话后，作为只读「种子」设定参与世界运转，与运行中学到的事实并存；不可在会话中修改。
+    characterCard:
+      term: 角色卡（Character Card）
+      desc: 提前预制的角色设定（姓名/性格/背景）。导入后作为只读基线，故事中的性格转变只会追加、不覆盖原设定。
+    resourceLibrary:
+      term: 资源库
+      desc: 存放导入的角色卡与世界书的全局仓库（设置 → 角色卡/世界书），可应用到故事会话。
+    # 09-14 只读语义 2.0 只更新了仓库侧术语表，
+    # 应用内缺收——记忆库「基线/演变」徽标是用户高频接触的新词
+    readonlyBaseline:
+      term: 只读基线
+      desc: 导入实体（世界书/角色卡）的基线属性行：永不改写、不可移除；主名亦属基线（AI 改名意图会转为别名，旧主名保留）。
+    evolvedRow:
+      term: 演变行
+      desc: 与基线同键并存的 AI 演变属性行：承载剧情变化；注入时与基线聚合为「原内容（初始）；新内容（演变）」。记忆库属性行带「基线/演变」行级徽标。
+    # 2026-09-16：故事模式新能力术语
+    storyVariant:
+      term: 变体（稿件版本）
+      desc: 同一轮正文的多个版本：故事/导演模式里重生成或编辑重发时旧稿自动存为变体，稿件卡下方的 ◀ n/m ▶ 切换器可查看、复制、设为当前或删除；切换变体后，后续剧情的上下文也随之改变。
+    acceptPartialAsFinal:
+      term: 以此收稿
+      desc: 故事生成失败时的收稿出口：把已写出的半截正文直接作为本轮定稿，照常走完摘要与入库。
+    continueWritingTerm:
+      term: 续写
+      desc: 故事生成失败后的继续出口：带着半截正文续跑生成，AI 接着已写内容往下写，不重复已有正文。
+    inSessionSearchTerm:
+      term: 会话内搜索
+      desc: 在单个会话内按关键词查消息（会话菜单或桌面 Ctrl/Cmd+F）：命中可上一处/下一处跳转并高亮闪示，命中过多时显示截断提示。
+    readingPositionTerm:
+      term: 阅读位置记忆
+      desc: 离开故事会话时自动记住滚动位置，再次进入时恢复到上次阅读处。
+    # 补录 v0.3 新术语（术语表此前停在 08-19）
+    narrativePacing:
+      term: 剧情节奏
+      desc: 导演模式的叙事推进档位（保守/平衡/激进三档）。控制每轮正文的景别——细描慢推还是快进大步；仅激进档要求正文写满写足，保守/平衡篇幅随叙事自定；全局设默认，会话内可临时换档。
+    toolPermissions:
+      term: 工具权限
+      desc: 导演模式下每个工具的独立开关，三态：允许（直接执行）/ 询问（执行前弹审批卡）/ 禁用（对导演不可见）。全局设默认，会话可覆盖；监督模式预设是一键组合。例外：「提交本轮（finish_round）」固定为允许不可禁用（禁用会令正文无法交付）。
+    roundBudget:
+      term: 轮预算
+      # 2026-09-06 对齐 budgetBody 四维口径（步数/时间/累计消耗/上下文余量）
+      desc: 导演每轮自主执行的上限，共四维：步数、时间、累计 token 消耗与上下文余量。任一到顶都先收尾再停（软着陆）；设为无上限时仍受其余维度保护。
+    scriptBoard:
+      term: 场记板
+      # 注入面同源只读视图
+      desc: 「AI 眼中的现在」只读面板（会话菜单进入）：关键实体/剧情主线/叙事时间/剧情锚，与每轮注入模型的 core blocks 同一份数据装配——所见即 AI 所见，可与幕后轨迹页互验。
+    pureReading:
+      term: 纯净阅读
+      desc: 导演会话顶栏的一键阅读模式：隐藏全部幕后过程与指令气泡，只留稿件流、幕间回顾卡与压缩摘要；偏好按会话记忆，切回正常模式即可恢复操作入口。
+    contextComposition:
+      term: 上下文构成
+      # 并入上下文圆环详情面板
+      desc: 上下文用量详情面板的构成区：把最近一次请求的输入按系统提示词/场记板/历史对话/本轮指令四段展示占比与估算 token（按装配期字符占比拆分，面板内有估算口径标注）。
+    contextUsage:
+      term: 上下文用量
+      # 补手动压缩与撤销入口（三模式同款）
+      # 上下文配置收敛：措辞统一「上下文压缩阈值」
+      desc: 输入区小圆环指示器：满刻度=上下文压缩阈值。点开详情面板可看窗口用量、缓存命中率、最近一轮 token 明细；对话足够长时可手动「立即压缩」，压缩摘要卡还可撤销最近一次压缩（对话/故事/导演三模式同款）。
+    foreshadowSweep:
+      term: 伏笔定期清点
+      desc: 导演模式的伏笔对账机制：每隔 N 轮（默认 8，可在导演设置调整）在轮尾提醒未兑现的伏笔清单；清点轮提交时若仍有未处理伏笔，终审提醒会拦下一次，划去已兑现或确认后才放行——防止已埋伏笔长期挂着无人问。
+    roundTimeline:
+      term: 轮时间线
+      desc: 导演每轮幕后工作的忠实回放：思考、播报、动作按真实发生顺序交错排列，随轮存档，重进会话可回看。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 帮助 → 附录 → 术语表。
+
+  # ── 7.3 功能索引表（2026-07-27 新增）──
+  featureIndexWiki:
+    title: 功能索引表
+  featureIndex:
+    intro: 按模块列出全部功能，每行包含功能名与简要说明。
+    # 主视觉
+    diagramTitle: 6 大功能模块
+    diagramSubtitle: 按版本归属
+    diagramSimpleTitle: 对话模式（v0.1）
+    simpleCount: 15+ 功能
+    simpleCountDesc: 会话/消息/压缩/分支
+    diagramIntermediateTitle: 故事模式（v0.2）
+    intermediateCount: 12+ 功能
+    intermediateCountDesc: 六步生成/记忆/事实层
+    diagramDirectorTitle: 导演模式（v0.3，实验）
+    directorCount: 30+ 项能力
+    directorCountDesc: 规则/监督/日志…
+    diagramSettingsTitle: 设置（v0.1+v0.2）
+    settingsCount: 10+ 功能
+    settingsCountDesc: 供应商/模型/模板/外观
+    diagramDataTitle: 数据维护（v0.1+v0.2）
+    dataCount: 8+ 功能
+    dataCountDesc: 导出/恢复/清除/诊断
+    diagramHelpTitle: 帮助（v0.2 起，随版本扩充）
+    helpCount: 47 个 Wiki 入口
+    helpCountDesc: 新手引导/使用手册
+    # 5 大模块
+    moduleSimpleTitle: 对话模式功能
+    moduleSimpleBody: v0.1 交付。会话管理（创建/删除/收藏/排序/搜索）、消息发送（流式/编辑/重发/引用）、分支 Fork、CompactionPoint 压缩、模型选择、会话设置、思考预算、模板系统、附件上传、工具调用展示、思考内容展示、上下文用量圆环与手动压缩（与故事/导演同款）、流式长会话渲染优化（冻结前缀分块渲染）、会话内搜索（菜单/Ctrl+F，非模态搜索条+命中定位闪示，分支一致过滤）。
+    moduleIntermediateTitle: 故事模式功能
+    moduleIntermediateBody: v0.2 交付。六步生成流程（压缩→提取→检索→生成→审查→摘要→入库）、经历记忆、事实记忆三表、累积压缩摘要与分段宏摘要、5W1E、叙事时间、记忆库、嵌入模型、FTS5+Vector 检索、分阶段模型、工具调用模式、失败处理 E010-E018/E104 和轮次产物持久化；上下文用量圆环与手动压缩、会话顶部世界状态条、压缩摘要卡「已归档第 X–Y 轮」标注与「撤销压缩」、找相似聚类与疑似重复归并预选、空态示例开场、思考区流式（自动展开/限高/复制）、继续生成接写合并（单气泡+续写徽标）、流式长会话渲染优化（冻结前缀分块渲染）；记忆检索可达性硬化（切词与主表子串兜底，库里可见即可查到）、记忆索引健康条（缺行/嵌入维度不匹配）与一键重建、经历归档标识与三档筛选、复制会话完整继承记忆与向量、压缩宏摘要可检索、世界书/角色卡只读语义（基线永不改写、演变并存，记忆库行级徽标，应用预览三段式）；故事稿件变体（重生成/编辑重发自动快照旧稿，稿件卡下方 ◀ n/m ▶ 切换器可查看/复制/设为当前/删除，切换后上下文随之改变）、中断正文保留（半截正文保留为未完成稿件卡，失败栏可「以此收稿」或「续写」不重复已有内容）、稿件导出（范围×内容导出 Markdown）、会话内搜索（菜单或 Ctrl/Cmd+F，命中跳转+高亮闪示）、阅读位置记忆（重进恢复上次阅读处）。
+    moduleDirectorTitle: 导演模式（实验）
+    moduleDirectorBody: v0.3 交付（实验性）。项目规则、主模型与分阶段模型、步数/时间预算与软着陆、监督模式（逐项审批写入）、请示导演（支持「一直等待」档与横幅倒计时）、台前/幕后过程分层（轮时间线）、幕间回顾卡（设定集变更直达记忆库）、事件日志与重启恢复、技能手记、子代理（同任务书二次派发直接回执上次结论）、记忆库实体归并、独立设置体系（三态工具权限）、剧情节奏三档、上下文用量指示与手动压缩、压缩摘要卡撤销压缩、伏笔定期清点（每 N 轮轮尾提醒+清点轮终审对账闸门）、角色卡/世界书种子应用入口、流式长会话渲染优化（稿件卡冻结前缀+合帧）、稿件变体（重生成不覆盖旧版，稿件卡右下 n/m 切换器）、重试等待倒计时状态条与会话打开加载骨架、事件日志滚动保留（默认最近 20 轮，超限自动清理）、记忆库来源/常驻徽标与词条级注入停用、角色卡/世界书应用前预览、推荐回复候选数量与单条字数入口、会话检索松紧度三档（保守/平衡/宽松，快照写会话列）、轮中预算进度标题（第 N/M 步·已用时长，预算将尽转警示色）、复制会话补齐轮产物与稿件变体、稿件导出（范围×内容四选 Markdown）、剧情锚编辑（Recap 卡入口，与 AI 同一数据源）、场记板视图（「AI 眼中的现在」，注入面同源）、失败轮未定稿徽标、伏笔清单展开全部、播报行弱化、同类动作聚合行（×N 展开）、纯净阅读模式（按会话记忆偏好）、系统裁决 3s 提示（溢出自愈/HITL 超时）、上下文构成分布（圆环详情面板四段估算）、单一「上下文压缩阈值」旋钮（百分比⇄token 双显示，token 直输反推；窗口上限高级折叠，0=自动+生效值披露）。
+    moduleSettingsTitle: 设置功能
+    moduleSettingsBody: v0.1-v0.3。API 供应商管理（7 个内置模板 + 自定义；高级参数 JSON 透传协议特有参数）、默认模型选择、分步骤模型（含「影响：XX」消费者标注）、提示词模板系统、故事模式 10 段提示词自定义、外观（三轴：主题结构×配色族×深浅，12-22 档字体）、语言与输入（界面语言：简体中文/English 切换即时生效）、高级设置（思考预算/超时/标题模型/请示等待含一直等待档）、显示偏好、自动压缩、全局生成默认（对话 maxTokens 留空由模型决定）、模型测试、导演模式开关、角色卡/世界书资源库入口、AI 建卡（与 agent 对话生成/编辑角色卡与世界书草稿，确认后落库，含覆盖保存护栏与退出拦截）、会话级设置面板（模型/温度/单轮步数+实时草稿预览+完成创建，落库后自动退出）、助手消息 Markdown 渲染与改稿过程线、首用模型选择真正生效、配置双模式（设置 → 通用「配置显示模式」开关：简单模式只显示常用配置，进阶=全部配置；全部设置页与会话内面板按级别过滤，被隐藏项已有值继续生效）。
+    moduleDataTitle: 数据维护功能
+    moduleDataBody: v0.1+v0.3。全量导出（多选 + API Key 开关，v3 备份含角色卡/世界书/自建模板/导演事件日志）、单会话导出（JSON/Markdown/TXT）、全量导入（追加/覆盖，完成报告含资产行数与 API Key 重填直达；覆盖导入前自动快照到 backups/ 保留最近 2 份、快照失败中止导入）、自动备份（24h 静默滚动保留 3 份，按前缀分域不动快照与外来文件）、数据恢复（孤立消息）、修复表结构（纯增量不丢数据）、清除所有数据、诊断页（失败历史 + 日志 + 调试开关 + Agent Loop/导演轮轨迹自检入口）、存储统计（含导演事件日志条数与体积，滚动保留默认最近 20 轮）。
+    moduleHelpTitle: 帮助功能
+    moduleHelpBody: v0.2 交付。新手引导（6 步首次启动 + 可重温）、Wiki 主目录（8 个章节分组、47 个入口，含搜索）：开始使用 / 对话模式用法 / 故事模式用法 / 故事模式原理 / 导演模式 / 配置与个性化 / 数据与维护 / 附录。
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 帮助 → 附录 → 功能索引表。
+
+  # ── 7.4 版本更新记录（2026-07-27 新增）──
+  versionHistoryWiki:
+    title: 版本更新记录
+  versionHistory:
+    intro: 当前应用版本 0.4.0，以导演模式为核心体验（实验性）；对话模式与故事模式（v0.2 交付，进入维护模式）继续可用；数据库 Schema 为 51，升级与修复采用保留数据的增量策略。
+    # 主视觉
+    diagramTitle: 3 个版本阶段
+    diagramSubtitle: 已交付 / 已交付 / 实验性
+    diagramV01Title: v0.1 对话模式
+    v01Status: 已交付
+    v01StatusDesc: 对话模式完整可用
+    v01Schema: schemaVersion 1-15
+    v01SchemaDesc: 15 次表结构演进
+    diagramV02Title: v0.2 故事模式
+    v02Status: 已交付
+    v02StatusDesc: 故事模式完整可用
+    v02Schema: schemaVersion 16-36
+    v02SchemaDesc: 增量演进
+    diagramV03Title: v0.3 导演模式
+    v03Status: 实验性
+    v03StatusDesc: 已实现，默认开启
+    v03Schema: schemaVersion 37-51
+    v03SchemaDesc: 含事件日志等增量（无 HUD）
+    # 版本详情
+    v01Title: v0.1 对话模式（已交付）
+    v01Body: 类 ChatBox 的自由对话工具。核心交付：流式对话、会话管理（创建/删除/收藏/排序/搜索）、CompactionPoint 压缩、Fork 分支、会话级参数覆盖、模板系统、思考预算、附件上传、数据导入导出。基础设施：SSE 流式解析、OpenAI 兼容 API 客户端、drift 数据库、flutter_secure_storage、主题与 UI 基础组件。
+    v02Title: v0.2 故事模式（已交付）
+    v02Body: 当前故事模式包含 extracting/retrieving/generating/reviewing?/summarizing/persisting 流程、经历记忆与 FTS5+Vector 检索、事实层实体/属性/审计三表、累积压缩摘要与分段宏摘要、5W1E、记忆库、诊断和增量表修复。当前有 7 个供应商模板，已实现 OpenAI-compatible、Anthropic、Gemini 三类协议；Responses 未实现。
+    v03Title: v0.3 导演模式（实验性）
+    v03Body: 导演模式（产品名「导演模式」，实验性）：AI 总编辑按项目规则在幕后自主检索记忆、维护设定并撰写正文，正文是唯一成果。已实现项目规则、主模型与分阶段模型、每轮步数/时间预算与软着陆、监督模式（逐项审批写入，支持「本会话总是允许」）、请示导演、台前/幕后过程分层（轮时间线+单一折叠组）、幕间回顾卡、事件日志与重启恢复、技能手记、子代理、记忆库实体归并（重复实体 AI 合并）、独立设置体系（全局设置页+会话面板、三态工具权限）、剧情节奏三档、上下文用量指示（环形+手动压缩）。复用故事模式记忆基础，无独立 HUD；旧 HUD 蓝图已废弃。另交付世界书/角色卡资源库（SillyTavern 兼容导入）。后续持续补全导演体验：稿件变体、稿件导出、剧情锚编辑、场记板视图、纯净阅读与轮中预算进度；上下文配置收敛为单一「上下文压缩阈值」旋钮（百分比⇄token 双显示）取代三比例暴露面，窗口上限降级高级覆盖；会话配置全量快照化（重置=新建=复制全局当前值，存量会话打开时自动物化）。
+    # 重要节点
+    milestonesTitle: 重要节点
+    milestones:
+      - 2026-06-12 项目概要设计初稿
+      - 2026-06-29 v0.1 全面审查（59 个问题）
+      - 2026-06-30 中级模式设计文档评审（13 阻断）
+      - 2026-07-01 sqlite-vec 评估后废弃，改纯 Dart 暴力检索
+      - 2026-07-12 v0.2 代码打磨（646/646 测试通过）
+      - 2026-07-20 v0.2 全面审查（110+ 问题）
+      - 2026-07-24 修复表结构功能 + onUpgrade 增量迁移
+      - 2026-07-27 Wiki 帮助系统上线（7 章节）
+      - 2026-08-13 世界书/角色卡资源库落地
+      - 2026-08-14 事实记忆强制注入开关（v0.2.3）
+      - 2026-08-15 导演模式最小可用版上线（事件日志）
+      - 2026-08-16/17 导演模式体验重构与补丁
+      - 2026-08-18 导演/故事模式解耦重构完成
+      - 2026-08-24 记忆库实体归并上线（重复实体可整理，合并前有相似名提醒）
+      - 2026-08-27 导演模式设置体系上线（独立配置段、三态工具权限、全局设置页与会话面板）
+      - 2026-08-31 剧情节奏三档与正文交付契约（参数流直播、幕后过程单一折叠组、滚动导航条）
+      - 2026-09-01 上下文用量指示上线（环形指示器、详情面板、手动压缩）
+      - 2026-09-02 体验修复与改进：故事上下文圆环/手动压缩、种子入口对齐、请示等待可设为一直等待、接写合并、归档让名、错误恢复链修复、观测闭环
+      - 2026-09-03 生成中插话功能移除（插话入口与说明页删除，纠偏改走编辑重生成）与跨轮缓存稳定（生成中不再每轮重算全部历史）
+      - 2026-09-03/04 内核整改与全量审查修复：网络错误语义码与重试、事件日志补账与日志即真相源、预算软着陆、注入面加固、工具审批增强（幂等回执/本会话总是允许/输出校验）、观测聚合卡、故事路超限自愈；修复 45+ 确定性缺陷（协议/数据安全/流收口/导演内核）；「提交本轮」权限锁定为允许、模板库下架失效的「折叠模板」类型、清理幽灵错误码、自动备份说明
+      - 2026-09-04 流式性能与数据安全网：流式渲染专项（冻结前缀分块渲染+32ms 合帧+滚动驱动，chat -84%/导演 -87%）、对话模式上下文用量圆环（三模式同款）、覆盖导入前置自动快照（fail-closed+分域滚动保留）、导演同任务书防重、压缩摘要卡撤销压缩（故事/导演共用）、伏笔定期清点（每 N 轮轮尾提醒+终审对账闸门）
+      - 2026-09-06 v0.3.0 版本切换（导演模式为核心体验）与种子可视化：记忆库来源/常驻徽标、词条级注入停用（schema 48）、角色卡/世界书应用前预览、会话内搜索、事件日志滚动保留
+      - 2026-09-06 设置项补全与清理：供应商高级参数 JSON 文本域（providerOptions，重置随模板快照清空）、导演推荐回复候选数量/单条字数入口、会话检索松紧度三档、死键清理 111 个、模型实测不再透传 thinking
+      - 2026-09-08 导演模式体验补全：稿件变体与版本面板、重试等待状态条、会话打开骨架、稿件导出、剧情锚编辑、场记板、纯净阅读、轮中预算进度、上下文构成分布
+      - 2026-09-09 记忆检索硬化（切词/主表子串兜底/索引健康自愈）与会话标题模型三级优先级
+      - 2026-09-09/10 记忆补齐（schema 50）：健康条双口径与一键重建、复制会话继承记忆与向量、压缩宏摘要可检索
+      - 2026-09-10 流式显示优化（三模式）：贴底跟随状态机（上划即停、回底自动恢复）、平滑揭示配速、新段落淡入、惰性跟随与底部缓冲
+      - 2026-09-12 AI 建卡产品级完善：会话级设置（模型/温度/步数+实时草稿预览）、Markdown 与改稿过程线、完成创建自动退出闭环
+      - 2026-09-13 导演上下文配置收敛（单一「上下文压缩阈值」旋钮+引擎定死）与导演会话配置全量快照化（重置=写全局快照、「跟随全局」值态清零）、暂存变更补救通道、故事语义检索召回放宽（跨轮弱相关记忆可召回）、无工具请求跨轮缓存断点
+      - 2026-09-14 世界书/角色卡只读语义 2.0（属性级基线+演变并存）
+      - 2026-09-15 稳定性修复批（schema 51）：数组格式世界书 AI 编辑保条目、手动记忆防重生成吞删、FTS 形状漂移自愈（旧库跳跃升级可自动修复）、思考预算出网钳制（Anthropic/Gemini）、覆盖导入原子化、对话模式草稿预检失败保输入、导演正文直播 32ms 合帧
+      - 2026-09-16 故事模式稿件能力：故事稿件变体（旧稿快照+稿件卡 ◀ n/m ▶ 切换器）、中断正文保留（未完成稿件卡+以此收稿+续写）、故事稿件导出（范围×内容 Markdown）、会话内搜索与阅读位置记忆；同日帮助文档长墙拆分（功能索引与记忆库操作说明改为现状口径，历史变更叙述并入本页）
+      - 2026-09-19 性能与工程架构优化波次：全仓静态诊断清零（1407→0）、流式气泡 RepaintBoundary 绘制隔离、设置订阅 .select 切片化、三大巨型组件拆解（气泡/事实记忆/对话页主文件均 <600 行）、图标按钮补齐 tooltip、端到端冒烟集成测试（Windows 实测）
+      - 2026-09-23 新主题结构「棱角」一期（v0.4.0 WS3-A）：第三套结构（Neubrutalism 翻译：边框三档描边即层级+按压按进纸里签名交互+墨面反白夜间档）接入三轴体系，批A 表面（会话列表/首页入口卡/设置卡）已接通，classic/琉璃零变化
+      - 2026-09-23 外观组件接口与完整结构扩展：业务页面经组件职责接口取当前结构实现；原「棱角」显示名改为「印刻」（brutal），新增「漫游」（wonder），四结构×两配色×日夜自由组合，经典与琉璃外观基线保持不变
+      - 2026-09-20 外观体系 v2 上线（v0.4.0 WS1）：主题（界面长什么样）与配色（用什么配色）解耦为三轴——结构（经典/琉璃）×配色族（经典/波尔多）×日夜，任意组合可用（mod 式：新增主题/配色=新目录+一行注册）；夜航收编为全局夜间基础（故事/导演会话完全跟随全局明暗）；阅读/mono 字体改为离线打包子集（中文衬线不再依赖网络）；全部表面 token 化，玻璃表面带性能红线守卫（流式区零模糊）
+      - 2026-09-20 配置双模式全量上线（v0.4.0 WS2）：设置 → 通用新增「配置显示模式」开关（简单/进阶，默认简单）；全部设置页与会话内面板（共 15 面）按级别完成接线，简单模式保留供应商/选模型/模板资源/剧情节奏等白话项与思考预算成本旋钮，进阶=现状全量；过滤只动展示层，被隐藏项已有值继续生效；白话化「显示首字延迟→显示响应时间」「重建向量索引→重建记忆索引」
+      - 2026-09-16 历史遗留拍板批落地（33 项决策、12 个实施批）：对话模式四件（会话设置「更新标题」按钮/撤销压缩显性化/↑键历史输入召回/压缩停止+附件提示）、导演 persist 续跑实修+子代理 token 预算+监督开关三态判据+重生成准备中遮罩、记忆库归档通路（实体归档直达+经历归档/恢复）与别名满限披露、资源内容查看（人类可读排版）与 AI 编辑预填容错、备份一键恢复入口+导出「包含世界资产」勾选+诊断页门禁（版本行连点 7 次）、network.* 超时全面生效+拉模型保手工标注+三模式会话 LRU 淘汰、错误卡 lmerr 结构化存储（JSON 前缀+存量兼容）
+      - 2026-09-21/22 外观与可达性打磨（T05-T11）：统一浮层入口 showLmDialog/showLmSheet（74 处 dialog+30 处 sheet 迁移，经典逐参等值）、辉光按配色族派生+同屏真模糊≤2 运行时红线、玻璃交互五态与动效单源 LmMotion（减弱动态集中降级）、语义补完（纯图标可读名）与键盘焦点环、大屏口径（断点单源 600/1280/1920+版心收敛+叙事阅读列限宽 720）、琉璃滑动返回叠印与黑帧修复+首屏/逐路由自承载场地、白玻璃台阶双轴（方向随底面亮度派生）与四类按钮真扁平、Android 窗口/启动图底色对齐默认外观、桌面键盘交互层单源（快捷键注册表/焦点遍历/浮层 Esc 归表）、ClassicStructure 明暗骨架去重（699→442 行）、琉璃渲染管线与长会话列表滚动性能优化
+      - 2026-09-22 第十四轮全项目审查修复批（十批）：故事/导演编辑重发变体接线（旧版快照可达）、导演模式接通全局字号、压缩收尾窗迟到取消竞态修复、输入历史导航门修正、重生成准备中窗口发送守卫、收稿按钮可用性同源、简单模式嵌入横幅死路豁免、琉璃 AppBar/场地漏网收口、供应商页/数据维护/记忆文案小件七组、帮助文档面五文档核对（Wiki 外观章三轴重写+夜航残留清理+里程碑补拍板批与 T05-T11 节点+配置显示模式路径标注+README 双语能力行+视觉词典字体登记）
+      - 2026-09-28 界面语言正式支持英文（en-US）：设置 → 语言与输入可选简体中文/English，切换即时生效并持久化；全部用户可见文案（含帮助 Wiki 与新手引导）随语言切换；跟随系统暂未开放
+
+    # 入口
+    entryTitle: 怎么进入
+    entryBody: 帮助 → 附录 → 版本更新记录。
+
+  # ── 导演模式章节（2026-08-19 新增，v0.3 实验性）──
+  # 读者是非技术用户：全部用剧场/编辑部比喻，不出现内部代号
+  directorModeWiki:
+    title: 导演模式是什么
+  directorMode:
+    intro: 导演模式（实验性）是第三种玩法：你写「项目规则」，AI 总编辑在幕后自主检索记忆、维护设定、执笔正文——你看到的成品只有小说正文，所有准备工作都收在幕后。
+    # 主视觉：一轮循环
+    diagramTitle: 一轮导演工作的循环
+    diagramSubtitle: 你推进 → 幕后工作 → 正文 → 世界沉淀
+    loopYouLabel: 你推进
+    loopYouDesc: 发出指令或开场句
+    loopBackstageLabel: 总编辑幕后工作
+    loopBackstageDesc: 翻阅前情、查证设定、记场记…
+    loopOutputLabel: 正文成果
+    loopOutputDesc: 唯一的台前内容
+    loopWorldLabel: 世界沉淀
+    loopWorldDesc: 事实与经历记入记忆库
+    # 与另两种模式对比
+    vsTitle: 和另外两种模式怎么选
+    vsChatTitle: 对话模式 = 你和 AI 聊
+    vsChatBody: 一问一答，适合任务与日常对话；不沉淀世界记忆。
+    vsStoryTitle: 故事模式 = 你和 AI 演对手戏
+    vsStoryBody: 你写一句、AI 接一段，记忆自动沉淀；剧情由你亲自推进。
+    vsDirectorTitle: 导演模式 = AI 执笔，你当导演
+    vsDirectorBody: 规则你定、方向你纠、写入你把关；正文由 AI 总编辑完成。
+    # 实验性说明
+    experimentTitle: 实验性说明
+    experimentBody: 导演模式仍在打磨中，默认开启。首页有「新导演」入口；到「设置 → 导演模式设置」可随时关闭开关，已有的导演会话不受影响。
+
+  directorFirstWiki:
+    title: 创建导演会话
+  directorFirst:
+    intro: 三步开工：确认导演模式开启（默认开启）→ 新建 → 写规则开工。
+    # 主视觉
+    flowTitle: 创建流程
+    flow1Label: 确认导演模式开启
+    flow1Desc: 默认开启；若已关闭，到 设置 → 导演模式设置 打开
+    flow2Label: 新建导演会话
+    flow2Desc: 首页点「新导演」卡片
+    flow3Label: 写项目规则
+    flow3Desc: 会话右上角设置 → 项目规则（可从模板直选）
+    rulesTitle: 项目规则写什么
+    rulesBody: 常驻背景规则：世界观、人设、文风与叙事守则。整场会话生效，AI 不会改写它。例如「低魔武侠世界，文风冷峻克制；主角是失业镖师；每幕结尾留一个未兑现的伏笔」。
+    startTitle: 开场
+    startBody: 发送第一句话即可，比如「镖局倒了，我在城门洞里数最后几枚铜钱」。导演会自行构思并交出正文；等待首字时会有「导演正在构思…」的心跳提示。
+
+  directorWatchWiki:
+    title: 监督模式：请示与审批
+  directorWatch:
+    intro: 监督模式让你逐项把关「剧情正史」的每一次写入：导演要改设定、记大事，先弹卡问你。
+    # 主视觉
+    diagramTitle: 一次写入的审批流程
+    diagramRequestLabel: 导演要写入
+    diagramRequestDesc: 如「修订设定集」「记入大事记」
+    diagramCardLabel: 确认卡弹出
+    diagramCardDesc: 显示要写入的内容，等你选
+    diagramAllowLabel: 允许
+    diagramAllowDesc: 写入生效，继续工作
+    diagramDenyLabel: 拒绝
+    diagramDenyDesc: 跳过这次写入，继续工作
+    askTitle: 请示导演
+    askBody: 遇到需要你拍板的岔路（比如「反派现在认输还是逃走？」），导演会主动弹「导演决策」卡：你可以输入回答，也可以「跳过」让它自行决定。卡片头部有倒计时（每分钟跳动）：超时未回应它将自行决定；在设置里把「请示等待超时」调到 0（一直等待），卡片会一直等你，不会自行裁决。审批卡同理显示倒计时，但超时按拒绝处理（安全默认，不可关闭）。
+    toggleTitle: 开关与代价
+    toggleBody: 监督模式在导演会话设置里切换。开着：每次写入暂停等你确认，把关最严，但生成会频繁停下；关着：写入自动执行，正文一气呵成。想逐项把关正史改动时再开。审批卡上的「本会话总是允许」会记住你对某个工具的放行，本次会话内同工具不再逐次弹卡；想收回去会话设置的「监督与工具」区点「清除本会话放行」（关会话也会自动失效）。
+
+  directorProcessWiki:
+    title: 看懂过程：台前与幕后
+  directorProcess:
+    intro: 导演会话默认只显示正文；总编辑的准备工作收在「幕后」，想看随时展开。
+    # 主视觉
+    diagramTitle: 台前与幕后
+    stageLabel: 台前
+    stageDesc: 正文 + 一行过程（「正在翻阅前情… · 第 3 步」）
+    backstageLabel: 幕后
+    backstageDesc: 点幕后汇总行（或右侧箭头）展开逐步骤的工作卡
+    verbsTitle: 幕后工作卡上的「台词」
+    verbsBody: 工作卡用舞台动词展示每一步在干什么：翻阅前情（找旧事）、回读原文（重看原文）、查证设定（核对事实）、重读主线（回顾摘要）、修订设定集（改设定）、归并设定（合并重复条目）、记入大事记（记事件）、记场记（记当前位置）、翻阅手记（查写作方法）、派出子代理（分派小任务）、请示导演（找你拍板）、落幕（交稿）。
+    costTitle: 成本提示
+    costBody: 输入框旁的小圆环显示当前上下文离自动压缩还有多远，点开可看窗口用量、缓存命中率和最近一轮请求消耗，还能手动立即压缩——前缀稳定时输入费用约打一折。
+
+  directorLogWiki:
+    title: 事件日志与恢复
+  directorLog:
+    intro: 导演的每一步都会记进「事件日志」——即使应用闪退或断电，重开后也能接着写，进度不丢。
+    # 主视觉
+    diagramTitle: 恢复是怎么发生的
+    diagramWorkLabel: 执行中
+    diagramWorkDesc: 每一步实时记入日志
+    diagramCrashLabel: 意外退出
+    diagramCrashDesc: 崩溃、断电或被系统杀掉
+    diagramRecoverLabel: 重开后恢复
+    diagramRecoverDesc: 按日志还原进度，接着写
+    recapTitle: 幕间回顾卡
+    # 已给最新幕回顾卡加编辑入口，删「无需编辑」劝退表述
+    recapBody: 每隔一段剧情会出现一行「书脊」样式的回顾卡：第几幕、当前弧线、待兑现与已兑现的伏笔。它是剧情的里程碑，用来快速回望故事走到哪了；最新一幕的回顾卡展开后有「编辑」入口（弧线/叙事时间/伏笔全量清单），与 AI 记场记同一数据源，历史幕只读。另外每隔几轮（默认 8 轮，导演设置可调）会有一次「伏笔清点」：轮尾提醒未兑现清单，清点轮提交时终审提醒把一次关——划去已兑现或确认后才放行。
+
+  directorFailureWiki:
+    title: 失败与重试
+  directorFailure:
+    intro: 导演一轮要走很多步，任何一步都可能失败。失败不会破坏数据——记忆落库是整轮成功的奖励，中途失败什么都不会写坏。
+    # 主视觉
+    diagramTitle: 失败时的样子
+    diagramFailLabel: 失败步骤卡
+    # f8c9d7c9 后失败卡分红/黄两态
+    diagramFailDesc: 红/黄两态——中断本轮的失败为红色，已被自动重试救回的失败为黄色；可一键复制信息用于反馈
+    diagramRetryLabel: 失败栏重试
+    diagramRetryDesc: 从失败处重跑这一轮
+    retryTitle: 重试会发生什么
+    retryBody: 小故障会自动重试几次；仍失败则停下等你处理，点重试会整轮重跑导演工作。已完成的轮次与记忆不受影响。常见失败原因是网络超时、模型额度或配置问题——先用会话设置检查模型配置，再看诊断页的失败历史。
+
+  directorSettingsWiki:
+    title: 导演会话设置
+  directorSettings:
+    # 补快照语义半句
+    # 分区数与顺序对齐 704f0ba3 调序后的实际（8 区）
+    intro: 导演模式的设置分两层——全局「导演模式设置」单页（设置 → 导演模式设置，含模式开关）与会话面板（会话页右上角，8 个折叠区段：记忆管理/项目规则/模型与生成/剧情节奏/监督与工具/预算/上下文与压缩/角色卡/世界书；项目规则提至第 2 位、角色卡/世界书居末）。会话内未调整的项使用全局值；调整后点重置则把该字段写为此刻全局值的快照（此后互不影响）。
+    settingsTitle: 关键设置
+    modelTitle: 主模型
+    modelBody: 导演自主执行用的模型；未单独配置时使用全局「生成」模型。想让导演用更强的模型、日常对话用便宜的模型时，在这里单独指定。向量化模型单独配置（检索与记忆区段）。
+    rulesTitle: 项目规则
+    rulesBody: 常驻背景规则，整场会话生效；支持从模板库直选一条快速开始。
+    pacingTitle: 剧情节奏
+    pacingBody: 三档（保守/平衡/激进）控制叙事的景别——保守偏细描慢推、激进偏快进大步推进。全局设默认档，会话内可临时换档；仅激进档要求正文写满写足，保守/平衡篇幅随叙事节奏自定（2026-09-08 调整）。
+    budgetTitle: 预算（步数与时间）
+    budgetBody: 每轮允许导演自主执行的最大步数与时间。任一预算到顶（步数/时间/累计消耗/上下文余量）都不会硬停——会先注入收尾指令，让导演用现有素材落幕后才停；步数也可选「无上限」（其余保护照常）。其中「累计消耗」与「上下文余量」是引擎内置保护（默认窗口 60% 成本线与轮内 85% 保命线），不占设置面。
+    watchTitle: 监督与工具权限
+    watchBody: 监督模式开启后每次写入都弹确认卡；每个工具可独立设「允许/询问/禁用」三态（禁用的工具对导演不可见）。详见「监督模式：请示与审批」。
+    contextTitle: 上下文与压缩
+    # 上下文配置收敛：单一「上下文压缩阈值」旋钮 + 三线关系披露
+    contextBody: 输入区的小圆环显示上下文用量（满刻度=上下文压缩阈值），点开详情面板可看窗口用量/缓存命中率/最近一轮明细，对话足够长时可「立即压缩」；压缩摘要卡展开后可「撤销压缩」恢复归档对话。上下文只有一个旋钮「上下文压缩阈值」：历史占用到达生效窗口（模型窗口与窗口上限取小）的这一比例时，下一轮开始前自动压缩；百分比旁显生效 token 值，也可直接输 token 反推百分比。另有两道引擎内置保护不在设置面：轮内上下文到 85% 保命线强制收尾、单轮累计消耗按成本口径软着陆（与装了多少是两套账）。窗口上限在「高级：窗口上限」折叠里——0=自动用模型窗口，模型登记不准或要防 TPM 限流时才需要手动声明。
+    suggestReplyTitle: 推荐回复
+    suggestReplyBody: 输入框「推荐」按钮用的模型与参数都在「模型与生成」区段的推荐回复组：推荐模型（留空用导演主模型）、提示词、温度、生成上限、候选数量（一次生成几条）与单条最大字数（提示词层面控制单条长度）。
+    memoryTitle: 记忆库入口
+    memoryBody: 设置里也有「记忆库」区段，可浏览、搜索、手动增删改本会话的记忆——与故事模式共用同一记忆库。会话面板「记忆管理」区还有「检索松紧度」三档（保守/平衡/宽松），控制导演翻旧账时捞多少、挑多严；选中即把该档的具体数值写进本会话，之后互不影响。
+
+  # ── 资源库条目（2026-08-19 新增，v0.3）──
+  resourceLibraryWiki:
+    title: 角色卡与世界书（资源库）
+  resourceLibrary:
+    intro: 角色卡和世界书是世界的「种子」：把你在别处收藏的设定导入 LMStory，应用到会话即可参与世界运转——但它们不是开始体验的门票，你也可以什么都不带，从零开始。
+    # 主视觉
+    diagramTitle: 从导入到生长
+    seed1Label: 导入
+    seed1Desc: 设置 → 角色卡/世界书
+    seed2Label: 应用
+    seed2Desc: 会话设置 → 角色卡/世界书区段（故事/导演同款）
+    seed3Label: 只读种子生效
+    seed3Desc: 设定作为基线参与世界运转
+    seed4Label: 与新事实共同生长
+    seed4Desc: 世界学到的新事实照常积累
+    formatsTitle: 支持的格式
+    # 补内嵌 character_book 形态（09-15 批六刚修过
+    # 该形态的 AI 编辑清空 bug，说明真实在用户手中流转）
+    formatsBody: 角色卡：SillyTavern（酒馆）兼容的 PNG 卡（V1/V2/V3）与纯 JSON 卡；世界书：顶层带条目（entries）的 JSON 文件（角色卡内嵌的 character_book 同样支持）。手机上还可以用系统「打开方式/分享」直接导入。
+    readonlyTitle: 只读是什么意思
+    readonlyBody: 应用后的设定作为只读基线：不可改写、不可删除；AI 在剧情中的变化会以独立「演变」条目并存，你可以在记忆库里区分基线与演变。可随时取消应用整体移除。
+    dupTitle: 同名提示
+    dupBody: 会话里已有同名角色时，应用会被拒绝并提示——避免重复或覆盖；换个名字或先整理现有内容即可。世界书词条同名时会被静默跳过（应用计数不含被跳过的词条），如需覆盖请先整理同名词条。
+    # 2026-09-16：AI 建卡此前仅功能索引提及，资源库 Wiki 页缺收
+    aiTitle: AI 建卡
+    aiBody: 手里没有现成的卡或书也能开始：在资源库页（设置 → 角色卡/世界书）进入 AI 建卡，用对话描述想要的角色或世界，AI 起草并按你的反馈修改；也可以对既有资源发起 AI 编辑。草稿在预览面板确认后保存落库（另存为新资源或覆盖原资源，覆盖前有确认护栏）。应用到会话的是应用当时的快照，资源库后续修改不影响已应用的会话。草稿未保存就退出会被拦截确认，防止误触丢失。
+
+resourceAi:
+  # WA13U-3：预填构建失败错误态
+  bootFailed: 初始化失败：资源数据无法解析
+  # 对话页（resource_ai，2026-09-11）
+  editCardTitle: AI 编辑角色卡
+  editBookTitle: AI 编辑世界书
+  modelGateTitle: 选择建卡模型
+  modelGateBody: 首次使用从全局默认对话模型快照；也可以现在换一个——只影响 AI 建卡，不影响其他模式。
+  modelGateStart: 开始
+  inputHint: 描述你想要的角色或世界……
+  send: 发送
+  stop: 停止
+  attach: 附加参考材料
+  attachTooLarge: 文件超过 10MB 上限，未附加
+  attachFailed: 附加失败：$error
+  attached: 已附加 "$name"
+  generatingHint: 正在与模型协作……
+  retryLast: 重试上一条
+  dismissError: 忽略
+  exitConfirmTitle: 退出将丢弃本次对话
+  exitConfirmBody: 草稿尚未保存，退出后本次对话与草稿内容将丢失。
+  exitAnyway: 仍要退出
+  previewTitle: 草稿预览
+  previewCardSection: 角色卡字段
+  previewBookSection: 世界书词条
+  previewEmpty: 草稿还是空的——回到对话让 AI 开始动笔
+  entryConstant: 常驻
+  entryTriggered: 触发
+  entryDisabled: 已停用
+  saveAsNew: 保存为新资源
+  saveOverwrite: 覆盖保存
+  overwriteConfirmTitle: 覆盖保存确认
+  overwriteConfirmBody: "将覆盖原目标 \"$name\"：你确认的草稿内容会写回原资源（未触达的未知字段保留），此操作立即生效。"
+  saveFailed: 保存失败：$error
+  savedToast: 已保存到资源库
+  # 会话设置与完成流
+  settingsTitle: 会话设置
+  sectionModel: 模型
+  sectionGeneration: 生成参数
+  sectionDraft: 草稿预览
+  modelSelect: 更换模型
+  modelNotSelected: 未选择模型
+  temperatureLabel: 温度
+  temperatureReset: 重置为全局默认
+  maxStepsLabel: 单轮最大步数
+  maxStepsReset: 重置为默认
+  fieldName: 角色名
+  fieldDescription: 描述
+  fieldPersonality: 性格
+  fieldScenario: 场景
+  fieldFirstMes: 开场白
+  fieldMesExample: 对话示例
+  fieldCreatorNotes: 创作者备注
+  fieldTags: 标签
+  bookNameLabel: 世界书名称
+  bookDescriptionLabel: 简介
+  changeField: 更新了$label
+  changeTags: 更新了标签
+  changeBookMeta: 更新了世界书信息
+  changeEntryAdded: 添加词条「$title」
+  changeEntryUpdated: 更新词条「$title」
+  changeEntryRemoved: 移除词条「$title」
+  changeFinalized: 草稿已定稿
+  finishCreate: 完成创建
+  finishDisabledHint: 草稿还没有内容，回到对话让 AI 开始动笔
+  # 失败轮草稿已有内容时的分支提示（canSave 已放行 fatal，
+  # 此键仅用于 fatal 且草稿为空的极端形态与未来扩展）
+  finishFatalHint: 本轮生成失败，可重试；草稿已有内容时也可直接完成创建
+  finishCreateBody: 将保存「$name」到资源库并结束本次写卡。
+  finishEditBody: 结束本次写卡前，选择草稿的保存方式。
+  finishSaveAsNew: 另存为新资源
+  finishUpdate: 完成并更新原资源
+  finishConfirm: 完成创建
+  draftFinalizedBanner: 草稿已定稿
+  errorModelUnavailable: 模型不可用（$detail）：请检查 API 预设与密钥后重试。
+  errorTurnIncomplete: 本轮未完成（$detail），可重发。
+  unnamedCard: 未命名角色卡
+  unnamedBook: 未命名世界书
+
+# 外观轴名称（theme_catalog 登记项的 nameKey，动态键解析消费）
+appearance:
+  structures:
+    classic: 经典
+    glass: 琉璃
+    brutal: 印刻
+    wonder: 漫游
+  palettes:
+    classic: 经典
+    bordeaux: 波尔多
+

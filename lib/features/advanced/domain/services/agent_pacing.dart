@@ -1,0 +1,86 @@
+import 'package:lmstory/core/agent/agent_message.dart';
+import 'package:lmstory/features/advanced/domain/entities/narrative_pacing.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_system_prompt.dart';
+
+/// 剧情节奏轮指令（surface 尾部每轮注入；设计文档 §5.4）。
+///
+/// 措辞硬约束（设计文档 §3，修改前必读）：
+/// 1. 零题材名词——尾部指令每轮重复注入，具体题材词（枪/酒馆等）会反复
+///    污染当轮生成（示例泄漏/priming，§3-③）；
+/// 2. 零否定祈使句式——粉红大象效应（§3-②），规则正向化；
+/// 3. 每档给正向的、动作化的收束动作——对冲训练分布的叙事惯性（§3-④）。
+/// agent_pacing_test 对 1/2 有断言，违例会测试失败。
+///
+/// （尾部指令保缓存）：公共头追加 [kPriorityObedienceClause]——位置无关
+/// 的服从强化，补偿协议实现把 system 上提到顶部后的位置损失（轮尾内容
+///  起走 user 通道不上提，此句为双保险；见设计文档 §5.5 协议差异声明）。
+///
+/// 篇幅策略：仅激进档要求正文写满
+/// 写足；保守/平衡档篇幅随叙事节奏自定，只要求把要表达的内容交代完整。
+/// 两式头部均守上述硬约束（零题材名词、零否定祈使句式）。
+const String _kPacingHeaderAggressive = '【节奏指令·本轮】正文照常写满写足；'
+    '本指令只规定叙事的景别——覆盖多大一段故事时间，以及可以替主角做出哪些'
+    '决定。$kPriorityObedienceClause';
+
+const String _kPacingHeaderAdaptive = '【节奏指令·本轮】正文以把当轮要表达的内容'
+    '交代完整为准，篇幅随叙事节奏自然伸缩；本指令只规定叙事的景别——覆盖多大'
+    '一段故事时间，以及可以替主角做出哪些决定。$kPriorityObedienceClause';
+
+const String _kPacingConservative = '主角的行动只执行用户输入中已声明的部分，'
+    '把它写实写透；世界的反应可以有力、可以不利，但只作为对已发生之事的回应。'
+    '正文以未决的事态收束，把下一步的选择交还给主角。'
+    '没有选择余地的衔接动作可以代写，一笔带过。';
+
+const String _kPacingBalanced = '用户输入中强暗示的直接延续，可以替主角执行完毕'
+    '并交代结果。判据：用户读完自己写下的输入后会自然预期的下一步，在许可范围'
+    '内；需要权衡取舍后才能定的新选择，留给用户。世界侧的发展保持在当前惯性'
+    '之内，承接已有事件线自然延续。';
+
+const String _kPacingAggressive = '可以引入用户输入之外的进展：新事件、意外、'
+    '转折，世界的主动性放开；一切进展必须承接已确立的事实、人设与因果。';
+
+/// 三档指令全文（档位头部 + 档位细则；抽成函数便于测试与复用）。
+/// 头部按篇幅策略分两式：激进=写满写足，保守/平衡=篇幅自定。
+String pacingDirectiveFor(NarrativePacing tier) => switch (tier) {
+      NarrativePacing.conservative =>
+        '$_kPacingHeaderAdaptive$_kPacingConservative',
+      NarrativePacing.balanced => '$_kPacingHeaderAdaptive$_kPacingBalanced',
+      NarrativePacing.aggressive =>
+        '$_kPacingHeaderAggressive$_kPacingAggressive',
+    };
+
+/// 轮 surface 尾部指令消息（设计文档 §5.5 + 长会话退化治理）：
+/// turn1 能力提示在前，工作契约/文风铁律每轮注入，节奏指令收尾
+/// （recency 最优位）。节奏指令每轮注入且只放尾部——档位可中途换，
+/// 冻结前缀必须保持档位无关以保前缀缓存（设计文档 §4.2/§6.1）。
+///
+///  角色约定：全部为 role=user 合成消息，内容以 workbench-reminder
+/// 标记包裹（见 [wrapWorkbenchReminder]）——绕开 Anthropic 适配器把
+/// system 上提到顶层字段架空 recency 位的问题（R6），适配器不改。
+///
+/// [foreshadowSweepLine] = 伏笔定期清点提醒（清点轮由 runner 用
+/// foreshadowSweepReminderText 预构建；null = 非清点轮或无未兑现伏笔，
+/// 整条省略）。
+List<AgentMessage> surfaceTailMessages({
+  required NarrativePacing pacing,
+  required bool isFirstTurn,
+  required Set<String> toolNames,
+  bool importedDataPresent = false,
+  String? foreshadowSweepLine,
+}) {
+  final hint = firstTurnCapabilityHint(toolNames);
+  return [
+    //  deny 感知：spawn 未注册时能力提示整条省略（不空许诺）
+    if (isFirstTurn && hint != null)
+      AgentMessage.user(wrapWorkbenchReminder(hint)),
+    AgentMessage.user(wrapWorkbenchReminder(workbenchContractText(toolNames))),
+    // 伏笔清点提醒（清点轮才有；紧随工作契约，任务簿记类相邻）
+    if (foreshadowSweepLine != null)
+      AgentMessage.user(wrapWorkbenchReminder(foreshadowSweepLine)),
+    AgentMessage.user(wrapWorkbenchReminder(kStyleIronRuleLine)),
+    AgentMessage.user(wrapWorkbenchReminder(pacingDirectiveFor(pacing))),
+    // 世界状态含导入资料时的尾部边界重申（recency 位补偿）
+    if (importedDataPresent)
+      AgentMessage.user(wrapWorkbenchReminder(kDataBoundaryReassert)),
+  ];
+}

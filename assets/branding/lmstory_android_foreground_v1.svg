@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LMStory Android adaptive icon foreground v1</title>
+  <desc id="desc">The LMStory neural network mark without a background, scaled for Android adaptive icon safe zones.</desc>
+  <g transform="translate(46.08 46.08) scale(0.82)">
+    <path d="M186 182 L256 254 L326 182"
+          fill="none"
+          stroke="#1B2220"
+          stroke-width="16"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+    <circle cx="186" cy="182" r="18" fill="#1B2220"/>
+    <circle cx="326" cy="182" r="18" fill="#1B2220"/>
+    <circle cx="256" cy="254" r="38" fill="#E3774E"/>
+    <path d="M256 288 V326 Q256 334 264 334 H376 Q384 334 384 326 V140 Q384 132 376 132 H136 Q128 132 128 140 V380 Q128 388 136 388 H404"
+          fill="none"
+          stroke="#1B2220"
+          stroke-width="34"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+    <path d="M392 371 C408 371 428 377 448 388 C428 399 408 405 392 405 Z"
+          fill="#1B2220"/>
+  </g>
+</svg>

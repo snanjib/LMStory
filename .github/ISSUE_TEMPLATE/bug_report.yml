@@ -1,0 +1,78 @@
+name: Bug 报告
+description: 报告一个 Bug 以帮助我们改进 LMStory
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢您抽时间填写 Bug 报告！请尽量提供详细的信息，以便我们更快地定位和修复问题。
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 请提供您的运行环境信息。
+      placeholder: |
+        - 操作系统：例如 Android 13 / iOS 16 / Windows 11
+        - App 版本：例如 v0.1.0
+        - Flutter 版本：例如 3.19.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: provider-model
+    attributes:
+      label: 供应商 / 模型信息
+      description: 您使用的是哪个 API 供应商和模型？（如果是 BYOK 用户请填写）
+      placeholder: |
+        - 供应商：例如 OpenAI / DeepSeek / OpenRouter / 自定义
+        - 模型：例如 gpt-4o / deepseek-chat
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请描述如何复现这个问题。
+      placeholder: |
+        1. 打开 App
+        2. 进入「...」页面
+        3. 点击「...」
+        4. 出现错误
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+      description: 您期望发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际上发生了什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 错误日志
+      description: 如果有错误日志或控制台输出，请粘贴在这里。（可选）
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 附加信息
+      description: 截图、补充说明等任何有助于理解问题的信息。（可选）
+    validations:
+      required: false

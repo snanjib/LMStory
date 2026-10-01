@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Modify this file to customize your launch splash screen -->
+
+<!-- Splash background for dark mode, aligned with the app's default
+     appearance (classic structure + classic palette): darkBg = #0E1018.
+     Single source in
+     lib/core/theme/system/palettes/classic/classic_palette.dart, kept in
+     sync by test/core/theme/t10_android_window_bg_guard_test.dart.
+
+     Previously only res/drawable (always white) and res/drawable-v21
+     (?android:colorBackground) existed, so a cold start in dark mode
+     flashed a white screen. This file adds the dark variant. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <color android:color="#0E1018" />
+    </item>
+
+    <!-- You can insert your own image assets here -->
+    <!-- <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/launch_image" />
+    </item> -->
+</layer-list>

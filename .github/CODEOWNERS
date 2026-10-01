@@ -1,0 +1,13 @@
+# Default owner
+* @snanjib
+
+# Core infrastructure
+/core/ @snanjib
+
+# Features
+/lib/features/chat/ @snanjib
+/lib/features/intermediate/ @snanjib
+/lib/features/memory/ @snanjib
+
+# Documentation
+/doc/ @snanjib

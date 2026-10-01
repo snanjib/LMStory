@@ -1,0 +1,86 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+# pubspec.lock is committed on the public side to pin CI dependency versions;
+# other lockfiles stay ignored.
+*.lock
+!pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated files
+lib/**/*.g.dart
+lib/**/*.freezed.dart
+**/*.mocks.dart
+.flutter-plugins-dependencies
+.flutter-plugins
+
+# Environment & secrets (never commit)
+.env
+*.env.local
+.test_apikey
+
+# Python bytecode
+__pycache__/
+
+# Local debug artifacts (logs, database exports, emulator screenshots)
+test_logs_app*.log
+test_logs_app*.b64
+lmstory_export.db
+flutter_secure_storage.xml
+test_screenshots/
+st_tree.json
+
+# Temp / SDK downloads
+dart-sdk-windows-x64.zip
+LICENSE.dart_sdk_archive.md
+
+# Build script artifacts (build number record)
+.build/
+
+# Web deployment artifacts (generated, not source)
+lmstory-web.tar.gz
+
+# Web build debug artifacts (sourcemaps/dep files embed local build paths)
+/web/*.deps
+/web/*.map
+
+# Test coverage
+coverage/
+
+# Android/iOS
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/app/src/main/res/drawable-v21/launch_background.xml
+ios/Flutter/Flutter.framework/
+ios/Flutter/App.framework/
+ios/Runner.xcworkspace/
+ios/Runner.xcodeproj/xcuserdata/
+
+# Local-only directories and scratch files (maintainer workspace, not part of
+# the repository): IDE/agent tooling configs, internal notes and drafts.
+# Never commit these.
+/.trae/
+/.zcode/
+/.impeccable/
+/third_party/
+/validation/
+/doc/exploration/
+/doc/meeting/
+/doc/misc/
+/DESIGN.md
+/PRODUCT.md
+/tool/oss/
+decode_logs.py

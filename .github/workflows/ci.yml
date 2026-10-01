@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [v0.4.0]
+  pull_request:
+    branches: [v0.4.0]
+
+jobs:
+  # GITHUB_TOKEN least-privilege: the repo-level default is already read-only;
+  # declaring it here keeps the workflow safe against repo-settings drift.
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: '3.44.0'
+          cache: true
+
+      - name: Cache pub packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Run build_runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # Regenerate i18n in CI: catches broken yaml / broken key structure that
+      # only surfaces when slang actually runs. Generated strings_*.g.dart are
+      # gitignored build artifacts.
+      - name: Regenerate i18n (yaml validity guard)
+        run: dart run slang
+
+      # --no-fatal-infos: style-level lints (trailing commas, const hints) do
+      # not block CI; errors and warnings still fail the build.
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
+
+      # Regression guards: SnackBar must use floating behavior within 6 lines;
+      # Chinese string literals in presentation/ must go through slang i18n.
+      # The whitelists under tool/ci_guards/ only shrink, never grow.
+      - name: SnackBar floating guard
+        run: python tool/ci_guards/check_snackbar_floating.py
+
+      - name: Chinese literal guard
+        run: python tool/ci_guards/check_chinese_literals.py
+
+      # Residual trace guard: no maintainer identity, private mirror
+      # references, tailnet/private addresses, or internal process paths in
+      # any tracked file.
+      - name: Residual trace guard
+        run: python tool/ci_guards/check_residual_traces.py
+
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: lint-and-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: '3.44.0'
+          cache: true
+
+      - name: Cache pub packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Run build_runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # Regenerate i18n: strings_*.g.dart is a gitignored slang artifact; the
+      # APK build compiles it in, so it must exist in this job too.
+      - name: Regenerate i18n
+        run: dart run slang
+
+      # Restore release signing when the signing secrets are configured: the
+      # keystore is injected as a base64 secret and decoded at build time into
+      # android/key.properties. Without secrets the gradle config falls back to
+      # debug signing (CI sanity builds only, never published).
+      - name: Restore release signing
+        env:
+          LMSTORY_KEYSTORE_BASE64: ${{ secrets.LMSTORY_KEYSTORE_BASE64 }}
+          LMSTORY_KEYSTORE_PASSWORD: ${{ secrets.LMSTORY_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$LMSTORY_KEYSTORE_BASE64" ]; then
+            echo "No signing secrets configured; falling back to debug signing."
+            exit 0
+          fi
+          echo "$LMSTORY_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/lmstory-release.keystore"
+          cat > android/key.properties <<EOF
+          storeFile=$GITHUB_WORKSPACE/lmstory-release.keystore
+          storePassword=$LMSTORY_KEYSTORE_PASSWORD
+          keyAlias=lmstory-release
+          keyPassword=$LMSTORY_KEYSTORE_PASSWORD
+          EOF
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lmstory-android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14

@@ -1,0 +1,31 @@
+# 中文字面量门禁存量白名单（计数化：XC7-7，2026-09-06 基线，152 处 / 20 文件）
+# 范围：lib/features/**/presentation/**、lib/core/theme/** 与 lib/core/widgets/**
+# 的 Dart 字符串字面量（注释不计）。
+# 格式：每行 `文件路径:登记违规条数`（file:count 计数锁）。
+# 计数锁规则（白名单只缩不涨的机械化）：
+# - 实际违规数 > 登记数：CI 失败；禁止上调登记数，须修复新增违规。
+# - 实际违规数 < 登记数：CI 通过，提示收紧登记数；降为 0 时该行失效，必须删除。
+# - 新增违规文件不得加入白名单。
+# 合法类别（进白名单的理由，新增文件须在 PR 里说明属于哪类）：
+# - 模型输入：AgentTool 面向模型的信封/描述、提示词常量、注入 LLM 的轮次痕迹
+# - 非用户可见：logger detail、审计 reason、assert 消息
+# - 数据夹具：预览页 mock 剧情数据
+# - 存量 UI 文案欠账（真实违规，待逐步迁移 slang 后从此清单删除）
+# 只减不增：修复后下调对应登记数；修复至 0 则删除该行。
+
+lib/features/advanced/presentation/controllers/advanced_chat_controller.dart:2
+lib/features/advanced/presentation/controllers/advanced_chat_controller_embeddings.dart:6
+lib/features/advanced/presentation/controllers/advanced_chat_controller_persist.dart:1
+lib/features/advanced/presentation/controllers/advanced_chat_controller_suggest.dart:5
+lib/features/advanced/presentation/controllers/agent_loop_diagnostics_controller.dart:2
+lib/features/advanced/presentation/controllers/director_round_runner.dart:3
+lib/features/advanced/presentation/controllers/director_work_trace.dart:12
+lib/features/advanced/presentation/tools/agent_diagnostic_tools.dart:13
+lib/features/chat/presentation/controllers/chat_mode_controller.dart:1
+lib/features/intermediate/presentation/controllers/intermediate_chat_controller_embeddings.dart:6
+lib/features/intermediate/presentation/controllers/intermediate_chat_controller_persist.dart:1
+lib/features/intermediate/presentation/controllers/intermediate_chat_controller_suggest.dart:5
+lib/features/intermediate/presentation/controllers/phases/extract_phase_handler.dart:6
+lib/features/intermediate/presentation/controllers/phases/summarize_phase_handler.dart:26
+lib/features/settings/presentation/support/intermediate_preview_mock_data.dart:19
+lib/features/settings/presentation/widgets/intermediate_phase_models_section.dart:1

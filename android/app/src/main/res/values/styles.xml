@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is off -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <!-- Show a splash screen on the activity. Automatically removed when
+             the Flutter engine draws its first frame -->
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <!-- Theme applied to the Android Window as soon as the process has started.
+         This theme determines the color of the Android Window while your
+         Flutter UI initializes, as well as behind your Flutter UI while its
+         running.
+
+         This Theme is only used starting with V2 of Flutter's Android embedding. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <!-- Window background aligned with the default appearance's light
+             variant lightBg = #F4F5F7. Single source in
+             lib/core/theme/system/palettes/classic/classic_palette.dart,
+             kept in sync by test/core/theme/t10_android_window_bg_guard_test.dart.
+
+             A cold-start first frame can only use one static value and cannot
+             follow the runtime-selected palette/structure, so aligning with
+             the default appearance is the only deterministic choice. Users of
+             other palettes/structures may briefly see the classic background
+             at cold start (far better than the previous hardcoded dark
+             blue-purple sitting on the light theme).
+
+             The Android 12+ SplashScreen API is not enabled (no values-v31
+             override), so the system splash takes this theme's
+             android:windowBackground and is already covered by
+             @drawable/launch_background. -->
+        <item name="android:windowBackground">#F4F5F7</item>
+    </style>
+</resources>
