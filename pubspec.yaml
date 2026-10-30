@@ -36,7 +36,7 @@ dependencies:
   shared_preferences: ^2.5.5
   slang: ^4.2.0
   slang_flutter: ^4.2.0
-  sqlite3_flutter_libs: ^0.5.20
+  sqlite3_flutter_libs: ">=0.5.20 <0.7.0"
   tiktoken: ^1.0.3
   url_launcher: ^6.3.1
   uuid: ^4.4.0
