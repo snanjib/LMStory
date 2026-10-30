@@ -9,9 +9,15 @@ import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_memory_history.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/memory/domain/repositories/factual_repository.dart';
+import 'package:lmstory/features/memory/domain/services/attribute_schema.dart';
+import 'package:lmstory/features/memory/domain/services/facts_delta_projection.dart';
 import 'package:lmstory/features/story_runtime/domain/services/persistence_service.dart'
     show StoryPersistenceService;
 import 'package:uuid/uuid.dart';
+
+// AttributeSchema 已拆至 attribute_schema.dart（2026-10-15，投影器同源
+// 消费）；export 保持既有 `import fact_applier.dart` 引用路径不变。
+export 'package:lmstory/features/memory/domain/services/attribute_schema.dart';
 
 /// 事实变更应用服务（DOC-11 §7、§11.2）
 ///
@@ -225,24 +231,51 @@ class FactApplier {
     int turnNumber,
     FactualConfig config,
   ) async {
-    if (delta.entityType == null || delta.primaryName == null) {
-      _logger.warn(
-        'create_entity missing required fields, skipping',
-        detail: 'entityType=${delta.entityType}, '
-            'primaryName=${delta.primaryName}',
-      );
-      return null;
+    // 撞名检测（防护：primaryName 已存在时走转换分支）
+    final existing = (delta.primaryName == null)
+        ? const <FactualEntity>[]
+        : await _repository.findByName(sessionId, [delta.primaryName!]);
+
+    final verdict = FactsDeltaProjectionEvaluator.evaluateCreateEntity(
+      delta: delta,
+      config: config,
+      sameNameEntity: existing.isNotEmpty ? existing.first : null,
+    );
+
+    switch (verdict.outcome) {
+      case FactsProjectionOutcome.skipped:
+        _logger.warn(
+          'create_entity skipped by guard',
+          detail: 'note=${verdict.note?.name}, '
+              'entityType=${delta.entityType}, '
+              'primaryName=${delta.primaryName}',
+        );
+        return null;
+      case FactsProjectionOutcome.converted:
+        final existingEntity = existing.first;
+        // 撞名导入实体（worldbook/card）走统一转换（演变/别名），不转 create
+        //（2026-09-14 只读语义 2.0：世界书与角色卡同为属性级只读基线）。
+        final rewritten = verdict.rewrittenDelta!;
+        if (rewritten.action == FactAction.updateAttr) {
+          _logger.info(
+            'Entity already exists, converting to update_attr',
+            detail: 'primaryName=${delta.primaryName}, '
+                'existingEntityId=${existingEntity.entityId}, '
+                'attrKey=${delta.attrKey} → ${rewritten.attrKey}',
+          );
+          return _applyUpdateAttr(sessionId, rewritten, turnNumber, config);
+        }
+        _logger.info(
+          'Entity already exists, converting to add_alias',
+          detail: 'primaryName=${delta.primaryName}, '
+              'existingEntityId=${existingEntity.entityId}',
+        );
+        return _applyAddAlias(sessionId, rewritten, turnNumber, config);
+      case FactsProjectionOutcome.applied:
+        break;
     }
 
-    // 提前解析 entityType，用于标准化 attrKey
-    final entityType = _parseEntityType(delta.entityType!);
-    if (entityType == null) {
-      _logger.warn(
-        'Unknown entity type, skipping',
-        detail: 'entityType=${delta.entityType}',
-      );
-      return null;
-    }
+    final entityType = _parseEntityType(delta.entityType!)!;
 
     // 标准化 attrKey（兼容 LLM 产出的非标准字段，如 description → background）
     // 2026-07-26 新增：模型适配兼容（DOC-11 §7.4.2 修订）
@@ -256,56 +289,6 @@ class FactApplier {
         : delta.value != null
             ? AttributeSchema.fallbackDescriptionKey(entityType)
             : null;
-
-    // 防护：检查 primaryName 是否已存在
-    final existing = await _repository.findByName(
-      sessionId,
-      [delta.primaryName!],
-    );
-    if (existing.isNotEmpty) {
-      final existingEntity = existing.first;
-
-      // 撞名导入实体（worldbook/card）走统一转换（演变/别名），不转 create
-      //（2026-09-14 只读语义 2.0：世界书与角色卡同为属性级只读基线）。
-
-      // 2026-07-22 修复：实体已存在 + 携带 attrKey/value → 转 update_attr
-      // 保留 LLM 想要更新的属性信息，不再丢弃。
-      // 2026-08-23 修订：value 兜底键按已存实体的真实类型计算（delta 的
-      // entityType 可能缺失或与既有实体不一致）。
-      if (delta.value != null) {
-        final attrKey = normalizedAttrKey ??
-            AttributeSchema.fallbackDescriptionKey(existingEntity.type);
-        _logger.info(
-          'Entity already exists, converting to update_attr',
-          detail: 'primaryName=${delta.primaryName}, '
-              'existingEntityId=${existingEntity.entityId}, '
-              'attrKey=${delta.attrKey} → $attrKey',
-        );
-        final updateDelta = FactsDelta(
-          action: FactAction.updateAttr,
-          entityId: existingEntity.entityId,
-          attrKey: attrKey,
-          value: delta.value,
-          confidence: delta.confidence,
-          reason: delta.reason,
-        );
-        return _applyUpdateAttr(sessionId, updateDelta, turnNumber, config);
-      }
-
-      // 实体已存在 + 无 value → 改为 addAlias（DOC-11 §10.3 原逻辑）
-      _logger.info(
-        'Entity already exists, converting to add_alias',
-        detail: 'primaryName=${delta.primaryName}, '
-            'existingEntityId=${existingEntity.entityId}',
-      );
-      final aliasDelta = FactsDelta(
-        action: FactAction.addAlias,
-        entityId: existingEntity.entityId,
-        value: delta.primaryName,
-        confidence: delta.confidence,
-      );
-      return _applyAddAlias(sessionId, aliasDelta, turnNumber, config);
-    }
 
     // 相似名告警（只告警不转换）：精确查重未命中时，检测包含关系候选
     // （如"庄园"⊂"边境庄园"）。抽取提示词已有去重规则但属软约束，且低
@@ -407,77 +390,51 @@ class FactApplier {
       );
     }
 
-    // → ：主名是身份
-    // 标识，不可被改名——统一不分 source（原 auto 实体改 name 只写属性行
-    // 造成主名双源分叉：注入行同屏两名/检索按旧名）。改名意图一律转为
-    // 别名追加，旧主名保留；回滚天然覆盖（别名分支）。
-    if (attrKey == 'name') {
-      _logger.info(
-        'rename on imported entity, converting to add_alias',
-        detail: 'entityId=${delta.entityId}, source=${entity.source.name}',
-      );
-      final aliasDelta = FactsDelta(
-        action: FactAction.addAlias,
-        entityId: delta.entityId,
-        value: delta.value,
-        confidence: delta.confidence,
-      );
-      return _applyAddAlias(sessionId, aliasDelta, turnNumber, config);
-    }
-
-    // schema 白名单检查（整理型写入豁免：归并搬移的键来自源实体既有行，
-    // 键本身已在源侧成立，跨类型归并时目标类型白名单可能不含该键）
-    if (!delta.isCuration &&
-        !AttributeSchema.isAttrKeyAllowed(entity.type, attrKey)) {
-      _logger.warn(
-        'attrKey not in schema whitelist, skipping',
-        detail: 'entityType=${entity.type.name}, attrKey=$attrKey',
-      );
-      return null;
-    }
-
-    // 属性值长度上限检查
-    if (delta.value!.length > config.maxAttrValueLength) {
-      _logger.warn(
-        'Attribute value too long, skipping',
-        detail: 'attrKey=$attrKey, '
-            'valueLength=${delta.value!.length}, '
-            'maxLength=${config.maxAttrValueLength}',
-      );
-      return null;
-    }
-
-    // 更新频率限制（整理型写入豁免：归并是确定性知识搬迁，非演化抖动）
-    if (!delta.isCuration) {
-      final recentUpdates = await _repository.countRecentUpdates(
-        delta.entityId!,
-        fromTurn: turnNumber - 2, // 最近 3 轮（含本轮）
-      );
-      if (recentUpdates >= config.maxUpdatesPer3Turns) {
-        _logger.warn(
-          'Entity updated too frequently recently, skipping',
-          detail: 'entityId=${delta.entityId}, '
-              'recentUpdates=$recentUpdates, '
-              'maxAllowed=${config.maxUpdatesPer3Turns}',
-        );
-        return null;
-      }
-    }
-
+    // 查库构造判定快照（与干跑投影器同一输入 → 看到的判定 = 落库判定）
     final rows = await _repository.getAttributesByKey(
       delta.entityId!,
       attrKey,
     );
-    final attr = _autoRowOf(rows);
+    final recentUpdates = delta.isCuration
+        ? 0
+        : await _repository.countRecentUpdates(
+            delta.entityId!,
+            fromTurn: turnNumber - 2, // 最近 3 轮（含本轮）
+          );
 
-    // 只读基线不覆盖：无 auto 行且新值与只读基线值相同 → 跳过（避免重复创建 auto 行）
-    if (attr == null && rows.any((r) => r.value == delta.value)) {
-      _logger.info(
-        'Value unchanged (matches read-only baseline), skipping',
-        detail: 'entityId=${delta.entityId}, attrKey=$attrKey',
-      );
-      return null;
+    final verdict = FactsDeltaProjectionEvaluator.evaluateUpdateAttr(
+      delta: delta,
+      config: config,
+      entity: entity,
+      attrRows: rows,
+      recentUpdates: recentUpdates,
+    );
+
+    switch (verdict.outcome) {
+      case FactsProjectionOutcome.skipped:
+        _logger.warn(
+          'update_attr skipped by guard',
+          detail: 'note=${verdict.note?.name}, '
+              'entityId=${delta.entityId}, attrKey=$attrKey',
+        );
+        return null;
+      case FactsProjectionOutcome.converted:
+        // name 是身份标识 → 转别名追加（判定与日志见原分支）
+        _logger.info(
+          'rename on imported entity, converting to add_alias',
+          detail: 'entityId=${delta.entityId}, source=${entity.source.name}',
+        );
+        return _applyAddAlias(
+          sessionId,
+          verdict.rewrittenDelta!,
+          turnNumber,
+          config,
+        );
+      case FactsProjectionOutcome.applied:
+        break;
     }
+
+    final attr = _autoRowOf(rows);
 
     // 属性不存在（或只有只读基线）→ 创建新 auto 属性（基线不覆盖，DOC-15 §8.1）
     if (attr == null) {
@@ -512,37 +469,6 @@ class FactApplier {
       );
       await _repository.insertHistory(history);
       return history;
-    }
-
-    // 值必须真的不同
-    if (attr.value == delta.value) {
-      _logger.info(
-        'Value unchanged, skipping',
-        detail: 'entityId=${delta.entityId}, attrKey=$attrKey',
-      );
-      return null;
-    }
-
-    // 关键属性（importance>=4）需要高置信度（整理型写入豁免）
-    if (!delta.isCuration &&
-        attr.isKeyAttribute &&
-        delta.confidence < config.modifyConfidenceThreshold) {
-      _logger.warn(
-        'Low confidence modification of key attribute rejected',
-        detail: 'entityId=${delta.entityId}, attrKey=$attrKey, '
-            'confidence=${delta.confidence}, '
-            'required=${config.modifyConfidenceThreshold}',
-      );
-      return null;
-    }
-
-    // schema 白名单：single 类型只能 update，list 类型不允许 update（应 append）
-    if (attr.valueType == AttributeValueType.list) {
-      _logger.warn(
-        'Cannot update_attr on list type, use append_list instead. Skipping.',
-        detail: 'entityId=${delta.entityId}, attrKey=$attrKey',
-      );
-      return null;
     }
 
     final oldValue = attr.value;
@@ -619,57 +545,44 @@ class FactApplier {
       );
     }
 
-    // schema 白名单检查（整理型写入豁免，同 _applyUpdateAttr）
-    if (!delta.isCuration &&
-        !AttributeSchema.isAttrKeyAllowed(entity.type, attrKey)) {
-      _logger.warn(
-        'attrKey not in schema whitelist, skipping',
-        detail: 'entityType=${entity.type.name}, attrKey=$attrKey',
-      );
-      return null;
-    }
-
-    // 属性值长度上限检查（单个值）
-    if (delta.value!.length > config.maxAttrValueLength) {
-      _logger.warn(
-        'Append value too long, skipping',
-        detail: 'attrKey=$attrKey, '
-            'valueLength=${delta.value!.length}',
-      );
-      return null;
-    }
-
     final rows = await _repository.getAttributesByKey(
       delta.entityId!,
       attrKey,
     );
+
+    final verdict = FactsDeltaProjectionEvaluator.evaluateAppendList(
+      delta: delta,
+      config: config,
+      entity: entity,
+      attrRows: rows,
+    );
+
+    if (verdict.outcome == FactsProjectionOutcome.skipped) {
+      _logger.warn(
+        'append_list skipped by guard',
+        detail: 'note=${verdict.note?.name}, '
+            'entityId=${delta.entityId}, attrKey=$attrKey',
+      );
+      return null;
+    }
+    if (verdict.outcome == FactsProjectionOutcome.converted) {
+      _logger.info(
+        'Converting append_list to update_attr',
+        detail: 'entityId=${delta.entityId}, attrKey=$attrKey, '
+            'note=${verdict.note?.name}',
+      );
+      return _applyUpdateAttr(
+        sessionId,
+        verdict.rewrittenDelta!,
+        turnNumber,
+        config,
+      );
+    }
+
     final attr = _autoRowOf(rows);
 
     // 属性不存在 → 创建新属性（list 类型）
     if (attr == null) {
-      // 只读基线为 single 类型时，append_list 重定向为 update_attr（写入 auto 行）
-      final baselineSingle = rows.any(
-        (r) =>
-            r.source != FactualSource.auto &&
-            r.valueType == AttributeValueType.single,
-      );
-      if (baselineSingle) {
-        _logger.info(
-          'Converting append_list to update_attr (read-only single baseline)',
-          detail: 'entityId=${delta.entityId}, attrKey=$attrKey',
-        );
-        final updateDelta = FactsDelta(
-          action: FactAction.updateAttr,
-          entityId: delta.entityId,
-          attrKey: attrKey,
-          value: delta.value,
-          reason: delta.reason,
-          confidence: delta.confidence,
-          isCuration: delta.isCuration,
-        );
-        return _applyUpdateAttr(sessionId, updateDelta, turnNumber, config);
-      }
-
       final now = DateTime.now();
       final newAttr = FactualAttribute(
         attributeId: _generateAttributeId(),
@@ -702,45 +615,8 @@ class FactApplier {
       return history;
     }
 
-    // single 类型收到 append_list → 自动转为 update_attr（覆盖）
-    if (attr.valueType == AttributeValueType.single) {
-      _logger.info(
-        'Converting append_list to update_attr (single type)',
-        detail: 'entityId=${delta.entityId}, attrKey=$attrKey',
-      );
-      final updateDelta = FactsDelta(
-        action: FactAction.updateAttr,
-        entityId: delta.entityId,
-        attrKey: attrKey,
-        value: delta.value,
-        reason: delta.reason,
-        confidence: delta.confidence,
-        isCuration: delta.isCuration,
-      );
-      return _applyUpdateAttr(sessionId, updateDelta, turnNumber, config);
-    }
-
-    // list 类型：精确去重
+    // list 类型：精确/语义去重由求值器判定（applied 才会到这里）
     final list = attr.listValue;
-    if (list.contains(delta.value)) {
-      _logger.info(
-        'Skip duplicate value (exact match)',
-        detail: 'entityId=${delta.entityId}, '
-            'attrKey=$attrKey, value=${delta.value}',
-      );
-      return null;
-    }
-
-    // list 类型：语义相似度去重
-    if (_isSemanticallySimilar(delta.value!, list)) {
-      _logger.info(
-        'Skip semantically similar value',
-        detail: 'entityId=${delta.entityId}, '
-            'attrKey=$attrKey, value=${delta.value}',
-      );
-      return null;
-    }
-
     final newList = [...list, delta.value!];
     final newValue = jsonEncode(newList);
     final oldValue = attr.value;
@@ -798,34 +674,27 @@ class FactApplier {
       );
     }
 
-    if (!AttributeSchema.isAttrKeyAllowed(entity.type, attrKey)) {
-      return null;
-    }
-
     final rows = await _repository.getAttributesByKey(
       delta.entityId!,
       attrKey,
     );
-    final attr = _autoRowOf(rows);
-    // 只读基线不可移除（DOC-15 §8.1）：无 auto 行（仅基线或属性不存在）→ 跳过
-    if (attr == null || attr.valueType != AttributeValueType.list) {
+
+    final verdict = FactsDeltaProjectionEvaluator.evaluateRemoveFromList(
+      delta: delta,
+      entity: entity,
+      attrRows: rows,
+    );
+    if (verdict.outcome != FactsProjectionOutcome.applied) {
       _logger.warn(
-        'No mutable auto attribute or not list type, skipping remove_from_list',
-        detail: 'entityId=${delta.entityId}, attrKey=$attrKey',
+        'remove_from_list skipped by guard',
+        detail: 'note=${verdict.note?.name}, '
+            'entityId=${delta.entityId}, attrKey=$attrKey',
       );
       return null;
     }
 
+    final attr = _autoRowOf(rows)!;
     final list = attr.listValue;
-    if (!list.contains(delta.value)) {
-      _logger.info(
-        'Value not in list, skipping remove_from_list',
-        detail: 'entityId=${delta.entityId}, '
-            'attrKey=$attrKey, value=${delta.value}',
-      );
-      return null;
-    }
-
     final newList = list.where((v) => v != delta.value).toList();
     final newValue = jsonEncode(newList);
     final oldValue = attr.value;
@@ -857,9 +726,8 @@ class FactApplier {
   ///
   /// 公开共享：记忆查看器手动归并的别名并集
   /// （factual_memory_tab._applyMergePlan）用同一上限——两入口防线同源，
-  /// 防口径漂移。
-  static const int kMaxAliasesPerEntity = 10;
-  static const int _kMaxAliasesPerEntity = kMaxAliasesPerEntity;
+  /// 防口径漂移。2026-10-15 起真源在投影器（干跑判定同限），此处转发。
+  static const int kMaxAliasesPerEntity = kFactsMaxAliasesPerEntity;
 
   /// 应用 add_alias 动作
   Future<FactualMemoryHistory?> _applyAddAlias(
@@ -868,71 +736,24 @@ class FactApplier {
     int turnNumber,
     FactualConfig config,
   ) async {
-    if (delta.entityId == null || delta.value == null) {
+    final entity0 = delta.entityId == null
+        ? null
+        : await _repository.getEntityById(delta.entityId!);
+
+    final verdict = FactsDeltaProjectionEvaluator.evaluateAddAlias(
+      delta: delta,
+      config: config,
+      entity: entity0,
+    );
+    if (verdict.outcome != FactsProjectionOutcome.applied) {
       _logger.warn(
-        'add_alias missing required fields, skipping',
-        detail: 'entityId=${delta.entityId}',
+        'add_alias skipped by guard',
+        detail: 'note=${verdict.note?.name}, entityId=${delta.entityId}',
       );
       return null;
     }
-
-    // trim/长度防线——改名转别名转换分支
-    // 先于 update_attr 的长度检查（:411 转换在 :437 之前），超长/空白别名
-    // 此前直落 known_entities 行渲染。
+    final entity = entity0!;
     final alias = delta.value!.trim();
-    if (alias.isEmpty) {
-      _logger.info('Empty alias after trim, skipping');
-      return null;
-    }
-    if (alias.length > config.maxAttrValueLength) {
-      _logger.warn(
-        'Alias too long, skipping',
-        detail: 'entityId=${delta.entityId}, '
-            'valueLength=${alias.length}, '
-            'maxLength=${config.maxAttrValueLength}',
-      );
-      return null;
-    }
-
-    final entity = await _repository.getEntityById(delta.entityId!);
-    if (entity == null) {
-      _logger.warn(
-        'Entity not found, skipping add_alias',
-        detail: 'entityId=${delta.entityId}',
-      );
-      return null;
-    }
-
-    // 别名不能与主名冲突
-    if (entity.primaryName == alias) {
-      _logger.info(
-        'Alias same as primaryName, skipping',
-        detail: 'entityId=${delta.entityId}, value=$alias',
-      );
-      return null;
-    }
-
-    // 别名不能与已有别名冲突
-    if (entity.aliases.contains(alias)) {
-      _logger.info(
-        'Alias already exists, skipping',
-        detail: 'entityId=${delta.entityId}, value=$alias',
-      );
-      return null;
-    }
-
-    // 这是最终守卫——暂存端（agent_session_tools 归并
-    // 预演）与手动预览端已按同常量提前披露，此处静默跳过仅剩同轮竞争窗口
-    // 内的极端到达（检查与提交之间又有他轮写入）。
-    if (entity.aliases.length >= _kMaxAliasesPerEntity) {
-      _logger.warn(
-        'Too many aliases, skipping',
-        detail: 'entityId=${delta.entityId}, '
-            'count=${entity.aliases.length}, max=$_kMaxAliasesPerEntity',
-      );
-      return null;
-    }
-
     final newAliases = [...entity.aliases, alias];
     await _repository.updateEntityAliases(
       delta.entityId!,
@@ -958,27 +779,18 @@ class FactApplier {
     FactsDelta delta,
     int turnNumber,
   ) async {
-    if (delta.entityId == null) {
-      _logger.warn(
-        'archive_entity missing entityId, skipping',
-        detail: 'entityId=${delta.entityId}',
-      );
-      return null;
-    }
+    final entity = delta.entityId == null
+        ? null
+        : await _repository.getEntityById(delta.entityId!);
 
-    final entity = await _repository.getEntityById(delta.entityId!);
-    if (entity == null) {
+    final verdict = FactsDeltaProjectionEvaluator.evaluateArchiveEntity(
+      delta: delta,
+      entity: entity,
+    );
+    if (verdict.outcome != FactsProjectionOutcome.applied) {
       _logger.warn(
-        'Entity not found, skipping archive_entity',
-        detail: 'entityId=${delta.entityId}',
-      );
-      return null;
-    }
-
-    if (entity.isArchived) {
-      _logger.info(
-        'Entity already archived, skipping',
-        detail: 'entityId=${delta.entityId}',
+        'archive_entity skipped by guard',
+        detail: 'note=${verdict.note?.name}, entityId=${delta.entityId}',
       );
       return null;
     }
@@ -1192,278 +1004,6 @@ class FactApplier {
     return false;
   }
 
-  // ==================== 语义相似度去重（DOC-11 §7.4.4）====================
-
-  /// 检查新值与现有列表是否语义相似
-  ///
-  /// 使用编辑距离 + 包含关系检测，**不调 embedding API**（成本太高）。
-  /// 满足以下任一条件即视为相似：
-  /// - 编辑距离 <= 2（如"温顺" vs "温驯"）
-  /// - 一个包含另一个（如"金毛犬" vs "金毛"）
-  bool _isSemanticallySimilar(String newValue, List<String> existing) {
-    for (final v in existing) {
-      if (_editDistance(newValue, v) <= 2) return true;
-      if (v.contains(newValue) || newValue.contains(v)) return true;
-    }
-    return false;
-  }
-
-  /// 计算两个字符串的编辑距离（Levenshtein）
-  int _editDistance(String a, String b) {
-    if (a == b) return 0;
-    if (a.isEmpty) return b.length;
-    if (b.isEmpty) return a.length;
-
-    final matrix = List.generate(
-      a.length + 1,
-      (_) => List.filled(b.length + 1, 0),
-    );
-    for (var i = 0; i <= a.length; i++) {
-      matrix[i][0] = i;
-    }
-    for (var j = 0; j <= b.length; j++) {
-      matrix[0][j] = j;
-    }
-    for (var i = 1; i <= a.length; i++) {
-      for (var j = 1; j <= b.length; j++) {
-        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
-        matrix[i][j] = [
-          matrix[i - 1][j] + 1, // 删除
-          matrix[i][j - 1] + 1, // 插入
-          matrix[i - 1][j - 1] + cost, // 替换
-        ].reduce((x, y) => x < y ? x : y);
-      }
-    }
-    return matrix[a.length][b.length];
-  }
-}
-
-/// 属性 schema 白名单（DOC-11 §7.4.2）
-///
-/// 每种实体类型预定义固定的属性集合，LLM 只能使用预定义的 attrKey。
-/// 描述性属性（personality/description/background）强制 single 类型，
-/// 只能 update 不能 append，避免"温顺"+"乖巧"近义词堆积。
-class AttributeSchema {
-  const AttributeSchema._();
-
-  /// 各实体类型的属性 schema 映射
-  ///
-  /// key: 实体类型，value: {attrKey: valueType}
-  ///
-  /// character / lore 类型额外允许白名单外的自定义属性名（[isAttrKeyAllowed]
-  /// 对 character/lore 放宽验证），此处仅列出核心属性。
-  static const Map<FactualEntityType, Map<String, AttributeValueType>> _schema =
-      {
-    FactualEntityType.character: {
-      'name': AttributeValueType.single,
-      'personality': AttributeValueType.single,
-      'background': AttributeValueType.single,
-      'relationships': AttributeValueType.dict,
-      'skills': AttributeValueType.list,
-    },
-    FactualEntityType.location: {
-      'name': AttributeValueType.single,
-      'description': AttributeValueType.single,
-      'features': AttributeValueType.list,
-    },
-    FactualEntityType.item: {
-      'name': AttributeValueType.single,
-      'description': AttributeValueType.single,
-      'owner': AttributeValueType.single,
-    },
-    FactualEntityType.lore: {
-      'name': AttributeValueType.single,
-      'description': AttributeValueType.single,
-      'category': AttributeValueType.single,
-    },
-    FactualEntityType.organization: {
-      'name': AttributeValueType.single,
-      'description': AttributeValueType.single,
-      'leader': AttributeValueType.single,
-      'members': AttributeValueType.list,
-      'background': AttributeValueType.single,
-    },
-    FactualEntityType.misc: {
-      'name': AttributeValueType.single,
-      'description': AttributeValueType.single,
-      'category': AttributeValueType.single,
-    },
-  };
-
-  /// 各 attrKey 的默认重要性
-  ///
-  /// 关键属性（name）默认 importance=5，修改需高置信度。
-  /// 描述性属性（personality/description/background）默认 importance=4。
-  /// 其他属性默认 importance=3。
-  static const Map<String, int> _defaultImportance = {
-    'name': 5,
-    'personality': 4,
-    'description': 4,
-    'background': 4,
-    'skills': 3,
-    'features': 3,
-    'relationships': 3,
-    'owner': 3,
-    'category': 4,
-    'leader': 3,
-    'members': 3,
-  };
-
-  /// 各 attrKey 的中文友好标签（UI 展示用，DOC-11 §6.1）
-  ///
-  /// 与 [_schema] 结构一致，按 entityType -> {attrKey -> 中文标签}。
-  /// 用于实体编辑界面下拉选择，让用户看到中文名称而非英文 attrKey。
-  /// name 在不同实体类型下翻译不同（角色=姓名，物品=物品名，地点=地点名）。
-  ///
-  /// 2026-07-25 新增：配合实体编辑界面优化，属性键改为下拉选择。
-  static const Map<FactualEntityType, Map<String, String>> _labels = {
-    FactualEntityType.character: {
-      'name': '姓名',
-      'personality': '性格',
-      'background': '背景',
-      'relationships': '关系',
-      'skills': '技能',
-    },
-    FactualEntityType.location: {
-      'name': '地点名',
-      'description': '描述',
-      'features': '特征',
-    },
-    FactualEntityType.item: {
-      'name': '物品名',
-      'description': '描述',
-      'owner': '所有者',
-    },
-    FactualEntityType.lore: {
-      'name': '设定名',
-      'description': '设定描述',
-      'category': '分类',
-    },
-    FactualEntityType.organization: {
-      'name': '组织名',
-      'description': '组织描述',
-      'leader': '首领',
-      'members': '成员',
-      'background': '背景',
-    },
-    FactualEntityType.misc: {
-      'name': '名称',
-      'description': '描述',
-      'category': '分类',
-    },
-  };
-
-  /// 属性键别名映射（用于兼容 LLM 产出的非标准字段）
-  ///
-  /// 某些模型（如 agnes-2.0-flash）不严格遵守 schema 白名单，会使用
-  /// `description` 等非标准字段描述角色。本映射将这些别名自动
-  /// 映射到标准字段，避免属性丢失。
-  ///
-  /// 映射原则：
-  /// - character 无 description 字段，LLM 用的 description 映射到 background
-  /// - location/item 已有 description 字段，无需映射
-  ///
-  /// 2026-07-26 新增：模型适配兼容（DOC-11 §7.4.2 修订）。
-  static const Map<FactualEntityType, Map<String, String>> _attrKeyAliases = {
-    FactualEntityType.character: {
-      'description': 'background',
-      'history': 'background',
-    },
-  };
-
-  /// 检查 attrKey 是否在实体类型的 schema 白名单内
-  ///
-  /// character / lore 允许自定义属性名（核心属性在白名单内，其他自定义
-  /// 属性也接受）。
-  static bool isAttrKeyAllowed(
-    FactualEntityType entityType,
-    String attrKey,
-  ) {
-    if (entityType == FactualEntityType.character) {
-      return attrKey.isNotEmpty;
-    }
-    if (entityType == FactualEntityType.lore) {
-      // lore 放宽自定义键（对齐 character）——
-      // 世界书条目是最需要自由扩展的实体类型（状态/下落/归属等）。
-      return attrKey.isNotEmpty;
-    }
-    final schema = _schema[entityType];
-    return schema != null && schema.containsKey(attrKey);
-  }
-
-  /// 将 LLM 产出的 attrKey 标准化
-  ///
-  /// 兼容非标准字段（如 `description` → `background`），用于适配不严格遵守
-  /// schema 白名单的模型。调用流程：
-  /// 1. 若 attrKey 已在白名单内，原样返回
-  /// 2. 若 attrKey 是已知别名，返回对应的标准字段
-  /// 3. 若 attrKey 未知，返回原值（后续 [isAttrKeyAllowed] 会拒绝）
-  ///
-  /// 2026-07-26 新增：模型适配兼容（DOC-11 §7.4.2 修订）。
-  /// 2026-08-06 修订：别名检查优先于白名单检查，修复 character 的
-  /// description 别名映射被自定义属性逻辑短路的问题。
-  static String normalizeAttrKey(
-    FactualEntityType entityType,
-    String attrKey,
-  ) {
-    final alias = _attrKeyAliases[entityType]?[attrKey];
-    if (alias != null) {
-      return alias;
-    }
-    if (isAttrKeyAllowed(entityType, attrKey)) {
-      return attrKey;
-    }
-    return attrKey;
-  }
-
-  /// 获取 attrKey 的 valueType
-  ///
-  /// 调用方需先通过 [isAttrKeyAllowed] 确认 attrKey 在白名单内。
-  static AttributeValueType valueTypeOf(
-    FactualEntityType entityType,
-    String attrKey,
-  ) {
-    return _schema[entityType]?[attrKey] ?? AttributeValueType.single;
-  }
-
-  /// 裸 value 兜底键：delta 只带 value 不带 attrKey 时的默认描述属性
-  ///
-  /// 2026-08-23 新增（导演模式裸实体修复）：模型常把实体描述直接放进
-  /// value 而省略 attrKey，原实现静默丢弃导致实体永远无属性。character
-  /// 的 description 经 [_attrKeyAliases] 映射为 background，其余类型均为
-  /// 白名单内的 description。
-  static String fallbackDescriptionKey(FactualEntityType entityType) =>
-      normalizeAttrKey(entityType, 'description');
-
-  /// 获取 attrKey 的默认重要性
-  static int defaultImportance(
-    FactualEntityType entityType,
-    String attrKey,
-  ) {
-    return _defaultImportance[attrKey] ?? 3;
-  }
-
-  /// 获取 attrKey 的中文友好标签
-  ///
-  /// 用于 UI 展示。若 attrKey 不在预定义白名单内（自定义属性），
-  /// 返回 null，调用方可显示 attrKey 原文并标注"自定义"。
-  ///
-  /// 2026-07-25 新增：配合实体编辑界面优化。
-  static String? labelFor(
-    FactualEntityType entityType,
-    String attrKey,
-  ) {
-    return _labels[entityType]?[attrKey];
-  }
-
-  /// 获取某实体类型的所有预定义 attrKey 列表
-  ///
-  /// 用于实体编辑界面的属性键下拉选择。返回顺序与 schema 定义顺序一致。
-  ///
-  /// 2026-07-25 新增：配合实体编辑界面优化。
-  static List<String> attrKeysFor(FactualEntityType entityType) {
-    final schema = _schema[entityType];
-    if (schema == null) return const [];
-    return schema.keys.toList();
-  }
+  // 语义相似度去重（DOC-11 §7.4.4）2026-10-15 起真源在投影器
+  // （isSemanticallySimilarValue，干跑判定同源），本类经求值器间接消费。
 }

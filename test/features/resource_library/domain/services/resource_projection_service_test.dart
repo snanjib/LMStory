@@ -54,6 +54,8 @@ void main() {
       final count = await service.applyCharacterCard(
         sessionId: 's1',
         cardId: 'card_1',
+        defaultCharacterName: '未命名角色',
+        duplicateErrorMessage: '已存在同名角色',
         card: card(embedded: [entry()]),
       );
 
@@ -102,10 +104,60 @@ void main() {
         () => service.applyCharacterCard(
           sessionId: 's1',
           cardId: 'card_1',
+          defaultCharacterName: '未命名角色',
+          duplicateErrorMessage: '已存在同名角色',
           card: card(),
         ),
         throwsA(isA<ResourceApplyException>()),
       );
+    });
+
+    test('空名卡同名检测：二次应用空名卡对齐 defaultCharacterName 判定重复并拒绝', () async {
+      repo.entitiesById = {
+        'ent_unnamed': FactualEntity(
+          entityId: 'ent_unnamed',
+          sessionId: 's1',
+          type: FactualEntityType.character,
+          primaryName: '未命名角色',
+          aliases: const [],
+          importance: 3,
+          createdTurn: 1,
+          createdAt: DateTime.now(),
+        ),
+      };
+      expect(
+        () => service.applyCharacterCard(
+          sessionId: 's1',
+          cardId: 'card_empty_2',
+          defaultCharacterName: '未命名角色',
+          duplicateErrorMessage: '已存在同名角色「未命名角色」，应用被拒绝',
+          card: card(name: '   '),
+        ),
+        throwsA(
+          isA<ResourceApplyException>().having(
+            (e) => e.message,
+            'message',
+            '已存在同名角色「未命名角色」，应用被拒绝',
+          ),
+        ),
+      );
+    });
+
+    test('空名卡内嵌词条：同名词条对齐 primaryName 去重跳过不重复创建', () async {
+      final count = await service.applyCharacterCard(
+        sessionId: 's1',
+        cardId: 'card_with_embedded',
+        defaultCharacterName: '未命名角色',
+        duplicateErrorMessage: '已存在同名角色',
+        card: card(
+          name: '',
+          embedded: [
+            entry(keys: const ['未命名角色']),
+          ],
+        ),
+      );
+      // 角色实体 1 个，内嵌同名词条跳过，总数 1
+      expect(count, 1);
     });
   });
 
@@ -114,6 +166,7 @@ void main() {
       final count = await service.applyWorldbook(
         sessionId: 's1',
         bookId: 'book_1',
+        defaultSettingName: '未命名设定',
         entries: [
           entry(keys: const ['a'], constant: true),
           entry(keys: const ['b'], enabled: false), // 停用
@@ -132,6 +185,7 @@ void main() {
       await service.applyWorldbook(
         sessionId: 's1',
         bookId: 'book_1',
+        defaultSettingName: '未命名设定',
         entries: [entry()],
       );
       final lore = repo.entitiesById.values.single;
@@ -143,6 +197,7 @@ void main() {
       final count = await service.applyWorldbook(
         sessionId: 's1',
         bookId: 'book_1',
+        defaultSettingName: '未命名设定',
         entries: [
           entry(),
           entry(content: '另一条'),
@@ -172,6 +227,7 @@ void main() {
       final count = await service.applyWorldbook(
         sessionId: 's1',
         bookId: 'book_1',
+        defaultSettingName: '未命名设定',
         entries: [
           entry(keys: const ['魔法']), // 撞归档名 → 正常投影
           entry(keys: const ['王国']), // 正常投影
@@ -201,6 +257,7 @@ void main() {
       final count = await service.applyWorldbook(
         sessionId: 's1',
         bookId: 'book_1',
+        defaultSettingName: '未命名设定',
         entries: [
           entry(keys: const ['魔法']), // 撞活跃名 → 跳过
           entry(keys: const ['王国']), // 正常投影
@@ -226,6 +283,8 @@ void main() {
       final count = await service.applyCharacterCard(
         sessionId: 's1',
         cardId: 'card_1',
+        defaultCharacterName: '未命名角色',
+        duplicateErrorMessage: '已存在同名角色',
         card: card(),
       );
       expect(count, 1, reason: '归档名不占用，卡片照常投影');

@@ -5,8 +5,7 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Distinct launcher name so the debug-suffixed app is recognizable
-         alongside the release app when both are installed. -->
+    <!-- 与正式包共存时的桌面区分：debug 后缀包显示独立名称 -->
     <application
         android:label="LMStory 调试"
         tools:replace="android:label"/>

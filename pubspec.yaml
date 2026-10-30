@@ -1,6 +1,6 @@
 name: lmstory
 description: AI-powered interactive storytelling app with self-evolving memory system.
-version: 0.4.0
+version: 0.4.1
 
 repository: https://github.com/snanjib/LMStory
 homepage: https://github.com/snanjib/LMStory
@@ -11,6 +11,7 @@ environment:
   flutter: '>=3.19.0'
 
 dependencies:
+  clock: ^1.1.1
   collection: ^1.18.0
   dio: ^5.4.3+1
   drift: ^2.18.0
@@ -25,7 +26,6 @@ dependencies:
   flutter_math_fork: ^0.7.4
   flutter_riverpod: ^2.5.1
   flutter_secure_storage: ^10.3.1
-  google_fonts: ^6.2.1
   http: ^1.2.1
   image_picker: ^1.1.2
   json_annotation: ^4.9.0

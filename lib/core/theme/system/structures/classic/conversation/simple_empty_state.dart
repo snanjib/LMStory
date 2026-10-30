@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_structure.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -45,9 +46,8 @@ class SimpleEmptyState extends StatelessWidget {
                 // 锚定阅读限宽列：空态标题与随后的消息正文、输入区共用
                 // 同一条阅读轴线，宽屏下不会出现「空态铺满、正文收窄」的
                 // 跳变。视口窄于上限时自动取满宽，不产生额外边距。
-                constraints: const BoxConstraints(
-                  maxWidth: LmReadingConstraints.width,
-                ),
+                constraints:
+                    BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
                 child: SizedBox(
                   // 撑满限宽列，否则 CrossAxisAlignment.start 会把列宽
                   // 收缩到最长子件的固有宽度，左对齐失去意义。
@@ -64,7 +64,8 @@ class SimpleEmptyState extends StatelessWidget {
                         Text(
                           title,
                           // 标题层级：扫视时先抓到「这是哪一屏」，再读副标题。
-                          style: LmUiTextStyles.title2.copyWith(
+                          style:
+                              LmNarrativeTextStyles.narrativeHeadline.copyWith(
                             color: colors.ink,
                           ),
                         ),
@@ -74,7 +75,7 @@ class SimpleEmptyState extends StatelessWidget {
                             subtitle!,
                             // 不限行：空态是最有空间讲清楚话的地方，
                             // 截断只会把最该被读完的一句切掉。
-                            style: LmUiTextStyles.caption.copyWith(
+                            style: LmUiTextStyles.bodySm.copyWith(
                               color: colors.muted,
                             ),
                           ),

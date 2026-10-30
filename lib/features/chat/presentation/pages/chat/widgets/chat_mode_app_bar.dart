@@ -12,6 +12,7 @@ class ChatModeAppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.onMenuPressed,
     this.showHamburgerMenu = false,
     this.onHamburgerPressed,
+    this.onBackToHome,
     super.key,
   });
 
@@ -24,6 +25,10 @@ class ChatModeAppBar extends StatelessWidget implements PreferredSizeWidget {
   /// Callback when the hamburger menu button is pressed.
   final VoidCallback? onHamburgerPressed;
 
+  /// 非空时 leading 显示「返回上一级」（iOS 移动壳：会话导航是
+  /// 内部栈非路由，边缘侧滑无效，以此提供系统位置一致的返回入口）。
+  final VoidCallback? onBackToHome;
+
   /// Callback when the top-right menu button is pressed.
   final VoidCallback onMenuPressed;
 
@@ -33,14 +38,22 @@ class ChatModeAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
-      leading: showHamburgerMenu
+      leading: onBackToHome != null
           ? IconButton(
               //  语义缺口：复用框架本地化文案（不新增 i18n key）。
-              tooltip: MaterialLocalizations.of(context).openAppDrawerTooltip,
-              icon: const Icon(Icons.menu),
-              onPressed: onHamburgerPressed,
+              tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+              icon: const Icon(Icons.arrow_back),
+              onPressed: onBackToHome,
             )
-          : null,
+          : showHamburgerMenu
+              ? IconButton(
+                  //  语义缺口：复用框架本地化文案（不新增 i18n key）。
+                  tooltip:
+                      MaterialLocalizations.of(context).openAppDrawerTooltip,
+                  icon: const Icon(Icons.menu),
+                  onPressed: onHamburgerPressed,
+                )
+              : null,
       title: Text(
         sessionTitle,
         style: SimpleTextStyles.title2,

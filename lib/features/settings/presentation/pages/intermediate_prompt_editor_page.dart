@@ -5,6 +5,8 @@ import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_prompt_metadata.dart';
@@ -203,21 +205,7 @@ class _IntermediatePromptEditorPageState
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: AppBar(
-        title: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            _meta.title(t),
-            style: IntermediateTextStyles.title.copyWith(color: colors.ink),
-          ),
-        ),
-        backgroundColor:
-            context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-        foregroundColor: colors.ink,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        surfaceTintColor: Colors.transparent,
-      ),
+      appBar: context.lmUi.appBar(context, title: _meta.title(t)),
       body: PopScope(
         // 恢复默认按钮在底部内容区（与系统提示词区块布局一致，
         // 遵循 earned familiarity 原则）。AppBar 仅保留标题。
@@ -232,41 +220,44 @@ class _IntermediatePromptEditorPageState
         // 在长提示词（关键词提取/事件摘要/记忆提炼等默认值25-33行）时
         // 超出屏幕高度出现黄黑 overflow 条纹。
         // TextField 用 minLines: 8 保证最小编辑区域，不再用 expands 撑满。
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                IntermediateSpacing.sLg,
-                IntermediateSpacing.sLg,
-                IntermediateSpacing.sLg,
-                IntermediateSpacing.sMd,
+        child: LmMeasure(
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.zero,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  IntermediateSpacing.sLg,
+                  IntermediateSpacing.sLg,
+                  IntermediateSpacing.sLg,
+                  IntermediateSpacing.sMd,
+                ),
+                child: _buildDescription(colors, t),
               ),
-              child: _buildDescription(colors, t),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: IntermediateSpacing.sLg,
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: IntermediateSpacing.sLg,
+                ),
+                child: _buildEditor(colors, t, isLoading),
               ),
-              child: _buildEditor(colors, t, isLoading),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                IntermediateSpacing.sLg,
-                IntermediateSpacing.sMd,
-                IntermediateSpacing.sLg,
-                IntermediateSpacing.sLg,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  IntermediateSpacing.sLg,
+                  IntermediateSpacing.sMd,
+                  IntermediateSpacing.sLg,
+                  IntermediateSpacing.sLg,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildCharCountAndSave(colors, t, isLoading),
+                    const SizedBox(height: IntermediateSpacing.sXl),
+                    _buildUsageSection(colors, t),
+                  ],
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildCharCountAndSave(colors, t, isLoading),
-                  const SizedBox(height: IntermediateSpacing.sXl),
-                  _buildUsageSection(colors, t),
-                ],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -284,12 +275,9 @@ class _IntermediatePromptEditorPageState
     Translations t,
     bool isLoading,
   ) {
-    return Container(
+    return context.lmUi.card(
+      context,
       padding: const EdgeInsets.all(IntermediateSpacing.sMd),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
       child: TextField(
         controller: _controller,
         enabled: !isLoading && !_isSaving,
@@ -305,7 +293,7 @@ class _IntermediatePromptEditorPageState
           hintText:
               isLoading ? t.settings.intermediate.loading : _meta.defaultValue,
           hintStyle: IntermediateTextStyles.input.copyWith(
-            color: colors.faint,
+            color: colors.muted,
           ),
           filled: true,
           fillColor: colors.surfaceVariant,
@@ -344,42 +332,36 @@ class _IntermediatePromptEditorPageState
       valueListenable: _controller,
       builder: (context, value, _) {
         final dirty = value.text != _loadedValue;
-        return Row(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Text(
-                t.settings.intermediate.prompts.charCount(
-                  count: value.text.length,
+            Text(
+              t.settings.intermediate.prompts
+                  .charCount(count: value.text.length),
+              style:
+                  IntermediateTextStyles.caption.copyWith(color: colors.muted),
+            ),
+            const SizedBox(height: IntermediateSpacing.sSm),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: IntermediateSpacing.sSm,
+              runSpacing: IntermediateSpacing.sXs,
+              children: [
+                TextButton(
+                  onPressed: (isLoading || _isSaving) ? null : _reset,
+                  child: Text(t.settings.intermediate.prompts.reset),
                 ),
-                style: IntermediateTextStyles.caption
-                    .copyWith(color: colors.faint),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: IntermediateSpacing.sSm),
-            TextButton(
-              onPressed: (isLoading || _isSaving) ? null : _reset,
-              child: Text(
-                t.settings.intermediate.prompts.reset,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: IntermediateSpacing.sSm),
-            ElevatedButton(
-              onPressed: (_isSaving || !dirty) ? null : _save,
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Text(
-                      t.settings.intermediate.prompts.save,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                ElevatedButton(
+                  onPressed: (_isSaving || !dirty) ? null : _save,
+                  child: _isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(t.settings.intermediate.prompts.save),
+                ),
+              ],
             ),
           ],
         );
@@ -388,34 +370,13 @@ class _IntermediatePromptEditorPageState
   }
 
   Widget _buildUsageSection(LmPalette colors, Translations t) {
-    return Container(
+    return context.lmUi.card(
+      context,
       padding: const EdgeInsets.all(IntermediateSpacing.sMd),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(
-                Icons.lightbulb_outline,
-                size: 16,
-                color: colors.accent,
-              ),
-              const SizedBox(width: IntermediateSpacing.sSm),
-              Expanded(
-                child: Text(
-                  t.settings.intermediate.prompts.usageTitle,
-                  style:
-                      IntermediateTextStyles.label.copyWith(color: colors.ink),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
+          PanelHeading(title: t.settings.intermediate.prompts.usageTitle),
           const SizedBox(height: IntermediateSpacing.sSm),
           Text(
             _meta.usage(t),

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/shared/components/breathing_dot.dart';
+import 'package:lmstory/core/theme/shared/components/lm_state_transition.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_motion.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
@@ -89,85 +92,94 @@ class _SidebarSessionItemState extends State<SidebarSessionItem> {
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: context.lmUi.sessionRow(
-        context,
-        onTap: widget.onTap,
+      child: Semantics(
         selected: widget.isSelected,
-        hovered: _isHovered,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // ── Row 1：模式标签 + 右侧操作区 ──
-            Row(
-              children: [
-                // 生成中：显示呼吸点（覆盖 mode icon）
-                // 让用户从侧边栏即可感知哪个会话正在流式生成
-                if (widget.isGenerating)
-                  const BreathingDot()
-                else
-                  Icon(
-                    modeIcon,
-                    size: 16,
-                    color: modeColor,
-                  ),
-                const SizedBox(width: SimpleSpacing.sSm),
-                Flexible(
-                  child: Text(
-                    modeLabel,
-                    style: SimpleTextStyles.bodySm.copyWith(
-                      color: modeColor,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const Spacer(),
-                // Star 指示器（starred 且非生成中时显示）
-                // 移至右侧，不再覆盖模式图标，让模式信息始终可见
-                if (widget.session.isStarred && !widget.isGenerating)
-                  Padding(
-                    padding: const EdgeInsets.only(
-                      right: SimpleSpacing.s2xs,
-                    ),
-                    child: Icon(
-                      Icons.star,
-                      size: 14,
-                      color: colors.accent,
+        child: context.lmUi.sessionRow(
+          context,
+          onTap: widget.onTap,
+          selected: widget.isSelected,
+          hovered: _isHovered,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Row 1：模式标签 + 右侧操作区 ──
+              Row(
+                children: [
+                  // 生成中：显示呼吸点（覆盖 mode icon）
+                  // 让用户从侧边栏即可感知哪个会话正在流式生成
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: LmStateTransition(
+                      stateKey: (widget.isGenerating, mode),
+                      alignment: Alignment.center,
+                      child: widget.isGenerating
+                          ? const BreathingDot()
+                          : Icon(modeIcon, size: 16, color: modeColor),
                     ),
                   ),
-                // 拖拽把手 + 操作菜单
-                //  修复：移动端无 hover，原条件导致
-                // 操作菜单完全不可见。改为常驻显示，非 hover/selected 时
-                // 透明度 0.5（视觉低调），hover/selected 时透明度 1.0（高亮）。
-                _DragHandle(index: widget.index),
-                const SizedBox(width: SimpleSpacing.s2xs),
-                Opacity(
-                  opacity: (_isHovered || widget.isSelected) ? 1.0 : 0.5,
-                  child: _ActionMenu(
-                    session: widget.session,
-                    onRename: widget.onRename,
-                    onDelete: widget.onDelete,
-                    onToggleStar: widget.onToggleStar,
-                    onCopy: widget.onCopy,
+                  const SizedBox(width: SimpleSpacing.sSm),
+                  Flexible(
+                    child: Text(
+                      modeLabel,
+                      style: SimpleTextStyles.overline.copyWith(
+                        color: colors.muted,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: SimpleSpacing.s2xs),
-            // ── Row 2：会话标题 ──
-            Text(
-              widget.session.title,
-              style: SimpleTextStyles.caption.copyWith(
-                color: widget.isSelected ? colors.ink : colors.muted,
-                fontWeight:
-                    widget.isSelected ? FontWeight.w500 : FontWeight.w400,
+                  const Spacer(),
+                  // Star 指示器（starred 且非生成中时显示）
+                  // 移至右侧，不再覆盖模式图标，让模式信息始终可见
+                  if (widget.session.isStarred && !widget.isGenerating)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        right: SimpleSpacing.s2xs,
+                      ),
+                      child: Icon(
+                        Icons.star,
+                        size: 14,
+                        color: colors.accent,
+                      ),
+                    ),
+                  // 拖拽把手 + 操作菜单
+                  //  修复：移动端无 hover，原条件导致
+                  // 操作菜单完全不可见。改为常驻显示，非 hover/selected 时
+                  // 透明度 0.5（视觉低调），hover/selected 时透明度 1.0（高亮）。
+                  _DragHandle(index: widget.index),
+                  const SizedBox(width: SimpleSpacing.s2xs),
+                  AnimatedOpacity(
+                    duration: LmMotion.durationFor(context, LmMotion.focus),
+                    curve: LmMotion.easeColor,
+                    opacity: (_isHovered || widget.isSelected) ? 1.0 : 0.5,
+                    child: _ActionMenu(
+                      session: widget.session,
+                      onRename: widget.onRename,
+                      onDelete: widget.onDelete,
+                      onToggleStar: widget.onToggleStar,
+                      onCopy: widget.onCopy,
+                    ),
+                  ),
+                ],
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+              const SizedBox(height: SimpleSpacing.s2xs),
+              // ── Row 2：会话标题 ──
+              Text(
+                widget.session.title,
+                style: (isStory || isDirector
+                        ? LmNarrativeTextStyles.narrativeDisplay.copyWith(
+                            fontSize: 18,
+                            height: 1.35,
+                          )
+                        : SimpleTextStyles.body)
+                    .copyWith(color: colors.ink),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
         ),
       ),
     );

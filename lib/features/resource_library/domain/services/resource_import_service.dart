@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
-
+import 'package:lmstory/core/utils/json_depth_guard.dart';
 import 'package:lmstory/features/resource_library/domain/repositories/resource_library_repository.dart';
 import 'package:lmstory/features/resource_library/domain/services/character_card_parser.dart';
 import 'package:lmstory/features/resource_library/domain/services/worldbook_parser.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 import 'package:path/path.dart' as p;
 
 /// 导入结果类型
@@ -28,50 +29,8 @@ class ResourceImportService {
   ResourceImportService({required ResourceLibraryRepository repository})
       : _repository = repository;
 
-  /// 导入体积上限（DOC-15 §5.1）：PNG tEXt 内 base64 可能远大于文件本身
-  static const int maxImportBytes = 10 * 1024 * 1024;
-
-  /// JSON 嵌套深度上限（安全评测）：真实角色卡/世界书深度 < 20，
-  /// 此上限只拦恶意/意外构造的深嵌套输入。dart jsonDecode 递归下降解析
-  /// 极深输入会栈溢出——UI 层 catch-all 能兜住不崩溃，但守卫前置可给出
-  /// 明确错误信息并避免解析器空转。
-  static const int _maxJsonDepth = 500;
-
-  /// `String.length` 是 UTF-16 码元数而非字节数，
-  /// 中文/emoji 内容会被放大约 2-3 倍超限——按 UTF-8 实际字节数检查。
-  static bool _exceedsMaxBytes(String source) =>
-      utf8.encode(source).length > maxImportBytes;
-
-  /// 深度粗检：字符串感知的括号计数（跳过 JSON 字符串字面量与转义），
-  /// 只跟踪最大嵌套深度，不构建树。
-  static bool _exceedsMaxDepth(String source) {
-    var depth = 0;
-    var inString = false;
-    var escaped = false;
-    for (final codeUnit in source.codeUnits) {
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (codeUnit == 0x5C) {
-          escaped = true; // 反斜杠转义
-        } else if (codeUnit == 0x22) {
-          inString = false; // 引号闭合
-        }
-        continue;
-      }
-      if (codeUnit == 0x22) {
-        inString = true;
-      } else if (codeUnit == 0x7B || codeUnit == 0x5B) {
-        // { [
-        depth++;
-        if (depth > _maxJsonDepth) return true;
-      } else if (codeUnit == 0x7D || codeUnit == 0x5D) {
-        // } ]
-        if (depth > 0) depth--;
-      }
-    }
-    return false;
-  }
+  /// JSON 嵌套深度上限与粗检实现收敛在 core/utils/json_depth_guard.dart
+  /// （资源导入与数据备份导入共用口径）。
 
   /// 文件名兜底显示名只取最后一段并去掉资源
   /// 文件扩展名（.json/.png，大小写不敏感）——「型月.json」不再原样
@@ -105,9 +64,6 @@ class ResourceImportService {
     Uint8List bytes, {
     String? fallbackName,
   }) async {
-    if (bytes.length > maxImportBytes) {
-      throw const FormatException('文件过大（超过 10MB）');
-    }
     final json = CharacterCardParser.extractCardJson(bytes);
     return importCardJson(json, fallbackName: fallbackName);
   }
@@ -119,21 +75,18 @@ class ResourceImportService {
   }) async {
     // 入口统一剥 BOM（三条读取路径共享本方法）
     final source = _stripBom(json);
-    // 纯 JSON 卡与 PNG/世界书同受 10MB 上限——
-    // 真实生态存在 6MB+ JSON 卡，此前该入口无检查全量入库
-    if (_exceedsMaxBytes(source)) {
-      throw const FormatException('文件过大（超过 10MB）');
-    }
     // 深度粗检（安全评测）：先于一切 jsonDecode 守卫
-    if (_exceedsMaxDepth(source)) {
-      throw const FormatException('JSON 嵌套过深（超过 500 层），不是有效的角色卡/世界书文件');
+    if (exceedsMaxDepth(source)) {
+      throw FormatException(t.settings.resourceLibrary.importErrors.tooDeep);
     }
     // 反向守卫——世界书 JSON（顶层
     // entries）经 V1 扁平解析会被静默导入为空角色卡（书名变卡名、词条
     // 全丢）；提示改走世界书导入入口。自动识别入口（importAuto）不受
     // 影响（其先判世界书）。
     if (_looksLikeWorldbook(source)) {
-      throw const FormatException('这是世界书 JSON（顶层含 entries），请使用「导入世界书 JSON」入口');
+      throw FormatException(
+        t.settings.resourceLibrary.importErrors.wrongEntryWorldbook,
+      );
     }
     final parsed = CharacterCardParser.parse(source);
     // 空壳卡守卫——仅带 spec 标记、
@@ -144,8 +97,8 @@ class ResourceImportService {
         parsed.description.trim().isEmpty &&
         parsed.personality.trim().isEmpty &&
         parsed.embeddedEntries.isEmpty) {
-      throw const FormatException(
-        '这不是有效的角色卡（缺少 name/description/personality 等内容字段）',
+      throw FormatException(
+        t.settings.resourceLibrary.importErrors.invalidCard,
       );
     }
     // 文件名兜底走 _displayNameOf 剥扩展名——
@@ -154,7 +107,7 @@ class ResourceImportService {
         ? parsed.name
         : (fallbackName != null && fallbackName.isNotEmpty
             ? _displayNameOf(fallbackName)
-            : '角色卡');
+            : t.settings.resourceLibrary.cardFallbackName);
     await _repository.createCharacterCard(
       name: name,
       rawJson: source,
@@ -171,19 +124,16 @@ class ResourceImportService {
     // 入口统一剥 BOM（三条读取路径共享本方法），rawJson 以剥除后
     // 内容入库——应用投影时 re-parse 不再撞 BOM
     final source = _stripBom(content);
-    if (_exceedsMaxBytes(source)) {
-      throw const FormatException('文件过大（超过 10MB）');
-    }
     // 深度粗检（安全评测）：先于一切 jsonDecode 守卫
-    if (_exceedsMaxDepth(source)) {
-      throw const FormatException('JSON 嵌套过深（超过 500 层），不是有效的角色卡/世界书文件');
+    if (exceedsMaxDepth(source)) {
+      throw FormatException(t.settings.resourceLibrary.importErrors.tooDeep);
     }
     // F4 修复：结构守卫——此前对无 entries 的任意 JSON，
     // WorldbookParser 静默返回空列表并被入库为空世界书（守卫只在
     // importAuto 自动识别路径存在）。
     if (!_looksLikeWorldbook(source)) {
-      throw const FormatException(
-        '文件不是世界书 JSON（顶层缺少 entries 字段）——若这是角色卡，请使用角色卡导入入口',
+      throw FormatException(
+        t.settings.resourceLibrary.importErrors.wrongEntryCard,
       );
     }
     // 显示名优先用 JSON 顶层 name（世界书导出
@@ -193,13 +143,15 @@ class ResourceImportService {
     // 数组或值全非 Map 时解析产出空列表，此前静默导入「空世界书」
     //（应用时「已应用 0 个实体」，用户无从知道问题出在导入）。
     if (parsed.entries.isEmpty) {
-      throw const FormatException('世界书没有任何词条（entries 为空或全部无效）——请检查文件');
+      throw FormatException(
+        t.settings.resourceLibrary.importErrors.emptyWorldbook,
+      );
     }
     final name = parsed.name.isNotEmpty
         ? parsed.name
         : (fallbackName != null && fallbackName.isNotEmpty
             ? _displayNameOf(fallbackName)
-            : '世界书');
+            : t.settings.resourceLibrary.bookFallbackName);
     await _repository.createWorldbook(name: name, rawJson: source);
     return ImportResult(kind: ImportKind.worldbook, name: name);
   }
@@ -219,7 +171,7 @@ class ResourceImportService {
       return importCardBytes(bytes, fallbackName: fallbackName);
     }
     if (content == null) {
-      throw const FormatException('未提供导入内容');
+      throw FormatException(t.settings.resourceLibrary.importErrors.noContent);
     }
     // 先剥 BOM 再做结构识别——带 BOM 的 JSON 此前被判 unknown，
     // 用户确认后收到「无法识别的文件格式」
@@ -231,7 +183,7 @@ class ResourceImportService {
     if (_looksLikeCharacterCard(source)) {
       return importCardJson(source, fallbackName: fallbackName);
     }
-    throw const FormatException('无法识别的文件格式（非世界书/角色卡 JSON）');
+    throw FormatException(t.settings.resourceLibrary.importErrors.unrecognized);
   }
 
   /// 探测 JSON 内容类型（供外部导入确认框显示类型标签）。
@@ -254,7 +206,7 @@ class ResourceImportService {
   /// 的类型探测）与 importAuto 调用，是部分路径上第一个 jsonDecode 点，
   /// 深度超限时直接判否，不进解析器。
   static bool _looksLikeWorldbook(String content) {
-    if (_exceedsMaxDepth(content)) return false;
+    if (exceedsMaxDepth(content)) return false;
     final dynamic root;
     try {
       root = jsonDecode(content);
@@ -273,7 +225,7 @@ class ResourceImportService {
   ///
   /// 深度短路同 [_looksLikeWorldbook]。
   static bool _looksLikeCharacterCard(String content) {
-    if (_exceedsMaxDepth(content)) return false;
+    if (exceedsMaxDepth(content)) return false;
     final dynamic root;
     try {
       root = jsonDecode(content);

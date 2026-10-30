@@ -3,8 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_section.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/language_selector_section.dart';
@@ -32,7 +30,8 @@ class GeneralLanguageInputSettingsPage extends ConsumerWidget {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(
+      appBar: context.lmUi.appBar(
+        context,
         title: t.settings.general.categories.languageInput.title,
       ),
       body: LmMeasure(
@@ -43,7 +42,8 @@ class GeneralLanguageInputSettingsPage extends ConsumerWidget {
               ConfigVisibilityKeys.languageUiLanguage,
               level,
             ))
-              SimpleSettingSection(
+              context.lmUi.settingSection(
+                context,
                 title: t.settings.general.language,
                 child: const LanguageSelectorSection(),
               ),
@@ -52,7 +52,8 @@ class GeneralLanguageInputSettingsPage extends ConsumerWidget {
               ConfigVisibilityKeys.languageSendKey,
               level,
             ))
-              SimpleSettingSection(
+              context.lmUi.settingSection(
+                context,
                 title: t.settings.general.sendKey,
                 child: const SendKeySelectorSection(),
               ),

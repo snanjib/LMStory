@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_card.dart';
+import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/settings/presentation/widgets/default_model_picker_sheet.dart';
@@ -48,7 +48,8 @@ class TitleModelSection extends ConsumerWidget {
       subtitle = t.settings.general.titleModelNotConfigured;
     }
 
-    return SimpleSettingCard(
+    return context.lmUi.settingCard(
+      context,
       icon: Icons.title_outlined,
       title: t.settings.general.titleModel,
       subtitle: subtitle,

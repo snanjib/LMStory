@@ -1,32 +1,40 @@
 import 'dart:async';
+import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/services/file_drop_receiver.dart';
+import 'package:lmstory/core/services/incoming_file_receiver.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/shared/components/brand_logo.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
 import 'package:lmstory/core/theme/system/lm_focus_order.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_shortcuts.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
-import 'package:lmstory/core/theme/system/structures/glass/glass_factories.dart';
-import 'package:lmstory/core/theme/system/structures/glass/glass_materials.dart';
+import 'package:lmstory/core/utils/mac_window_close_guard.dart';
+import 'package:lmstory/core/widgets/file_drop_scope.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/presentation/advanced_mode_flag.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
 import 'package:lmstory/features/advanced/presentation/pages/advanced_chat_page.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
+import 'package:lmstory/features/chat/domain/entities/session_phase_models.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/presentation/controllers/chat_mode_controller.dart';
 import 'package:lmstory/features/chat/presentation/pages/chat/chat_mode_page.dart';
 import 'package:lmstory/features/chat/presentation/pages/home_page.dart';
 import 'package:lmstory/features/chat/presentation/widgets/chat_sidebar.dart';
 import 'package:lmstory/features/chat/presentation/widgets/global_search_dialog.dart';
+import 'package:lmstory/features/director_wizard/domain/entities/director_wizard_outcome.dart';
+import 'package:lmstory/features/director_wizard/presentation/pages/director_wizard_page.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
 import 'package:lmstory/features/intermediate/presentation/controllers/intermediate_chat_controller.dart';
 import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
@@ -106,6 +114,26 @@ List<T> lruEvictCandidates<T>(
 class MainLayout extends ConsumerStatefulWidget {
   const MainLayout({super.key});
 
+  /// 桌面壳判定（纯函数便于行为锁测试）：
+  /// 原生桌面平台恒桌面壳（窄窗由侧栏自动收起适配，不换壳——
+  /// 换壳会令全局快捷键静默失效、侧栏变抽屉、出现触屏语义）；
+  /// Web 与移动平台保持宽度响应式。
+  @visibleForTesting
+  static bool isMobileShell({
+    required double width,
+    required double breakpoint,
+    required bool isWeb,
+    required TargetPlatform platform,
+  }) {
+    if (!isWeb &&
+        (platform == TargetPlatform.macOS ||
+            platform == TargetPlatform.windows ||
+            platform == TargetPlatform.linux)) {
+      return false;
+    }
+    return width < breakpoint;
+  }
+
   @override
   ConsumerState<MainLayout> createState() => _MainLayoutState();
 }
@@ -177,6 +205,48 @@ class _MainLayoutState extends ConsumerState<MainLayout>
         ref.read(autoBackupManagerProvider).runIfNeeded();
       });
     }
+
+    // macOS 关窗拦截：生成中点 ×/Cmd+W 先弹确认，防整轮内容静默丢失
+    //（助手消息只在完成时落库，杀进程即丢当轮）。其他平台无原生端，零开销。
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+      MacWindowCloseGuard.register(
+        isBusy: () async => mounted && _isAnySessionGenerating(),
+        showConfirm: () async {
+          if (!mounted) return true;
+          final t = Translations.of(context);
+          final colors = context.lm.palette;
+          final confirmed = await showLmDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text(
+                t.common.closeWhileGeneratingTitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              content: Text(
+                t.common.closeWhileGeneratingBody,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: Text(t.common.closeWhileGeneratingKeep),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.error,
+                  ),
+                  child: Text(t.common.closeWhileGeneratingConfirm),
+                ),
+              ],
+            ),
+          );
+          return confirmed ?? false;
+        },
+      );
+    }
   }
 
   @override
@@ -210,6 +280,10 @@ class _MainLayoutState extends ConsumerState<MainLayout>
           }
         });
       } else {
+        // 回前台顺手补一次自动备份检查——iOS 挂起期间 Timer 停摆，
+        // 「每次前台不足 20 秒」的轻度用户启动检查与 6h 周期双双落空；
+        // 间隔/开关/空库三条件仍由管理器把关，未到点自然空转。
+        ref.read(autoBackupManagerProvider).runIfNeeded();
         _handleAppResumed();
       }
     }
@@ -284,7 +358,25 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     }
   }
 
-  bool get _isMobile => MediaQuery.of(context).size.width < _mobileBreakpoint;
+  /// 桌面原生平台恒桌面壳：此前纯宽度分流，窗口拖窄到断点下整个壳切
+  /// 「移动壳」——侧栏变抽屉、全局快捷键（LmShortcutHost 只包桌面分支）
+  /// 静默失效、出现触屏语义（汉堡/双击退出）。窄窗改由侧栏自动收起
+  /// 腾出内容宽度（[_sidebarForceHidden]），不再换壳。Web 保持宽度响应式。
+  bool get _isMobile => MainLayout.isMobileShell(
+        width: MediaQuery.of(context).size.width,
+        breakpoint: _mobileBreakpoint,
+        isWeb: kIsWeb,
+        platform: defaultTargetPlatform,
+      );
+
+  /// 桌面窄窗强制收侧栏：窗口容不下「侧栏+最小内容宽」时自动收起，
+  /// 用户仍可用汉堡手动展开（展开后内容区自行变窄适配）。
+  bool get _sidebarForceHidden =>
+      !_isMobile &&
+      MediaQuery.of(context).size.width <= _mobileBreakpoint + _sidebarWidth;
+
+  /// 侧栏当前是否显示（用户开关 && 窗口宽度未触发强制收起）。
+  bool get _sidebarShown => _sidebarVisible && !_sidebarForceHidden;
 
   /// 该会话是否走故事模式内核（intermediate 控制器）。
   bool _usesIntermediateKernel(ChatSession session) =>
@@ -446,6 +538,102 @@ class _MainLayoutState extends ConsumerState<MainLayout>
         state.isGeneratingInBackground;
   }
 
+  /// 是否有任一会话正在生成/压缩（含桌面 replace 切到后台的会话）。
+  /// macOS 关窗拦截据此决定是否弹确认；三模式生成态判定与
+  /// [_isLruExempt] 的 LRU 豁免同源同口径。
+  bool _isAnySessionGenerating() {
+    final sessions = <ChatSession>{
+      ..._navigationStack.whereType<ChatSession>(),
+      ..._backgroundSessions,
+    };
+    bool busy(ChatSession session) {
+      if (_usesAdvancedKernel(session)) {
+        final state = ref.read(advancedChatControllerProvider(session));
+        return state.isManualCompacting ||
+            state.phase != IntermediatePhase.idle;
+      }
+      if (_usesIntermediateKernel(session)) {
+        final state = ref.read(intermediateChatControllerProvider(session));
+        return state.isManualCompacting ||
+            state.phase != IntermediatePhase.idle;
+      }
+      final state = ref.read(chatModeControllerProvider(session));
+      return state.isSending ||
+          state.isStreaming ||
+          state.isCompressing ||
+          state.isGeneratingInBackground;
+    }
+
+    return sessions.any(busy);
+  }
+
+  /// 当前是否停在对话（chat）会话——拖放附件的唯一投放场景
+  /// （故事/导演会话与主界面走资源导入语义）。
+  bool get _isChatSessionActive {
+    final current = _currentSession;
+    return current != null &&
+        !_usesAdvancedKernel(current) &&
+        !_usesIntermediateKernel(current);
+  }
+
+  /// macOS 拖入文件分发：对话会话→附件注入（pendingDropFilesProvider，
+  /// 由输入区消费）；其他场景 PNG/JSON→既有外部导入确认链
+  /// （incomingFileEventsProvider）；其余类型提示不支持。
+  void _handleDroppedFiles(List<IncomingFile> files) {
+    if (files.isEmpty) return;
+    final inChat = _isChatSessionActive;
+    final actions = FileDropRouting.route(
+      inChatSession: inChat,
+      fileNames: [for (final f in files) f.fileName],
+    );
+
+    final attachments = <IncomingFile>[];
+    var imported = 0;
+    var unsupported = 0;
+    String? unsupportedName;
+    for (var i = 0; i < files.length; i++) {
+      switch (actions[i]) {
+        case FileDropAction.attachment:
+          attachments.add(files[i]);
+        case FileDropAction.import:
+          // 注入既有事件流：IncomingImportListener 弹确认并按
+          // 角色卡/世界书/备份分流（emitExternal 绕过双来源去重）
+          ref.read(incomingFileReceiverProvider).emitExternal(files[i]);
+          imported++;
+        case FileDropAction.unsupported:
+          unsupported++;
+          unsupportedName ??= files[i].fileName;
+      }
+    }
+    if (attachments.isNotEmpty) {
+      ref.read(pendingDropFilesProvider.notifier).state = attachments;
+    }
+
+    final t = Translations.of(context);
+    if (!inChat && imported > 0) {
+      // 故事/导演会话或主界面拖入资源文件：说明附件语义不可用
+      _snack(t.chat.attachment.dropModeNoAttachment);
+    }
+    if (unsupported > 0) {
+      _snack(
+        t.settings.resourceLibrary.dropUnsupportedType(
+          name: unsupportedName ?? '',
+        ),
+      );
+    }
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(message, maxLines: 2, overflow: TextOverflow.ellipsis),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   /// 选择会话：桌面端 replace，移动端 push（支持无限回退）
   ///
   /// [focusMessageId]：全局搜索命中进入时携带，
@@ -516,7 +704,18 @@ class _MainLayoutState extends ConsumerState<MainLayout>
   }
 
   /// 新导演：创建 advanced 模式草稿会话（不入库），发送首条消息时才入库
-  void _startNewDirector() {
+  ///
+  /// [phaseModels]：向导产出的会话级 GM 覆盖（null = 空覆盖，跟随全局）；
+  /// [systemPromptOverride]：向导规则步确认产物（null = 跟随全局兜底，
+  /// 传 '' 会物化成显式无规则、阻断全局回退——跳过规则必须传 null）；
+  /// [characterInitPrompt]/[characterCardId]：向导「初始化你的角色」产物
+  /// （描述第 1 轮一次性注入；卡在物化时应用并留档 id）。
+  void _startNewDirector({
+    SessionPhaseModels? phaseModels,
+    String? systemPromptOverride,
+    String? characterInitPrompt,
+    String? characterCardId,
+  }) {
     final t = Translations.of(context);
     final settingsState = ref.read(settingsNotifierProvider);
     final draftSession = ChatSession(
@@ -529,8 +728,29 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       messageCount: 0,
       modelId: settingsState.defaultModelId,
       presetId: settingsState.defaultPresetId,
+      phaseModels: phaseModels ?? const SessionPhaseModels.empty(),
+      systemPromptOverride: systemPromptOverride,
+      characterInitPrompt: characterInitPrompt,
+      characterInitCardId: characterCardId,
     );
     _selectSession(draftSession);
+  }
+
+  /// 导演模式向导入口（2026-10-17 需求）：push 全屏三步向导，
+  /// 走完携带产物建配置就绪的导演草稿会话；跳过/中退即弃（无产物）。
+  Future<void> _startDirectorWizard() async {
+    final outcome = await Navigator.of(context).push<DirectorWizardOutcome>(
+      MaterialPageRoute<DirectorWizardOutcome>(
+        builder: (_) => const DirectorWizardPage(),
+      ),
+    );
+    if (!mounted || outcome == null) return;
+    _startNewDirector(
+      phaseModels: outcome.phaseModels,
+      systemPromptOverride: outcome.systemPromptOverride,
+      characterInitPrompt: outcome.characterInitPrompt,
+      characterCardId: outcome.characterCardId,
+    );
   }
 
   /// 返回上一个导航点
@@ -588,6 +808,11 @@ class _MainLayoutState extends ConsumerState<MainLayout>
 
   void _onHamburgerPressed() {
     if (_isMobile) {
+      _scaffoldKey.currentState?.openDrawer();
+    } else if (_sidebarForceHidden) {
+      // 桌面窄窗：侧栏被宽度判定强制收起，_sidebarVisible 已是 true，
+      // 走内嵌侧栏永远弹不出（汉堡按钮曾因此永远无效）——与移动端
+      // 同构改开抽屉（抽屉在 _buildMainContentPage 条件挂载）。
       _scaffoldKey.currentState?.openDrawer();
     } else {
       setState(() => _sidebarVisible = true);
@@ -720,6 +945,16 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     // 同步 ref.read 计算当前集合 + ref.listen 监听后续变化触发重建
     final generatingSessionIds = _trackGeneratingSessions();
 
+    // macOS 文件拖放：挂在壳最外层，两壳统一接收（receiver 仅 macOS
+    // 有原生端，其他平台零开销）。
+    return FileDropScope(
+      inChatSession: _isChatSessionActive,
+      onFiles: _handleDroppedFiles,
+      child: _buildShell(generatingSessionIds),
+    );
+  }
+
+  Widget _buildShell(Set<String> generatingSessionIds) {
     // 外部"打开方式/分享"导入：收到文件弹确认框（onboarding 完成后生效）
     if (_isMobile) {
       return IncomingImportListener(
@@ -916,11 +1151,11 @@ class _MainLayoutState extends ConsumerState<MainLayout>
         child: Row(
           children: [
             AnimatedSize(
-              duration: LmMotion.base,
+              duration: LmMotion.durationFor(context, LmMotion.base),
               curve: LmMotion.easeBoth,
               child: SizedBox(
-                width: _sidebarVisible ? _sidebarWidth : 0,
-                child: _sidebarVisible
+                width: _sidebarShown ? _sidebarWidth : 0,
+                child: _sidebarShown
                     ? LmFocusOrder(
                         region: LmFocusRegion.sidebar,
                         child: _buildSidebar(
@@ -930,7 +1165,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
                     : const SizedBox.shrink(),
               ),
             ),
-            if (_sidebarVisible)
+            if (_sidebarShown)
               // 侧栏边界是结构分隔线：dividerStrong（对 bg ≥3:1， 语义拆分）。
               VerticalDivider(
                 width: 1,
@@ -940,7 +1175,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
             Expanded(
               child: LmFocusOrder(
                 region: LmFocusRegion.conversation,
-                child: _buildMainContent(),
+                child: _buildMainContent(generatingSessionIds),
               ),
             ),
           ],
@@ -954,6 +1189,13 @@ class _MainLayoutState extends ConsumerState<MainLayout>
   // ---------------------------------------------------------------------------
 
   Widget _buildMobileLayout(Set<String> generatingSessionIds) {
+    return LmArrival(
+      trigger: _currentSession?.mode,
+      child: _buildMobileLayoutContent(generatingSessionIds),
+    );
+  }
+
+  Widget _buildMobileLayoutContent(Set<String> generatingSessionIds) {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) => _onPopInvoked(didPop),
@@ -962,23 +1204,24 @@ class _MainLayoutState extends ConsumerState<MainLayout>
   }
 
   Widget _buildMobileContent(Set<String> generatingSessionIds) {
-    // 抽屉面板自带场地（GlassBackdrop）：面板浮在 scrim+页面之上，而非
-    // 壳层场地之上， fill6 直接透出会是死灰；面板内铺同款渐变 +
-    //  浮起短阴影（设计 §2.3 浮起面），无 blur 不触  白名单红线。
     final drawer = SizedBox(
       width: MediaQuery.of(context).size.width * 0.75,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          boxShadow: GlassMaterials.floatShadow(Theme.of(context).brightness),
-        ),
-        child: GlassBackdrop(
-          child: _buildSidebar(
-            isMobileDrawer: true,
-            generatingSessionIds: generatingSessionIds,
-          ),
+      child: context.lmUi.panelVenue(
+        context,
+        _buildSidebar(
+          isMobileDrawer: true,
+          generatingSessionIds: generatingSessionIds,
         ),
       ),
     );
+
+    // iOS 会话页 leading 换「返回上一级」：会话导航是内部栈非
+    // Navigator 路由，边缘侧滑与 PopScope canPop 动态化（会真 pop
+    // 根路由导致黑屏）都不可行，系统位置一致的返回箭头是安全入口；
+    // 抽屉仍可从屏幕左缘滑开，Android 保持汉堡不变。
+    final iosBackToHome = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+        ? _popNavigation
+        : null;
 
     final current = _currentSession;
     if (current != null) {
@@ -991,6 +1234,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
           drawer: drawer,
           showHamburgerMenu: true,
           onHamburgerPressed: _onHamburgerPressed,
+          onBackToHome: iosBackToHome,
           onSessionDeleted: _goHome,
           initialFocusMessageId: _focusMessageId,
         );
@@ -1001,6 +1245,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
           scaffoldKey: _scaffoldKey,
           drawer: drawer,
           showHamburgerMenu: true,
+          onBackToHome: iosBackToHome,
           onHamburgerPressed: _onHamburgerPressed,
           onSessionDeleted: _goHome,
           initialFocusMessageId: _focusMessageId,
@@ -1012,6 +1257,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
         drawer: drawer,
         showHamburgerMenu: true,
         onHamburgerPressed: _onHamburgerPressed,
+        onBackToHome: iosBackToHome,
         onSessionDeleted: _goHome,
         initialFocusMessageId: _focusMessageId,
       );
@@ -1025,6 +1271,8 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       onNewStory: _startNewStory,
       onNewDirector:
           ref.watch(advancedModeFlagProvider) ? _startNewDirector : null,
+      onDirectorWizard:
+          ref.watch(advancedModeFlagProvider) ? _startDirectorWizard : null,
       onSessionSelected: _selectSession,
       //  修复：与侧边栏共用刷新信号，最近会话/Key 黄条随之更新
       refreshSignal: _sidebarRefreshSignal,
@@ -1035,15 +1283,38 @@ class _MainLayoutState extends ConsumerState<MainLayout>
   // Main content area (desktop)
   // ---------------------------------------------------------------------------
 
-  Widget _buildMainContent() {
+  Widget _buildMainContent(Set<String> generatingSessionIds) {
+    return LmArrival(
+      trigger: _currentSession?.mode,
+      child: _buildMainContentPage(generatingSessionIds),
+    );
+  }
+
+  Widget _buildMainContentPage(Set<String> generatingSessionIds) {
     final current = _currentSession;
+    // 桌面窄窗（侧栏被宽度判定收起）时挂抽屉：汉堡改开抽屉（与移动端
+    // 同构）。宽度钳到 320——桌面窗口的 75% 会远超抽屉合理宽度。
+    final Widget? narrowDrawer = _sidebarForceHidden
+        ? SizedBox(
+            width: math.min(320, MediaQuery.of(context).size.width * 0.75),
+            child: context.lmUi.panelVenue(
+              context,
+              _buildSidebar(
+                isMobileDrawer: true,
+                generatingSessionIds: generatingSessionIds,
+              ),
+            ),
+          )
+        : null;
     if (current != null) {
       // 按 mode 分发：advanced → AdvancedChatPage（导演），
       // intermediate → IntermediateChatPage（故事），其余 → ChatModePage
       if (_usesAdvancedKernel(current)) {
         return AdvancedChatPage(
           session: current,
-          showHamburgerMenu: !_sidebarVisible,
+          scaffoldKey: _scaffoldKey,
+          drawer: narrowDrawer,
+          showHamburgerMenu: !_sidebarShown,
           onHamburgerPressed: _onHamburgerPressed,
           onSessionDeleted: _goHome,
           initialFocusMessageId: _focusMessageId,
@@ -1052,7 +1323,9 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       if (_usesIntermediateKernel(current)) {
         return IntermediateChatPage(
           session: current,
-          showHamburgerMenu: !_sidebarVisible,
+          scaffoldKey: _scaffoldKey,
+          drawer: narrowDrawer,
+          showHamburgerMenu: !_sidebarShown,
           onHamburgerPressed: _onHamburgerPressed,
           onSessionDeleted: _goHome,
           initialFocusMessageId: _focusMessageId,
@@ -1060,19 +1333,25 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       }
       return ChatModePage(
         session: current,
-        showHamburgerMenu: !_sidebarVisible,
+        scaffoldKey: _scaffoldKey,
+        drawer: narrowDrawer,
+        showHamburgerMenu: !_sidebarShown,
         onHamburgerPressed: _onHamburgerPressed,
         onSessionDeleted: _goHome,
         initialFocusMessageId: _focusMessageId,
       );
     }
     return HomePage(
+      scaffoldKey: _scaffoldKey,
+      drawer: narrowDrawer,
       onNewChat: _startNewChat,
       onNewStory: _startNewStory,
       onNewDirector:
           ref.watch(advancedModeFlagProvider) ? _startNewDirector : null,
+      onDirectorWizard:
+          ref.watch(advancedModeFlagProvider) ? _startDirectorWizard : null,
       onSessionSelected: _selectSession,
-      showHamburgerMenu: !_sidebarVisible,
+      showHamburgerMenu: !_sidebarShown,
       onHamburgerPressed: _onHamburgerPressed,
       //  修复：同移动端，桌面首页随侧边栏信号刷新
       refreshSignal: _sidebarRefreshSignal,

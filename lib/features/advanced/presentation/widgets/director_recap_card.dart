@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_anchor_edit_sheet.dart';
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
@@ -65,9 +66,7 @@ class _DirectorRecapCardState extends State<DirectorRecapCard> {
     // 阅读行宽钳制（与稿件卡同款；移动端视口窄于上限不受影响）
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: IntermediateSpacing.readingWidth,
-        ),
+        constraints: BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
         child: Padding(
           padding: const EdgeInsets.only(bottom: IntermediateSpacing.sMd),
           child: Container(

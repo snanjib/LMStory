@@ -1,108 +1,87 @@
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/theme/shared/components/breathing_dot.dart';
 import 'package:lmstory/core/theme/system/palettes/classic/classic_palette.dart';
 
-/// BreathingDot Widget 测试
-///
-/// 验证：
-/// 1. 普通模式：渲染 8x8 圆点，使用主题 primary 槽
-/// 2. reduced-motion 模式（accessibleNavigation=true）：静态渲染圆点，不崩溃
-/// 3. 自定义 size 参数生效
-/// 4. 圆点装饰为 BoxShape.circle
-///
-/// 权威设计：DOC-06A §侧边栏会话项 + impeccable breathing 规范。
 void main() {
-  Widget wrap(Widget child, {bool accessibleNavigation = false}) {
-    return MaterialApp(
-      home: Scaffold(
-        body: MediaQuery(
-          data: MediaQueryData(accessibleNavigation: accessibleNavigation),
-          child: child,
+  Future<void> host(
+    WidgetTester tester, {
+    bool reduce = false,
+    double size = 8,
+  }) =>
+      tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MediaQuery(
+              data: MediaQueryData(accessibleNavigation: reduce),
+              child: BreathingDot(size: size),
+            ),
+          ),
         ),
-      ),
-    );
-  }
-
-  group('BreathingDot 普通模式', () {
-    testWidgets('1. 渲染 8x8 圆点，颜色为主题 primary 槽', (tester) async {
-      await tester.pumpWidget(wrap(const BreathingDot()));
-
-      // 推进一帧让动画启动
-      await tester.pump(const Duration(milliseconds: 50));
-
-      // 找到圆点 Container
-      final dotFinder = find.descendant(
-        of: find.byType(BreathingDot),
-        matching: find.byType(Container),
       );
-      expect(dotFinder, findsWidgets);
 
-      // 取第一个 Container，验证尺寸为 8x8
-      final container = tester.widget<Container>(dotFinder.first);
-      final decoration = container.decoration! as BoxDecoration;
-      expect(decoration.shape, BoxShape.circle);
-      expect(decoration.color, ClassicPaletteValues.light.primary);
-    });
-
-    testWidgets('2. 动画运行中 opacity 在 [0.4, 1.0] 区间', (tester) async {
-      await tester.pumpWidget(wrap(const BreathingDot()));
-      await tester.pump(const Duration(milliseconds: 100));
-
-      // Opacity widget 应存在
-      final opacityFinder = find.descendant(
-        of: find.byType(BreathingDot),
-        matching: find.byType(Opacity),
-      );
-      expect(opacityFinder, findsWidgets);
-
-      final opacity = tester.widget<Opacity>(opacityFinder.first).opacity;
-      expect(opacity, greaterThanOrEqualTo(0.4));
-      expect(opacity, lessThanOrEqualTo(1.0));
-    });
+  testWidgets('activity dot paints the default circle in the primary color',
+      (tester) async {
+    await host(tester);
+    await tester.pump(const Duration(milliseconds: 100));
+    final (width, height, bytes) = await pixels(tester);
+    expect((width, height), (8, 8));
+    final center = (4 * width + 4) * 4;
+    final color = ClassicPaletteValues.light.primary;
+    expect(bytes[center], closeTo((color.r * 255).round(), 1));
+    expect(bytes[center + 1], closeTo((color.g * 255).round(), 1));
+    expect(bytes[center + 2], closeTo((color.b * 255).round(), 1));
+    expect(bytes[center + 3], greaterThan(0));
+    expect(bytes[3], lessThan(bytes[center + 3] / 4));
   });
 
-  group('BreathingDot reduced-motion 模式', () {
-    testWidgets('3. accessibleNavigation=true 时静态渲染，不崩溃', (tester) async {
-      await tester.pumpWidget(
-        wrap(const BreathingDot(), accessibleNavigation: true),
-      );
-      await tester.pump(const Duration(milliseconds: 50));
-
-      // 圆点仍可见
-      final dotFinder = find.descendant(
-        of: find.byType(BreathingDot),
-        matching: find.byType(Container),
-      );
-      expect(dotFinder, findsWidgets);
-
-      // Opacity 固定为 0.7（静态兜底）
-      final opacityFinder = find.descendant(
-        of: find.byType(BreathingDot),
-        matching: find.byType(Opacity),
-      );
-      expect(opacityFinder, findsWidgets);
-      final opacity = tester.widget<Opacity>(opacityFinder.first).opacity;
-      expect(opacity, 0.7);
-    });
+  testWidgets('activity changes its painted pixels between frames',
+      (tester) async {
+    await host(tester);
+    await tester.pump(const Duration(milliseconds: 100));
+    final first = (await pixels(tester)).$3;
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(listEquals(first, (await pixels(tester)).$3), isFalse);
   });
 
-  group('BreathingDot 自定义尺寸', () {
-    testWidgets('4. size=12 生成 12x12 圆点', (tester) async {
-      await tester.pumpWidget(wrap(const BreathingDot(size: 12)));
-      await tester.pump(const Duration(milliseconds: 50));
-
-      final dotFinder = find.descendant(
-        of: find.byType(BreathingDot),
-        matching: find.byType(Container),
-      );
-      expect(dotFinder, findsWidgets);
-
-      final container = tester.widget<Container>(dotFinder.first);
-      final decoration = container.decoration! as BoxDecoration;
-      expect(decoration.shape, BoxShape.circle);
-      // 验证 size 通过 Container 的 width/height 传入
-      expect(container.constraints?.maxWidth, 12);
-    });
+  testWidgets('reduced motion keeps a visible stationary dot', (tester) async {
+    await host(tester, reduce: true);
+    await tester.pumpAndSettle();
+    final first = (await pixels(tester)).$3;
+    await tester.pump(const Duration(seconds: 2));
+    expect(listEquals(first, (await pixels(tester)).$3), isTrue);
+    expect(tester.widget<Opacity>(find.byType(Opacity)).opacity, 0.7);
+    expect(tester.binding.transientCallbackCount, 0);
   });
+
+  testWidgets('custom size preserves the requested painted footprint',
+      (tester) async {
+    await host(tester, size: 12);
+    await tester.pump(const Duration(milliseconds: 100));
+    final result = await pixels(tester);
+    expect((result.$1, result.$2), (12, 12));
+    expect(tester.takeException(), isNull);
+  });
+}
+
+Future<(int, int, List<int>)> pixels(WidgetTester tester) async {
+  final boundary = tester.renderObject<RenderRepaintBoundary>(
+    find.descendant(
+      of: find.byType(BreathingDot),
+      matching: find.byType(RepaintBoundary),
+    ),
+  );
+  return (await tester.runAsync(() async {
+    final image = await boundary.toImage();
+    final bytes =
+        await image.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
+    final result =
+        (image.width, image.height, bytes!.buffer.asUint8List().toList());
+    image.dispose();
+    return result;
+  }))!;
 }

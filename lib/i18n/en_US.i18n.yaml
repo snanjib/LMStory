@@ -1,4 +1,11 @@
 common:
+  errors:
+    anthropicMaxTokens: 'Anthropic requires max_tokens; when it is configured as 0, the model''s max-output metadata is needed. Fill in "Max output" in model settings, or use a positive limit.'
+    llmUnknownStreamError: "Unknown stream error"
+    llmCancelled: "Cancelled"
+    llmTimeout: "Request timed out"
+    llmEmptyResponse: "The model returned an empty response (no text or tool calls)"
+    llmNonStreamFailed(detail): "Non-streaming request failed: $detail"
   confirm: Confirm
   cancel: Cancel
   save: Save
@@ -8,6 +15,11 @@ common:
   copy: Copy
   close: Close
   retry: Retry
+  # macOS close-window confirmation while generation is running
+  closeWhileGeneratingTitle: Generation in progress
+  closeWhileGeneratingBody: Closing the window interrupts the current generation; content already streamed but not yet saved will be lost.
+  closeWhileGeneratingKeep: Keep generating
+  closeWhileGeneratingConfirm: Close anyway
   loading: Loading…
   error: Something went wrong
   noResults: No matches
@@ -63,17 +75,32 @@ common:
     compactStreamingTitle: Generating story recap…
     noData: —
     ringTooltip: Context usage (tap for details)
+    # Usage provenance footnote (context usage fallback): "—" = item not
+    # reported by the endpoint; "≈" prefix = locally estimated by the app
+    usageNote: '"—" means the endpoint did not report this item; "≈" marks locally estimated values'
+    estTokenCount: "≈ $count tokens"
   seedResource:
     applyCard: Apply character card
     applyBook: Apply worldbook
     resourceEmpty: No resources yet — import them first under "Settings → Character cards/Worldbooks"
-    resourceApplied: Applied $count entries
+    resourceApplied(param=count):
+      one: "Applied $count entry"
+      other: "Applied $count entries"
     resourceApplyFailed: Apply failed
+    duplicateCharacter(name): "A character named \"$name\" already exists; application rejected"
+    readOnlyAttributeCannotBeModified: Read-only resource attribute cannot be modified
+    readOnlyEntityCannotBeDeleted: Read-only resource entity cannot be deleted
+    readOnlyAttributeCannotBeDeleted: Read-only resource attribute cannot be deleted
+    readOnlyEntityContentCannotBeEdited: Read-only resource entity content cannot be edited
     previewTitle: Apply preview
-    previewConstantCount: Includes $count constant entries (added to context every round)
+    previewConstantCount(param=count):
+      one: "Includes $count constant entry (added to context every round)"
+      other: "Includes $count constant entries (added to context every round)"
     previewBaselineSection: Will be imported as a read-only baseline
     previewInjectionSection: Injection
-    previewKeywordCount(count): The other $count entries trigger on keywords
+    previewKeywordCount(count, param=count):
+      one: "The other $count entry triggers on keywords"
+      other: "The other $count entries trigger on keywords"
     previewHint: 'Imported content becomes a read-only baseline: as the story evolves, the AI''s changes live alongside as separate "evolved" entries instead of overwriting the original. You can unapply at any time.'
     previewApply: Apply
     previewLabelBackground: Background
@@ -85,12 +112,15 @@ common:
     unapplyResource: Unapply resources
     unapplyEmpty: No character cards or worldbooks applied to this session
     unapplyItemLabel: $name ($count entries)
-    unapplyConfirm: 'Remove the $count entries of "$name"?
-
-
-      All attributes of these entries, including values the AI evolved, will be deleted. This cannot be undone.'
-    unapplyDone: Removed $count entries
+    unapplyConfirm(param=count):
+      one: "Remove the $count entry of \"$name\"?\\n\\nAll attributes of these entries, including values the AI evolved, will be deleted. This cannot be undone."
+      other: "Remove the $count entries of \"$name\"?\\n\\nAll attributes of these entries, including values the AI evolved, will be deleted. This cannot be undone."
+    unapplyDone(param=count):
+      one: "Removed $count entry"
+      other: "Removed $count entries"
 chat:
+  # 2026-10-15 batch F / P8: auto-retry placeholder status line
+  autoRetryNoticeLine(count): 'Network glitch · auto-retry attempt $count'
   inSessionSearch:
     menuTitle: Search in session
     placeholder: Search session content…
@@ -98,7 +128,9 @@ chat:
     next: Next (Enter)
     close: Close search
     noResults: No results
-    truncated(n): Showing the last $n matches
+    truncated(n, param=n):
+      one: "Showing the last $n match"
+      other: "Showing the last $n matches"
   roundDoneHint: Round complete · Tap to view
   attachmentLimit:
     image: Attach up to $count images
@@ -146,9 +178,13 @@ chat:
     modeDirector: Director
   home:
     title: LMStory
+    continueStory: Continue your story
+    resumeStory: Return to story
     subtitle: You push forward, AI responds, the world grows.
     newChat: New chat
     newChatDesc: Pick a model and start a new chat
+    # Hint row when the fixed one-screen layout clips all recent sessions
+    recentAllInSidebar: Lots of sessions — open the sidebar to see them all
     recentSessions: Recent sessions
     noRecentSessions: No sessions yet
     noRecentSessionsDesc: Start your first chat
@@ -159,11 +195,19 @@ chat:
     apiKeyMissingDesc: Configure one to send messages to AI models
   draft:
     title: New chat
+  # Banner shown atop an unconfigured draft session page
+  modelConfigBanner:
+    title: Chat model not configured
+    message: Pick a default model and set up its API key before sending
+    configure: Set up
+    dismiss: Close
   globalSearch:
     hint: Search messages…
     noResults: No matching messages found
     error: Search failed. Please try again.
-    truncated(n): Showing the last $n matches
+    truncated(n, param=n):
+      one: "Showing the last $n match"
+      other: "Showing the last $n matches"
   branch:
     indicator: $current/$total
     switchLeft: Previous branch
@@ -193,9 +237,15 @@ chat:
     summaryUnavailable: Summary unavailable (original summary record missing)
   time:
     justNow: Just now
-    minutesAgo: $n minutes ago
-    hoursAgo: $n hours ago
-    daysAgo: $n days ago
+    minutesAgo:
+      one: $n minute ago
+      other: $n minutes ago
+    hoursAgo:
+      one: $n hour ago
+      other: $n hours ago
+    daysAgo:
+      one: $n day ago
+      other: $n days ago
     dateShort: $month/$day
   empty:
     noSession: No sessions yet
@@ -234,6 +284,10 @@ chat:
     noModel: No model selected
     title: Select model
   attachment:
+    dropOverlaySession: Release to attach to this conversation
+    dropOverlayImport: Release to import files
+    dropAttached(count): Attached $count file(s)
+    dropModeNoAttachment: Attachments are chat-only; PNG/JSON were routed to resource import
     add: Add attachment
     uploadImage: Upload image
     selectFile: Select file
@@ -247,7 +301,7 @@ chat:
     temperature: Temperature
     topP: Top P
     maxTokens: Max tokens
-    maxTokensHint: Input token limit (clear to reset to the current global value)
+    maxTokensHint: Token limit per reply (clear to reset to the current global value)
     maxContextMessages: Max context messages
     maxContextMessagesNoLimit: No limit
     streamEnabled: Streaming output
@@ -320,10 +374,17 @@ advanced:
   sessionSettingsTitle: Session settings
   emptyHint: In Director mode, the AI showrunner autonomously searches memories, writes the story prose, and maintains the setting. Send the first line to begin.
   failure:
-    gmMissing: 'Director main model not configured: go to "Settings → Director mode settings → Model & generation" to configure the director main model, then resend'
+    gmMissing: 'Director main model not configured: go to "Settings → Director mode settings → Models & generation" to configure the director main model, then resend'
     contextOverflow: Still over the limit after an auto-compaction retry; compact manually or simplify the input
-  retryWaitingBadge: Waiting out rate limit
+  # 2026-10-15 batch F: badge word follows the cause
+  retryWaitingBadge: Waiting to retry
   retryWaitingCountdown(attempt, seconds): Retry attempt $attempt in ${seconds}s
+  retryWaitingProgress(reason, attempt, max, seconds): '$reason · attempt $attempt/$max in ${seconds}s'
+  retryReasonRateLimited: Rate-limited, cooling down
+  retryReasonServer: Server error
+  retryReasonTimeout: Response timed out
+  retryReasonStream: Connection lost
+  retryReasonBadResponse: Bad response
   variant:
     switcherLabel(n, m): Version $n of $m
     prev: Previous version
@@ -380,9 +441,14 @@ advanced:
     countdownAsk(minutes): No response after $minutes min; the AI will decide on its own
     countdownApproval(minutes): No response after $minutes min; it will be treated as denied
     waitForever: Waiting for your reply as long as it takes
+    # P2 wait-forever switch : approval banner text when timeout off
+    waitForeverApproval: Confirm timeout is off; waiting for your decision as long as it takes
     introAsk: When the AI hits a key decision, it will ask you to make the call; if you don't respond in time, it decides on its own
     introApproval: Key writes ask for your confirmation; if you don't respond in time, they're treated as denied (fail-closed)
-    approvalFacts: $count setting revisions
+    scrollMore: Scroll for more
+    approvalFacts(param=count):
+      one: "$count fact revision"
+      other: "$count fact revisions"
     approvalAnchor: Story anchor update
     approvalAnchorWithParts: Story anchor update ($parts)
     approvalEvent: Add to chronicle
@@ -399,6 +465,8 @@ advanced:
     groupIdleWithTime: $steps steps backstage · $segments thinking segments · ${seconds}s
     thinkingDuration: Thinking · $seconds s
     aggregatedActions(verb, count): $verb × $count
+    interruptedToolPlaceholder: "Interrupted"
+    interruptedToolOutput: "(Application interrupted, not executed; please retry in subsequent turns if still needed)"
     narrationLabel: Director narration
   heartbeat:
     composing: The director is composing…
@@ -412,12 +480,16 @@ advanced:
     foreshadowsResolved: Paid off
     foreshadowsExpandAll(count): Show $count more
     foreshadowsCollapse: Collapse
-    factsChanges(count): 'Fact set: $count changes'
+    factsChanges(count, param=count):
+      one: "Fact set: $count change"
+      other: "Fact set: $count changes"
   export:
     menuLabel: Export manuscript
     sheetTitle: Export manuscript
     scopeTitle: Scope
-    scopeAll(count): All ($count acts)
+    scopeAll(count, param=count):
+      one: "All ($count act)"
+      other: "All ($count acts)"
     scopeCurrent(act): Current act (Act $act)
     scopeCurrentNone: Current act (no completed acts yet)
     contentTitle: Content
@@ -428,16 +500,20 @@ advanced:
     confirm: Export
     shared: System share sheet opened
     failed: Export failed
-    actsCount(count): $count acts
+    actsCount(count, param=count):
+      one: "$count act"
+      other: "$count acts"
     actOf(act): Act $act
     exportedAt(time): Exported at $time
     noRounds: No completed acts yet
     directiveLabel: Director instruction
     backstageLabel: Backstage process
     backstageWithSteps(steps): Backstage process · $steps steps
-    backstageWithStepsAndSeconds(steps, seconds): Backstage process · $steps steps · ${seconds}s
+    backstageWithStepsAndSeconds(steps, seconds, param=steps):
+      one: "Backstage process · $steps step · ${seconds}s"
+      other: "Backstage process · $steps steps · ${seconds}s"
     narrationPrefix: Narration
-    recapTitle: Inter-act story anchor
+    recapTitle: Interlude story anchor
     narrativeTimeLabel: Narrative time
   anchorEdit:
     entry: Edit
@@ -474,6 +550,9 @@ advanced:
     directive: This round's instruction
     estimateNote: Token counts per segment are estimates — the latest request's input is split by character share at assembly time
   scrollToLatest: Jump to latest
+  # Working-round instruction strip — pinned when the sent instruction bubble
+  # scrolls out of view during live streaming; tap to jump back to it
+  activeInstructionLabel: Current instruction
   contextRing:
     compactModelMissing: No model configured; pick a main model in Director mode settings first
   audit:
@@ -488,14 +567,81 @@ advanced:
     title: 'Confirm write: $tool'
     allow: Allow
     deny: Deny
+    # Deny with an optional work-guidance note (injected into the agent's next loop)
+    denyWithFeedback: Deny with note
+    denyFeedbackHint: The note is fed back to the AI as work guidance for its next step; clear it to deny without a note
+    denyQuickReason: Do not make this change; continue with the existing settings
+    denyConfirm: Confirm denial
     alwaysAllow: Always allow for this session
     sessionAlwaysRemembered(tool): '"$tool" will be allowed for the rest of this session without further confirmation'
     sessionAllowTrace(tool): 'Auto-allowed via "Always allow for this session": $tool'
+    approvedTrace(tool, count): 'Approved "$tool" · $count change(s)'
+    approvedTraceNoted: ' (with director note)'
+    # 2026-10-15 batches B/C: change details + shared note box (P1-P4)
+    changesToggleShow(count): 'Review $count change(s)'
+    changesToggleHide: Hide details
+    kindCreate: Create
+    kindUpdate: Update
+    kindAppend: Append
+    kindRemove: Remove
+    kindAlias: Alias
+    kindArchive: Archive
+    kindMerge: Merge
+    kindAnchor: Anchor
+    kindEvent: Chronicle
+    kindSnapshot: Reference
+    confidenceBadge(n): 'Confidence $n/5'
+    beforeLabel: Old
+    afterLabel: New
+    reasonLabel: Reason
+    commentEntry: Add a note (optional)
+    commentHint: One-off guidance sent to the AI with your decision; leave empty to send nothing. For standing rules, edit project rules or settings instead
+    pendingPriorFootnote(count): '$count earlier change(s) approved this round are staged and will be committed together at wrap-up'
+    noteMissingFields: Incomplete parameters; will not take effect
+    noteEntityMissing: Entity not found; will not take effect
+    noteNameIsIdentity: Primary name is identity; will be converted to adding an alias
+    noteWhitelist: Attribute not in the type whitelist; will be rejected
+    noteTooLong: Content too long; will be rejected
+    noteTooFrequent: Modified too often recently; will be skipped
+    noteUnchanged: Same value; no change will occur
+    noteConfidenceGate: Confidence below the key-attribute gate; will be rejected
+    noteListRejects: List attribute cannot be overwritten wholesale; will be rejected (append or remove items instead)
+    noteBaselineRedirect: Currently a single-value attribute; will be converted to a wholesale update
+    noteDuplicate: Same or similar entry already exists; will not be written again
+    noteNoMutableList: No removable list attribute; will not take effect
+    noteValueNotInList: Item not in the list; will not take effect
+    noteAliasSameAsPrimary: Same as the primary name; will not be written
+    noteAliasLimit: Alias limit reached; will not be written
+    noteAlreadyArchived: Already archived; will not archive again
+    noteSameNameUpdate: An entity with this name exists; will be converted to updating its attribute
+    noteSameNameAlias: An entity with this name exists; will be converted to adding an alias to it
+    noteCreatesAttrRow: Attribute does not exist yet; will be created
+    anchorEntityName: Story anchor
+    anchorFieldArc: Arc
+    anchorFieldMainline: One-line mainline
+    anchorFieldTime: Narrative time
+    anchorFieldForeshadow: Foreshadowing
+    foreshadowDiff(added, removed): '$added added, $removed removed (full replacement)'
+    eventEntityName: Chronicle
+    eventFieldWho: Who
+    eventFieldWhen: When
+    eventFieldWhere: Where
+    eventFieldSignificance: Significance
+    noteEventReplace: Will replace the previous chronicle entry of this round
+    mergePair(source, target): '"$source" → "$target"'
+    mergeIntentPlain(source, target): 'Merge "$source" into "$target": aliases and attributes of $source move into $target, and $source is archived'
+    noteMergeDetail: Full merge breakdown arrives in a later release; the target entity's current profile is shown below for reference
   home:
     newDirector: New director
-    newDirectorDesc: Director mode (experimental)
+    newDirectorDesc: You set the rules; the AI showrunner writes the prose
+  # Model-config guide banner (atop the director session empty state)
+  modelConfigBanner:
+    title: Director main model (GM) not configured
+    message: Pick the main model in Director settings before sending
+    configure: Set up
+    dismiss: Close
   settings:
-    title: Director mode (experimental)
+    title: Director mode
     sheetTitle: Director mode settings
     desc: 'When enabled, a "New director" entry appears on the home screen and in the sidebar: the AI showrunner autonomously searches memories and maintains the setting'
     sectionMemoryDesc: Browse, search, and edit this session's experiences and facts (add, edit, and delete manually)
@@ -515,14 +661,16 @@ advanced:
     sessionAllowDesc: Remembered "Always allow for this session" grants from approval cards (this session only; no per-item confirmations from the next round on)
     clearSessionAllows: Clear session allows
     sessionAllowCount(n): $n active
-    sessionAllowCleared(count): Cleared $count session allows
-    sessionAllowNone: No approval allows in this session yet
+    sessionAllowCleared(count, param=count):
+      one: "Cleared $count session allow"
+      other: "Cleared $count session allows"
+    sessionAllowNone: No session allows yet
     saved: Saved
     saveFailed: Save failed; try again later
     saveBlockedWhileGenerating: Settings can't be saved while a generation is running — stop this round first
     collapseAll: Collapse all
     expandAll: Expand all
-    sectionModelGeneration: Model & generation
+    sectionModelGeneration: Models & generation
     sectionSupervision: Supervision & tools
     sectionContext: Context & compaction
     resetToGlobalSnapshot: Reset to current global values
@@ -536,7 +684,7 @@ advanced:
     sectionContextDesc: Context and compaction settings are saved per session; "Reset to current global values" writes a snapshot of the global values at this moment; editing is blocked during generation
     sectionMemoryManagement: Memory management
     sectionResource: Character card/Worldbook
-    openMemoryBrowser: Browse memory
+    openMemoryBrowser: Open memory store
     rulesSelectTemplate: Select template
     maxDurationMinutes(n): $n min
     generation:
@@ -546,7 +694,9 @@ advanced:
       frequencyPenalty: Frequency penalty
     memory:
       rebuildVectorIndexConfirmTitle: Confirm vector index rebuild
-      rebuildVectorIndexConfirmContent: The embedding model API will be called once per memory for $count memories, which may produce many requests. Failed items are skipped and don't interrupt the overall rebuild.
+      rebuildVectorIndexConfirmContent(param=count):
+        one: "The embedding model API will be called once per memory for $count memory, which may produce many requests. Failed items are skipped and don't interrupt the overall rebuild."
+        other: "The embedding model API will be called once per memory for $count memories, which may produce many requests. Failed items are skipped and don't interrupt the overall rebuild."
       rebuildVectorIndexButton: Rebuild vector index
       rebuildVectorIndexRunning: Rebuilding…
       rebuildVectorIndexProgress: Processed $processed / $total ($failed failed)
@@ -554,8 +704,12 @@ advanced:
       rebuildVectorIndexFailureBusy: Cannot rebuild while generating; wait for the current round to finish
       rebuildVectorIndexFailureNotConfigured: No embedding model configured; set one up in global settings first
     generationGroup: Generation parameters
-    rebuildPendingCount: $count memories not vectorized
-    rebuildStaleCount(count): $count don't match the new model
+    rebuildPendingCount(param=count):
+      one: "$count memory not vectorized"
+      other: "$count memories not vectorized"
+    rebuildStaleCount(count, param=count):
+      one: "$count doesn't match the new model"
+      other: "$count don't match the new model"
     customPreset: Custom
     sectionPacing: Story pacing
     sectionPacingDesc: Three tiers control how far the story advances each round; only the aggressive tier requires the prose to be written out in full. Changes take effect next round
@@ -593,7 +747,7 @@ intermediate:
       settings intact
   chat:
     inputPlaceholder: Push the story forward…
-    inputPlaceholderFailed: Retry or clear this round first
+    inputPlaceholderFailed: Type a new message to send directly…
     send: Send
     stop: Stop
     stopping: Stopping…
@@ -615,24 +769,36 @@ intermediate:
       expand: Expand
       close: Close
     generating: Generating…
+    # 2026-10-15 batch F: inline auto-retry status line
+    autoRetryLine(count): 'Network glitch, auto-retrying · attempt $count'
     generatedReady: Generation complete
     extractingHint: Analyzing…
     extractingReady: 'Keywords: $count'
     retrieving: Recalling…
-    retrievalReady: Found $count related experiences
+    retrievalReady(param=count):
+      one: "Found $count related experience"
+      other: "Found $count related experiences"
     retrievalEmpty: No related experiences found
-    retrievalEmptyThresholdNote: 'Semantic retrieval recalls memories by similarity threshold: memories with too-low relevance are not injected into this round. Zero hits does not mean the memory bank is empty.'
+    retrievalEmptyThresholdNote: 'Semantic retrieval recalls memories by similarity threshold: memories with too-low relevance are not injected into this round. Zero hits does not mean the memory store is empty.'
     retrievalMode:
       semantic: Semantic
       keyword: Keyword
       degraded: Keyword (temporary fallback)
+    # Model-config guide banner (atop the story session empty state)
+    modelConfigBanner:
+      title: Story model not configured
+      message: Configure the generating model in Story settings before sending
+      configure: Set up
+      dismiss: Close
     embeddingMissingBanner:
       title: No embedding model configured
       message: Currently using keyword retrieval; configure one to enable semantic retrieval and improve memory recall accuracy
       configure: Configure
       dismiss: Close
     factsSectionTitle: Related facts
-    factsSectionReady: $count entities
+    factsSectionReady(param=count):
+      one: "$count entity"
+      other: "$count entities"
     factsKeyEntityBadge: Key
     factsMatchedBadge: Matched
     factsArchivedBadge: Archived
@@ -643,7 +809,9 @@ intermediate:
     factsTypeOrganization: Organization
     factsTypeMisc: Misc
     factsChangeHint: Updating facts…
-    factsChangeReady: Facts updated · $count items
+    factsChangeReady(param=count):
+      one: "Facts updated · $count item"
+      other: "Facts updated · $count items"
     historyFactsChangeReady: Round $turn · Facts updated · $count items
     factsChangeEmpty: No fact changes this round
     similarNameBadge: Possible duplicate
@@ -666,7 +834,9 @@ intermediate:
     preparingRegenerate: Preparing to regenerate…
     historyGeneratedReady: Round $turn · Generation complete
     historyExtractingReady: 'Round $turn · Keywords: $count'
-    historyRetrievalReady: Round $turn · Found $count related experiences
+    historyRetrievalReady(param=count):
+      one: "Round $turn · Found $count related experience"
+      other: "Round $turn · Found $count related experiences"
     historyRetrievalEmpty: Round $turn · No related experiences found
     historySummarizingReady: Round $turn · Summary generated
     extractFailed: Extraction failed
@@ -769,13 +939,19 @@ intermediate:
       sectionResource: Character card/Worldbook
       rebuildVectorIndexTitle: Rebuild memory index
       rebuildVectorIndexDesc: Indexes this session's important memories that have no retrieval index yet, so the AI can recall them (also rebuild here after switching embedding models)
-      rebuildVectorIndexCount: $count memories have no index yet
-      rebuildVectorIndexStaleCount(count): $count don't match the new model
+      rebuildVectorIndexCount(param=count):
+        one: "$count memory has no index yet"
+        other: "$count memories have no index yet"
+      rebuildVectorIndexStaleCount(count, param=count):
+        one: "$count doesn't match the new model"
+        other: "$count don't match the new model"
       rebuildVectorIndexNoPending: All memories are vectorized
       rebuildVectorIndexButton: Rebuild memory index
       rebuildVectorIndexRunning: Rebuilding…
       rebuildVectorIndexConfirmTitle: Confirm vector index rebuild
-      rebuildVectorIndexConfirmContent: The embedding model API will be called once per memory for $count memories, which may produce many requests. Failed items are skipped and don't interrupt the overall rebuild.
+      rebuildVectorIndexConfirmContent(param=count):
+        one: "The embedding model API will be called once per memory for $count memory, which may produce many requests. Failed items are skipped and don't interrupt the overall rebuild."
+        other: "The embedding model API will be called once per memory for $count memories, which may produce many requests. Failed items are skipped and don't interrupt the overall rebuild."
       rebuildVectorIndexConfirmAction: Start rebuild
       rebuildVectorIndexProgress: Processed $processed / $total ($failed failed)
       rebuildVectorIndexResultSuccess: $succeeded succeeded, $failed failed
@@ -792,7 +968,9 @@ intermediate:
       menuLabel: Export manuscript
       sheetTitle: Export story
       scopeTitle: Scope
-      scopeAll(count): All rounds ($count rounds)
+      scopeAll(count, param=count):
+        one: "All rounds ($count round)"
+        other: "All rounds ($count rounds)"
       scopeLastNone: Latest round only (no completed rounds)
       scopeLast(round): Latest round only (round $round)
       contentTitle: Content
@@ -804,7 +982,9 @@ intermediate:
       shared: System share sheet opened
       failed: Export failed
       noRounds: No rounds to export yet
-      roundsCount(count): $count rounds in total
+      roundsCount(count, param=count):
+        one: "$count round in total"
+        other: "$count rounds in total"
       roundOf(round): Round $round
       roundLabel(turn): Round $turn
       inputLabel: Instruction
@@ -823,8 +1003,10 @@ intermediate:
       collapseDetail: Collapse details
       technicalDetail: Technical details
       suggestedAction: Suggested action
-      continueWithFts5: Fall back to keyword retrieval
+      continueWithFts5: Temporarily fall back to keyword retrieval
       continueFromFailed: Continue from interruption
+      # Banner text when a stop keeps the partial manuscript (errorCode=user_stopped)
+      stopped: Generation stopped. The partial text is kept as an unfinished draft.
       acceptPartial: Accept as final
       continueWriting: Continue writing
       copyError: Copy error
@@ -935,17 +1117,25 @@ intermediate:
       typeOrganization: Organization
       typeMisc: Misc
   memoryBrowser:
-    title: Memory bank
+    title: Memory store
     emptyListValue: (Empty)
     tabExperiences: Experiences
     tabFacts: Facts
     indexHealthTitle: Memory index
     indexHealthHealthy: Index complete
-    indexHealthKeywordPending(count): $count memories missing a keyword index
-    indexHealthEmbeddingPending(count): $count memories not vectorized
-    indexHealthEmbeddingStale(count): $count memories mismatched with the new model
+    indexHealthKeywordPending(count, param=count):
+      one: "$count memory is missing a keyword index"
+      other: "$count memories are missing a keyword index"
+    indexHealthEmbeddingPending(count, param=count):
+      one: "$count memory is not vectorized"
+      other: "$count memories are not vectorized"
+    indexHealthEmbeddingStale(count, param=count):
+      one: "$count memory mismatches the new model"
+      other: "$count memories mismatch the new model"
     indexHealthRepair: Fix keyword index
-    indexHealthRepaired(count): Fixed $count memories
+    indexHealthRepaired(count, param=count):
+      one: "Fixed $count memory"
+      other: "Fixed $count memories"
     indexHealthRepairFailed: Repair failed; check the diagnostic logs
     archivedBadge: Archived
     archiveMemory: Archive
@@ -972,7 +1162,9 @@ intermediate:
     findSimilar: Find similar
     findSimilarTitle: Possible duplicate entities (overlapping names)
     findSimilarEmpty: No possible duplicates with overlapping names found
-    findSimilarGroupCount(count): $count entities · Tap to preselect for merge
+    findSimilarGroupCount(count, param=count):
+      one: "$count entity · Tap to preselect for merge"
+      other: "$count entities · Tap to preselect for merge"
     forceInjectOff: 'Off'
     forceInjectWorld: World lore
     forceInjectDirective: Constant directive
@@ -999,13 +1191,15 @@ intermediate:
     mergeConfirmModel(model): 'Model: $model'
     mergeCancel: Cancel
     mergeContinue: Continue
-    mergeModelNotConfigured: This session has no usable "generate" model configured (merging uses the same model as conversation generation). Configure one in Session settings or Settings → Story mode → Stepwise models, then merge again
+    mergeModelNotConfigured: This session has no usable "generate" model configured (merging uses the same model as conversation generation). Configure one in Session settings or Settings → Story mode settings → Model configuration, then merge again
     mergePlanning: Generating merge plan…
     mergePlanFailed: Merge plan generation failed; try again later
     mergePreviewTitle: Merge plan preview
     mergePreviewCanonical(name): 'Canonical entry: $name'
     mergePreviewAliases(aliases): 'Aliases: $aliases'
-    mergeAliasCapWarning(count, cap): About $count aliases will exceed the cap ($cap); those names will not be merged in
+    mergeAliasCapWarning(count, cap, param=count):
+      one: "About $count alias will exceed the cap ($cap); those names will not be merged in"
+      other: "About $count aliases will exceed the cap ($cap); those names will not be merged in"
     mergePreviewImportance(n): 'Importance: $n'
     mergePreviewNotes(notes): 'Notes: $notes'
     mergePreviewAbsorbed(names): 'To be archived: $names'
@@ -1066,7 +1260,7 @@ intermediate:
     valueTypeHintSingle: A text description
     valueTypeHintList: One value per line
     valueTypeHintDict: 'One "key: value" per line, e.g. "Master: Mo Chen"'
-    openButton: Open memory bank
+    openButton: Open memory store
     openButtonSubtitle: Browse, search, and edit this session's experiences and facts
     filterToggle: Filter
     sortBy: Sort
@@ -1084,9 +1278,9 @@ intermediate:
     sortByImportance: By importance
     sortByName: By name
     sortByCreatedAt: By creation time
-    statsSummary(n, macro, micro): $n total | $macro paragraph summaries | $micro event memories
+    statsSummary(n, macro, micro): "$n total | Paragraph summaries: $macro | Event memories: $micro"
     statsFiltered(shown, total): Showing $shown / $total
-    statsEntitiesSummary(n, character, location, item, lore, organization): $n entities | $character characters | $location locations | $item items | $lore lore | $organization organizations
+    statsEntitiesSummary(n, character, location, item, lore, organization): "$n entities | Characters: $character | Locations: $location | Items: $item | Lore: $lore | Organizations: $organization"
     statsEntitiesFiltered(shown, total): Showing $shown / $total entities
     importanceGuideTitle: How importance ratings work
     importanceGuideDesc: Ratings decide how often an entity is retrieved and injected in conversation. The higher the rating, the more easily it is injected into the context.
@@ -1094,7 +1288,7 @@ intermediate:
     importanceTier5Behavior: Injected automatically every round, no mention needed
     importanceTier4: Important - core party members and story-spanning lore
     importanceTier4Behavior: Injected only when mentioned in conversation
-    importanceTier3: Constant - recurring side characters, frequently used locations and items, general rules
+    importanceTier3: Constant — recurring side characters, frequently used locations and items, general rules
     importanceTier3Behavior: Injected only when mentioned in conversation
     importanceTier2: Occasional - scene-specific side characters and domain-specific rules
     importanceTier2Behavior: Injected only when mentioned, at lower priority
@@ -1103,6 +1297,10 @@ intermediate:
     importanceGuideHint: You can adjust the rating manually when editing an entity. Only 5 stars (protagonist) is injected automatically every round; everything else is injected only when mentioned in conversation.
 settings:
   title: Settings
+  navigationGroups:
+    experience: Experience & creation
+    materials: Materials & resources
+    support: Data & help
   modelCapabilities:
     vision: Vision (image input)
     reasoning: Deep reasoning
@@ -1110,7 +1308,9 @@ settings:
     webSearch: Web search
   provider:
     title: Model providers
-    entrySubtitle(count): $count providers
+    entrySubtitle:
+      one: $count provider
+      other: $count providers
     add: Add provider
     edit: Edit provider
     delete: Delete provider
@@ -1144,7 +1344,9 @@ settings:
     deleteConfirm: Delete provider "$name"?
     emptyList: No providers yet; tap the add button in the top right corner
     models: Models
-    modelCount: $count models
+    modelCount:
+      one: $count model
+      other: $count models
     fetchModels: Fetch model list
     fetchError: 'Failed to fetch model list: $error'
     fetchEmpty: The provider connection works but returned 0 models (you can add model IDs manually)
@@ -1188,7 +1390,9 @@ settings:
     batchDeselectAll: Deselect all
     batchSelected: $count selected
     batchDelete: Delete selected ($count)
-    batchDeleteConfirm: Delete the $count selected models?
+    batchDeleteConfirm(param=count):
+      one: "Delete the $count selected model?"
+      other: "Delete the $count selected models?"
     protocol: Protocol type
     protocolReadOnly: Comes from the template and cannot be changed
     protocolOptions:
@@ -1223,6 +1427,7 @@ settings:
   director:
     title: Director mode settings
     entrySubtitle: Entry · Models · Rules · Tools · Budget · Memory
+    entrySubtitleSimple: Entry · Models · Rules · Memory
     collapseAll: Collapse all
     expandAll: Expand all
     sectionPending: This section's settings are under construction and coming soon
@@ -1234,12 +1439,12 @@ settings:
       context: Context & compaction
       memory: Retrieval & memory
     models:
-      gm: Director primary model
-      gmDesc: The default primary model for director sessions; the first message will warn about missing configuration when unset
+      gm: Director main model
+      gmDesc: The default main model for director sessions; if unset, the app warns about the missing configuration on the first message
       gmConsumers: All work in director rounds (retrieval/memory/narrative generation/compaction)
       gmEmpty: Not configured
       clear: Clear selection
-      cleared: Cleared; sending the first message will warn about missing configuration when unset
+      cleared: Cleared; if unset, the app warns about the missing configuration on the first message
     generation:
       title: Generation parameters
       temperature: Temperature
@@ -1287,6 +1492,10 @@ settings:
       waitForever: Wait forever
       approvalTimeout: Pre-write approval timeout (minutes)
       approvalTimeoutHint: On timeout, writes are rejected fail-closed (default 5 minutes)
+      # P2 wait-forever switch : covers both HITL banners
+      approvalTimeoutSwitch: Auto-deny on confirm timeout
+      approvalTimeoutSwitchOn(minutes): 'Auto-deny after $minutes min without response (shared by pre-write approvals and AI asks)'
+      approvalTimeoutSwitchOff: When off, banners wait for your decision indefinitely and never auto-deny
       subagentMaxSteps: Subagent step limit
       subagentMaxDuration: Subagent time limit (minutes)
       foreshadowCheckInterval: Foreshadow check interval (rounds)
@@ -1296,7 +1505,7 @@ settings:
     suggestReply:
       title: Suggested replies
       model: Suggested-reply model
-      modelDesc: Leave empty to follow the director primary model
+      modelDesc: Leave empty to follow the director main model
       prompt: Prompt
       promptHint: Leave empty to use the built-in default prompt
       temperature: Temperature
@@ -1338,10 +1547,13 @@ settings:
     memory:
       embeddingModel: Embedding model
       embeddingModelDesc: Used for semantic retrieval over story memory; keyword-only retrieval when unset
+      embeddingSwitchConfirmTitle: Switch embedding model?
+      embeddingSwitchConfirmContent: After the switch, vectors of existing memories will no longer take part in semantic retrieval. Continue?
+      embeddingSwitchConfirmAction: Confirm switch
       factualEnabled: Fact memory
       factualEnabledDesc: When on, the agent maintains entity cards (character states/relationships/settings)
       keyEntityThreshold: Key entity importance threshold
-      keyEntityThresholdHint: Entities with importance >= this value are force-injected every round (default 5)
+      keyEntityThresholdHint: Entities with importance ≥ this value are force-injected every round (default 5)
       consolidationTrigger: Memory consolidation trigger
       consolidationTriggerHint: Consolidation triggers when context usage reaches this ratio (default 2.0 = disabled)
       advanced: Advanced
@@ -1371,17 +1583,34 @@ settings:
     deleteConfirm: Delete template "$name"?
     emptyList: No templates yet; tap the add button in the bottom right corner
   resourceLibrary:
+    dropUnsupportedType(name): '"$name" cannot be imported by dropping — only PNG character cards and JSON (worldbooks/backups) are supported'
     viewer:
       version: Card spec version
       description: Description
       personality: Personality
+      # Rich card fields (graphical card viewer)
+      identity: Identity
+      nameField: Name
+      nickname: Nickname
+      age: Age
+      creator: Creator
+      tags: Tags
+      scenario: Scenario
+      firstMes: First message
+      alternateGreetings(count): Alternate greetings ($count)
+      mesExample: Example dialogue
+      creatorNotes: Creator notes
+      systemPrompt: System prompt
+      otherFields(count): Other fields ($count)
       embeddedEntries(count): Embedded worldbook entries ($count)
       entries(count): Entries ($count)
       noEntries: This book has no entries
       unnamedEntry: Unnamed entry
       expand: Expand full text
       collapse: Collapse
-      moreEntries(count): Only the first 20 entries are shown; $count more are hidden
+      moreEntries(count, param=count):
+        one: "Only the first 20 entries are shown; $count more is hidden"
+        other: "Only the first 20 entries are shown; $count more are hidden"
       rawJson: Raw JSON (fallback when parsing fails)
     title: Character cards/worldbooks
     entrySubtitle: Import and manage SillyTavern character cards and worldbooks
@@ -1390,6 +1619,27 @@ settings:
     importCard: Import character card (PNG)
     importCardJson: Import character card (JSON)
     importBook: Import worldbook (JSON)
+    # Empty-name fallbacks (apply preview title / projected entity name, follows UI language)
+    unnamedCharacter: Unnamed character
+    unnamedSetting: Unnamed setting
+
+    # Import validation errors (resolved at throw time, follows UI language)
+    importErrors:
+      tooDeep: "JSON nested too deeply (over 500 levels) — not a valid character card or worldbook file"
+      wrongEntryWorldbook: 'This is worldbook JSON (top-level "entries") — use the "Import worldbook JSON" entry instead'
+      invalidCard: "Not a valid character card (missing content fields such as name/description/personality)"
+      wrongEntryCard: 'Not a worldbook JSON file (no top-level "entries") — if this is a character card, use the card import entry instead'
+      emptyWorldbook: 'The worldbook has no entries ("entries" is empty or all invalid) — please check the file'
+      noContent: "No import content provided"
+      unrecognized: "Unrecognized file format (not worldbook or character card JSON)"
+      invalidPng: "Invalid PNG file (signature check failed)"
+      pngNoMetadata: "No character card metadata found in the PNG (chara/ccv3)"
+      cardJsonInvalid(detail): "Character card JSON parse failed: $detail"
+      cardNotObject: "Character card JSON top level is not an object"
+      bookJsonInvalid(detail): "Worldbook JSON parse failed: $detail"
+      bookNotObject: "Worldbook JSON top level is not an object"
+    cardFallbackName: "Character card"
+    bookFallbackName: "Worldbook"
     emptyList: No resources yet
     deleteTitle: Delete resource
     deleted: Deleted "$name" (including cascading removal of projections)
@@ -1444,6 +1694,12 @@ settings:
     fontSizeDefaultLabel: Default
     fontSizePreviewText: This is a preview message showing how message content renders at the current font size. Drag the slider above to adjust it in real time.
     fontSizePreviewCaption: Preview (same font size as the chat page)
+    # Content width mode (fluid / capped)
+    contentWidth: Content width
+    contentWidthCaption: How wide text and pages get on wide windows
+    contentWidthOptions:
+      fluid: Fluid (scales with window)
+      capped: Capped (fixed limit on wide screens)
     sendKey: Send key
     sendKeyOptions:
       enter: Enter
@@ -1462,6 +1718,15 @@ settings:
     sendKeyEnterHint: 'Tip: with some input methods, long-pressing the send key inserts a newline'
     sendButtonNewlineHint: Long-press the send button to insert a newline (always available, whatever the setting)
     timeout: Timeout settings
+    # Auto retry (2026-10-15 batch E / P5, P6: shared across modes)
+    autoRetry: Network & retry
+    autoRetryMaxAttempts: Auto-retry attempts
+    autoRetryMaxAttemptsDesc: Automatically resend on network glitches, rate limits, and server errors (0 = off; applies to all chat modes)
+    autoRetryOff: 'Off'
+    autoRetryWaitBudget: Total wait budget
+    autoRetryWaitBudgetDesc: Cumulative wait cap for auto retries; gives up early beyond it (prevents waiting through long cooldowns)
+    autoRetryBudgetUnlimited: Unlimited
+    autoRetryBudgetSeconds(seconds): '$seconds s'
     connectTimeout: Connection timeout
     connectTimeoutDesc: The longest wait when connecting to the server (seconds)
     receiveTimeout: Response timeout
@@ -1484,6 +1749,8 @@ settings:
       desc: Simple mode shows only common settings; Advanced mode shows all settings (including advanced parameters)
       simple: Simple
       advanced: Advanced
+    # 简单模式页尾引导行（含进阶专属配置的面）
+    advancedLevelHint: 'More settings: Settings → General settings → Configuration display mode → Advanced'
   chatSettings:
     title: Chat mode settings
     entrySubtitle: Default model · Compaction · Display preferences
@@ -1538,7 +1805,7 @@ settings:
       standard: Standard
   intermediate:
     title: Story mode settings
-    entrySubtitle: Models · Prompts · Memory · Help
+    entrySubtitle: Entry toggle · Models · Prompts · Memory
     categories:
       models:
         title: Model configuration
@@ -1685,7 +1952,9 @@ settings:
       temperature: Temperature
       temperatureHint: Controls candidate diversity; higher values diverge more
       maxTokens: Max tokens
-      maxTokensHint(count): A hard total token cap at the API level, shared by all $count candidates to prevent overlong output from being cut off
+      maxTokensHint(count, param=count):
+        one: "A hard total token cap at the API level, shared by the $count candidate to prevent overlong output from being cut off"
+        other: "A hard total token cap at the API level, shared by all $count candidates to prevent overlong output from being cut off"
       candidateCount: Number of candidates
       candidateCountHint: How many candidate replies are generated at once (1-5)
       maxReplyLength: Max characters per reply
@@ -1763,7 +2032,27 @@ settings:
       previewButtonDesc: Uses a fixed example to show the actual request content sent for the four steps under the current configuration
     preview:
       title: Preview assembled result
-      mockBanner: 'This is a mock-data preview: a fixed example input assembled with the current prompt configuration. Actual conversations substitute real content.'
+      mockBanner: 'This is a mock-data preview: a fixed example input assembled with the current prompt configuration; the sample content itself is shown in Chinese. Actual conversations substitute real content.'
+      sample:
+        userInput: "I follow the dry stairs down until they end at the cathedral's flooded nave, then dive through the shattered rose window into the chancel. There's a pocket of trapped air inside, and the candles at the altar are still burning — as if the priests never left."
+        history1User: "I am a wandering salvage diver. A three-day storm blew my skiff off the charts, and when the fog finally lifted, a drowned city rose out of the grey lake — towers, causeways, one cathedral spire still above the waterline. I rowed in through the broken seawall at dusk."
+        history1Assistant: "The seawall's stones are furred with black-green weed, and cold blue lanterns still burn along the sunken boulevard beneath the surface, each lighting nothing but its own halo. Past the snapped chain, the city's silence swallows the sound of your oars. Every wall is carved with the same procession: robed choristers bearing a great bell toward the water. As your hull glides over the first drowned street, something far below rings once — soft, and deep, and patient."
+        history2User: "I follow the Avenue of Shells to the cathedral and tie my skiff at the foot of the bell tower. The bell is tolling in slow beats, though there is no wind and no hand on the rope."
+        history2Assistant: "Under a skin of green water, the avenue's mosaics tell the whole story: the Tide Choir walking into the lake with the bell in their arms, the city following note by note. Halfway along, the tolling settles into your ribs before your ears, one slow beat at a time — keeping time with your heartbeat, then, subtly, leading it. The tower door hangs open. On the threshold, the weeds part around a flight of dry stone stairs spiraling down into the spire's hollow heart, lit by the same patient blue."
+        generated: "Your head breaks the surface of the air pocket, and candlelight wavers across a vaulted ceiling crusted with pearls. The great brass bell hangs level with your eyes, suspended over the altar on chains thick as masts — and beneath it, ankle-deep in water, stands a woman in the Tide Choir's grey robes, her back to you, keeping the tolling alive with slow strokes of her hands. She has been keeping time here for a very long while. As the bell's note fades, her hands fall still, and she begins, unhurried, to turn around."
+        compactionSummary: "[Story so far] Before the storm you sheltered in the reef lighthouse, where you found a survey chart naming the drowned city of Vael-Morrow and a keeper's note: the Tide Choir rang the bell to keep the lake asleep. You crossed with the fog, slipped in through the broken seawall, and followed the Avenue of Shells to the bell tower as the tolling learned the rhythm of your heart."
+        reply: "Your head breaks the surface of the air pocket, and candlelight wavers across a ceiling crusted with pearls. The great brass bell hangs over the altar on chains thick as masts, and beneath it, ankle-deep in water, stands a woman in the Tide Choir's grey robes, keeping the tolling alive with slow strokes of her hands. You remember the choristers carved on every wall and the keeper's note — the bell keeps the lake asleep — and understand that whatever she has been keeping time against is still listening. The candles gutter once as the water around your waist goes utterly still. She is waiting for you to choose whether the next beat sounds."
+        mem1Summary: "The diver found the drowned city of Vael-Morrow after a three-day storm, rowed in through the broken seawall, and saw cold blue lanterns still burning on the sunken boulevards; something far below rang a bell once."
+        mem2Summary: "The diver followed the Avenue of Shells to the bell tower; the mosaics showed the Tide Choir carrying the bell into the lake, and the tolling kept time with the diver's heartbeat before leading it."
+        mem1Tags:
+          - "Drowned city"
+          - "Seawall"
+          - "Blue lanterns"
+        mem2Tags:
+          - "Tide Choir"
+          - "Bell tower"
+          - "Mosaics"
+          - "Tolling"
       generateTab: Generate
       extractTab: Extract
       reviewTab: Review
@@ -1796,8 +2085,10 @@ settings:
     autoBackup:
       title: Automatic backup
       desc: Backs up automatically to this device on launch (no API Keys included, keeps the last 3)
-      hint: 'When enabled, the app checks automatically at launch and every 6 hours while it stays running: a backup is taken only if more than 24 hours have passed since the last one and there is session data. Backups are stored in the backups/ folder of the documents directory, contain no API Keys, and keep the most recent 3. Turn off the switch above when you don''t need it.'
+      hint: 'When enabled, the app checks automatically at launch and every 6 hours while it stays running: a backup is taken only if more than 24 hours have passed since the last one and there is session data. Backups are stored in the backups/ folder of the app''s data directory, contain no API Keys, and keep the most recent 3. Turn off the switch above when you don''t need it.'
       sandboxNotice: The backup folder lives inside the app's private storage, so not seeing it in a file manager is normal. To migrate data, use "Export data".
+      sandboxNoticeDesktop: The backup folder lives under "backups" in your Documents directory and is visible in any file manager. To move data to another device, use "Export data".
+      sandboxNoticeMacos: The backup folder lives inside the app's own sandboxed container (under Library/Containers) and is hard to reach directly in Finder; use "Open backup folder" to jump there. To move data to another device, use "Export data".
       backupNow: Back up now
       openFolder: Open backup folder
       done: Backup complete
@@ -1818,6 +2109,7 @@ settings:
     clearConfirm: Clear all sessions and messages? API providers and personal preferences will not be deleted. This cannot be undone.
     clearSuccess: Sessions and messages cleared
     clearFailed: Failed to clear data
+    exportFailed(error): "Export failed: $error"
     importSuccess: Import successful
     importFailed: 'Import failed: $error'
     importing: Importing data, please wait…
@@ -1843,6 +2135,7 @@ settings:
       includeApiKeys: Include API Keys
       apiKeyWarning: Including API Keys is a security risk; keep the exported file safe
       globalAssets: World assets (character cards/worldbooks/custom templates)
+      globalAssetsOnlyHint: World assets are exported along with sessions, providers, or preferences and cannot be exported alone — tick at least one of the other groups.
       export: Export
     sessionExport:
       title: Export this session
@@ -1874,6 +2167,8 @@ settings:
       noOrphan: No recoverable data found
       foundOrphan: Found $groups groups of orphaned messages, $messages messages in total
       recover: Recover all
+      scanFailed(error): "Failed to scan orphan messages: $error"
+      failed(error): "Recovery failed: $error"
       recovered:
         one: Recovered $count session
         other: Recovered $count sessions
@@ -1899,6 +2194,7 @@ settings:
       importOverwriteSingleBody:
         one: "This backup contains only $count session.\n\nOverwrite import first clears all current sessions and messages, then imports this session; the rest of the data becomes unrecoverable.\n\nContinue?"
         other: "This backup contains only $count sessions.\n\nOverwrite import first clears all current sessions and messages, then imports these $count sessions; the rest of the data becomes unrecoverable.\n\nContinue?"
+    backupTooDeep: "JSON nested too deeply (over 500 levels) — not a valid app data backup file"
     storageInfo:
       title: Storage info
       dbSize: Database size
@@ -1909,12 +2205,16 @@ settings:
       preferenceCount: Preferences
       variantCount: Draft variants
       agentEvents: Director event log
-      agentEventsValue(count, size): $count entries · $size
+      agentEventsValue(count, size, param=count):
+        one: "$count entry · $size"
+        other: "$count entries · $size"
       placeholder: --
   diagnostics:
     title: Diagnostics
     entrySubtitle: View run logs and failure records
     devGateUnlockedToast: Developer tools unlocked
+    devGateRelock: Lock developer tools
+    devGateLockedToast: Developer tools locked
     agentLoop:
       title: Agent Loop self-check
       costWarning: Really calls the model and consumes your quota; for diagnostics only
@@ -1947,19 +2247,27 @@ settings:
         retryScheduled(waitMs, attempt): 'Request failed — retry #$attempt in $waitMs ms'
         toolCallReceived(name, id): Tool call received $name($id)
         assistantEnqueued: Assistant message enqueued
-        assistantEnqueuedWithTools(count): Assistant message enqueued ($count tool calls)
+        assistantEnqueuedWithTools(count, param=count):
+          one: "Assistant message enqueued ($count tool call)"
+          other: "Assistant message enqueued ($count tool calls)"
         toolExecuting(name): ▸ Running $name…
         toolFinished(name, ms): ✓ $name · $ms ms
         toolFailedSuffix: ' (failed)'
         stepFinishedNoUsage(index): Step $index finished (no usage)
         stepFinished(index, tokens): Step $index finished ($tokens tokens)
         injected(kind, preview): 'Injected ($kind): $preview'
-        doomLoop(toolName, count): 'Loop guard: $toolName called $count times with identical args'
+        doomLoop(toolName, count, param=count):
+          one: "Loop guard: $toolName called $count time with identical args"
+          other: "Loop guard: $toolName called $count times with identical args"
         turnFinished(reason): — Round finished ($reason) —
-        summary(reason, steps, tokens): $reason · $steps steps · $tokens tokens
-        summaryWithError(reason, steps, tokens, error): $reason · $steps steps · $tokens tokens · $error
+        summary(reason, steps, tokens, param=steps):
+          one: "$reason · $steps step · $tokens tokens"
+          other: "$reason · $steps steps · $tokens tokens"
+        summaryWithError(reason, steps, tokens, error, param=steps):
+          one: "$reason · $steps step · $tokens tokens · $error"
+          other: "$reason · $steps steps · $tokens tokens · $error"
         summaryError(e): 'Error: $e'
-      sessionAggregate: Session Aggregate
+      sessionAggregate: Session aggregate
       loadingSessions: loading sessions…
       noSessions: no director sessions yet
       selectSessionHint: select a session
@@ -1989,7 +2297,7 @@ settings:
       error: Error
     debugLog:
       title: Debug logging switches
-      desc: For intermediate-mode troubleshooting; when checked, detailed fields are written to the log file
+      desc: For Story mode troubleshooting; when checked, detailed fields are written to the log file
       logPrompts: Log prompts
       logPromptsDesc: Full LLM request messages (system prompt/history/user input included)
       logResponses: Log replies
@@ -2009,7 +2317,10 @@ settings:
       shareConfirmTitle: Share run logs?
       shareConfirmBody: Logs may contain your conversation content and prompt text (never API keys). Share only with a recipient you trust.
       shareConfirmAction: Share
+      saveFailed(error): "Failed to save log: $error"
     failures:
+      # batch F: auto-retry recovered badge
+      recoveredBadge: Auto-recovered
       title: Failure history
       desc: The most recent 50 failure records
       empty: All good
@@ -2059,7 +2370,7 @@ onboarding:
     chatDesc: A freely configurable AI chat tool, much like ChatBox. Multiple sessions, branches, model switching, and a template system.
     storyTitle: Story mode
     storyDesc: Narrative immersion in serif prose. AI remembers the plot on its own; configure generation step by step for deeper replies. Its entry is hidden by default — turn it on in Story mode settings.
-    directorTitle: Director mode (experimental)
+    directorTitle: Director mode
     directorDesc: You write the project rules; an AI showrunner works backstage — retrieving memories, maintaining the setting, and writing the prose. On by default; can be turned off in Settings.
   apiKey:
     title: Set up your AI model
@@ -2070,7 +2381,7 @@ onboarding:
   template:
     title: A rich prompt template library
     subtitle: Built-in templates for many scenarios, ready out of the box
-    desc: Ships with system prompt templates such as the "Isekai narrator". Pick one from the system prompt selector when starting a new chat or story, or define your own.
+    desc: Ships with system prompt templates such as the "Isekai narrator". Pick one from the system prompt selector when starting a new chat (new stories too, once the story entry is enabled), or define your own.
     goView: Take a look
   memory:
     title: AI remembers the plot on its own
@@ -2083,7 +2394,7 @@ onboarding:
   ready:
     title: You're all set
     subtitle: Your story can begin now
-    desc: Revisit this guide anytime under "Settings → Help → Getting started → Beginner's guide". Happy writing.
+    desc: Revisit this guide anytime under "Settings → Help → Getting started → Beginner guide". The interface language can be switched under "Settings → General settings → Language & input". Happy writing.
 help:
   title: Help
   entrySubtitle: Getting started and how it works
@@ -2152,19 +2463,19 @@ help:
     visualFlowTitle: What you see on screen
     visualFlowSubtitle: 4 collapsible mini panels + 1 main reply area (the compaction panel appears when triggered)
     visualFlowCompactingName: Compaction panel (optional)
-    visualFlowCompactingDesc: 'Appears when triggered: compacting conversation history...'
+    visualFlowCompactingDesc: 'Appears when triggered: compacting conversation history…'
     visualFlowNode1Name: Extraction panel
-    visualFlowNode1Desc: Analyzing...
+    visualFlowNode1Desc: Analyzing…
     visualFlowNode2Name: Retrieval panel
-    visualFlowNode2Desc: Recalling...
+    visualFlowNode2Desc: Recalling…
     visualFlowNode3Name: Generation panel
-    visualFlowNode3Desc: Generating... (generated prose streams live)
+    visualFlowNode3Desc: Generating… (generated prose streams live)
     visualFlowNode4Name: Main reply
     visualFlowNode4Desc: The final reply streams here
     visualFlowNode5Name: Summary panel
-    visualFlowNode5Desc: Summarizing...
+    visualFlowNode5Desc: Summarizing…
     visualFlowNode6Name: Persistence panel
-    visualFlowNode6Desc: Saving this round's results...
+    visualFlowNode6Desc: Saving this round's results…
     overview:
       node1Name: Extract
       node1Action: Pick 5 keyword categories out of the message
@@ -2191,7 +2502,7 @@ help:
       role5Duty: Files everything away
   wikiHome:
     title: LMStory user guide
-    searchHint: Search features...
+    searchHint: Search features…
     noResults: No matching content found
     section1Title: Getting started
     section1Subtitle: Basics and first steps
@@ -2212,7 +2523,7 @@ help:
     entry_1_2_title: Interface overview
     entry_1_2_subtitle: Home page, sidebar, navigation
     entry_1_3_title: Beginner guide
-    entry_1_3_subtitle: Replay the 6-step guide
+    entry_1_3_subtitle: Replay the six-step guide
     entry_2_1_title: Creating and switching sessions
     entry_2_1_subtitle: Draft sessions, sidebar actions, global search
     entry_2_2_title: Sending messages and reading replies
@@ -2241,11 +2552,11 @@ help:
     entry_3_7_subtitle: Two tabs, manual CRUD, search
     entry_3_8_title: Suggested replies and input helpers
     entry_3_8_subtitle: Quote/parenthesis buttons, AI suggested replies
-    entry_4_1_title: How the six-step generation works
+    entry_4_1_title: The six-step generation flow
     entry_4_1_subtitle: How the AI writes a reply step by step
     entry_4_2_title: How memory works
     entry_4_2_subtitle: How Story mode remembers the plot
-    entry_4_3_title: How failure handling works
+    entry_4_3_title: Handling failures
     entry_4_3_subtitle: What happens when something goes wrong
     entry_4_4_title: The macro summary mechanism
     entry_4_4_subtitle: Dual triggers, boundary skips, failure fallbacks
@@ -2279,7 +2590,7 @@ help:
     entry_5_4_subtitle: 10 segments, preview, dirty detection
     entry_5_5_title: Appearance and themes
     entry_5_5_subtitle: Light/dark, font size
-    entry_5_6_title: Language and input
+    entry_5_6_title: Language & input
     entry_5_6_subtitle: UI language Chinese/English, send shortcut
     entry_5_7_title: Advanced settings
     entry_5_7_subtitle: Thinking budget, timeouts
@@ -2326,13 +2637,13 @@ help:
     uiTitle: UI behavior
     uiBody: When compaction triggers, the compacting/organizing-context feedback is shown; there is no separate "macro summary stage" panel anymore. Macro records can be viewed in the memory store and are injected when later retrievals hit them.
   firstLaunch:
-    intro: On first launch, LMStory automatically enters a 6-step beginner guide that introduces the core concepts and optionally lets you configure an API Key.
+    intro: On first launch, LMStory automatically enters a six-step beginner guide that introduces the core concepts and optionally lets you configure an API Key.
     flowTitle: Startup flow
     flowSubtitle: From launch to the main screen
     diagramStartLabel: Launch the app
     diagramStartDesc: Shows a blank splash screen
     diagramGuideLabel: Beginner guide
-    diagramGuideDesc: A quick 6-step introduction
+    diagramGuideDesc: A quick six-step introduction
     diagramHomeLabel: Main screen
     diagramHomeDesc: Home page + sidebar
     guideStepsTitle: The 6 guide steps
@@ -2340,7 +2651,7 @@ help:
     step1Title: Welcome
     step1Body: What the app is for and its core capabilities
     step2Title: Three modes
-    step2Body: Chat (tool), Story (immersion) and Director (AI-written, experimental) compared
+    step2Body: Chat (tool), Story (immersion) and Director (AI-written) compared
     step3Title: Configure an AI model
     step3Body: Provide an API Key (optional — tap "Later" to skip)
     step4Title: Prompt templates
@@ -2355,18 +2666,20 @@ help:
   homeOverview:
     intro: LMStory's main screen consists of the home page and the sidebar; everything starts from here.
     layoutTitle: Home page layout
-    layoutSubtitle: The entry page shown when no session is selected
+    layoutSubtitle: The entry page shown when no session is selected (fixed to one screen; pull-to-refresh only)
     diagramHeaderLabel: Top title
     diagramHeaderDesc: LMStory logo and tagline
     diagramApiKeyLabel: API Key notice
     diagramApiKeyDesc: Shown when not configured; tap to configure
+    diagramContinueLabel: Continue-story card
+    diagramContinueDesc: Your most recent story or director session; tap to jump straight back into it — while it shows, the mode entries switch to a compact row
     diagramEntryLabel: Entry cards
     diagramEntryDesc: Mode-switch entries
     diagramEntryChatLabel: New chat
     diagramEntryStoryLabel: New story (hidden by default)
     diagramEntryDirectorLabel: New director (on by default)
     diagramRecentLabel: Recent sessions
-    diagramRecentDesc: Up to 5; tap to open
+    diagramRecentDesc: Up to 5 (up to 4 while the continue-story card is shown); tap to open (rows that do not fit are hidden whole)
     diagramSettingsLabel: Settings entry
     diagramSettingsDesc: ListTile at the bottom
     sidebarTitle: Sidebar
@@ -2378,7 +2691,7 @@ help:
     sidebarListLabel: Session list
     sidebarListDesc: Drag to reorder + three-dot menu actions
     sidebarFooterLabel: Bottom
-    sidebarFooterDesc: New chat / New director / Settings; the story button is hidden by default
+    sidebarFooterDesc: New chat / New director / Settings; the story button is hidden by default; on mobile there is also a back-to-home button
     modeSwitchTitle: Switching modes
     modeSwitchCardTitle: Done through the home page entry cards
     modeSwitchCardBody: LMStory has no separate mode-switch widget. The home page entry cards are the mode switch — tap "New chat" for Chat mode, or "New director" for Director mode (on by default, can be turned off in settings). The Story mode entry is hidden by default; turn it on in Story mode settings, then use "New story" to enter Story mode.
@@ -2542,7 +2855,7 @@ help:
     level2Title: Global defaults
     level2Body: Configured centrally under "Settings" → "Chat mode settings" → "Default configuration"; every new session uses these values. Changing the global defaults does not affect sessions you have already opened or individually configured (their values are snapshots written when opened).
     level3Title: Built-in defaults
-    level3Body: If you have never configured anything, the app uses sensible built-in defaults, such as temperature 0.7 and Top P 1.0.
+    level3Body: If you have never configured anything, the app uses sensible built-in defaults, such as a chat temperature of 0.7 and Top P 1.0.
     resetTitle: Reset to current global value
     resetBody: Every session-level setting has a reset button next to it; tapping writes the current global value into that field (as a snapshot — the two no longer affect each other afterwards). To manage all sessions uniformly, prefer configuring global defaults and override at the session level only when necessary.
   compactionFlowWiki:
@@ -2580,7 +2893,7 @@ help:
     experientialTitle: 'Experiential memories: the plot diary'
     experientialBody: 'Stored in the experiential_memories table, append-mostly. Each round''s event micro summary contains 5W1E, narrative time, importance, tags and retrieval data. When the conversation reaches the context compaction threshold, the system maintains two different outputs at once: the cumulative compaction summary replaces the early verbatim text and continues the current context, while the segmented macro summary condenses the newly compacted run of events and joins long-term retrieval as a macro memory. The first compaction can reuse the compaction summary directly to create the macro record.'
     factualTitle: 'Factual memories: the character sheet'
-    factualBody: Stored across three tables — entities, attributes and audit history — using upsert rewrites plus an audit log. The current entity types are character, location, item, world setting, organization and misc; pets and NPCs count as characters, and world rules count as world settings. Each entity has one main record, each attribute is isolated by entityId, and old values go into audit history. This reduces cross-instance bleed, setting drift and broken renames.
+    factualBody: Stored across three tables — entities, attributes and audit history — using upsert rewrites plus an audit log. The current entity types are character, location, item, lore, organization and misc; pets and NPCs count as characters, and world rules count as lore. Each entity has one main record, each attribute is isolated by entityId, and old values go into audit history. This reduces cross-instance bleed, setting drift and broken renames.
     retrievalTitle: What content gets vectorized for retrieval?
     retrievalBody: 'On write: the AI-distilled "5W1E 6-field summary" is what gets vectorized — not keywords, not the full round''s prose. The concatenation format is "time: xxx location: xxx character: xxx event: xxx significance: xxx extra: xxx", with empty fields omitted. That text is then sent to the embedding API and turned into a vector. Why not vectorize the whole round''s prose? Because prose is long and full of irrelevant information (small talk, action description, inner thoughts) that dilutes the semantic focus. The AI-distilled summary already captures "what actually happened this round", so its vectorization quality is higher. Exception: macro summaries (macro_summary) keep using the single summary field for vectorization, not the 5W1E format.'
     retrievalQueryTitle: What is used as the query at retrieval time?
@@ -2600,15 +2913,15 @@ help:
     retryTableTitle: How failures in each stage are handled
     retryTableBody: 'Generation failure: retried twice; if it still fails, the whole round fails and is handed to you. Keyword extraction failure: retried twice; if it still fails, the whole round fails and is handed to you. Both retrieval lanes fail: retried once; if it still fails, the whole round fails and is handed to you. One retrieval lane fails: no retry; continues with the other lane''s results. Review failure: retried twice; if it still fails, the whole round fails and is handed to you. Summary failure: retried twice; if it still fails, the whole round fails and is handed to you. Vectorization failure: retried once automatically; if it still fails, you choose — retry the whole round / temporarily fall back to keyword retrieval / clear this round (plus continue from where it stopped). Persistence failure: no retry; the transaction rolls back and the whole round fails.'
     uiRetentionTitle: What the UI keeps on failure
-    uiRetentionBody: 'You can see which step failed: generation failure → the generation panel (with the partial generated content already shown). Extraction failure → generation panel + extraction panel. Retrieval failure → generation/extraction panels + retrieval panel. Review failure → the partial reply + completed generation/extraction/retrieval panels. Summary failure → the complete reply + generation/extraction/retrieval panels + summary panel. Persistence failure → the complete reply + all intermediate artifact panels. Every failure case shows the same things: a failure notice + the failure bar (offering action buttons by failure type). The input box still accepts typing on failure; only the send button is disabled — you must tap "Retry round" or "Clear this round" to return to idle before you can send a new message.'
+    uiRetentionBody: 'You can see which step failed: generation failure → the generation panel (with the partial generated content already shown). Extraction failure → generation panel + extraction panel. Retrieval failure → generation/extraction panels + retrieval panel. Review failure → the partial reply + completed generation/extraction/retrieval panels. Summary failure → the complete reply + generation/extraction/retrieval panels + summary panel. Persistence failure → the complete reply + all intermediate artifact panels. Every failure case shows the same things: a failure notice + the failure bar (offering action buttons by failure type). The input box still accepts typing on failure; only the send button is disabled — you must tap "Retry whole round" or "Clear this round" to return to idle before you can send a new message.'
     manualRetryTitle: What each failure-bar button does
-    manualRetryBody: 'The failure bar shows action buttons based on the failure type: "Retry round" — clears all intermediate artifacts shown so far, keeps your message, and reruns the full six-step round from scratch (it does not resume from the failed step, because partially generated artifacts could leave the state inconsistent if it did); "Continue from where it stopped" — keeps the completed stages'' outputs (generated content, retrieval results) and retries from the failed stage, saving the earlier AI calls when the failure happened late in the round; "Continue writing" — appears when generation failed with a partial draft on hand; keeps generating from the partial draft without repeating what exists; "Accept as final" — appears when generation/review failed and the partial draft is usable; makes the partial draft this round''s final text and proceeds through summary and persistence as usual; "Temporarily fall back to keyword retrieval" — shown only for E104 embedding-model call failures; skips vector retrieval and continues this round (FTS5 keyword retrieval still runs); "Clear this round" — clears all intermediate artifacts and puts your message back into the input box so you can edit and resend it.'
+    manualRetryBody: 'The failure bar shows action buttons based on the failure type: "Retry whole round" — clears all intermediate artifacts shown so far, keeps your message, and reruns the full six-step round from scratch (it does not resume from the failed step, because partially generated artifacts could leave the state inconsistent if it did); "Continue from interruption" — keeps the completed stages'' outputs (generated content, retrieval results) and retries from the failed stage, saving the earlier AI calls when the failure happened late in the round; "Continue writing" — appears when generation failed with a partial draft on hand; keeps generating from the partial draft without repeating what exists; "Accept as final" — appears when generation/review failed and the partial draft is usable; makes the partial draft this round''s final text and proceeds through summary and persistence as usual; "Temporarily fall back to keyword retrieval" — shown only for E104 embedding-model call failures; skips vector retrieval and continues this round (FTS5 keyword retrieval still runs); "Clear this round" — clears all intermediate artifacts and puts your message back into the input box so you can edit and resend it.'
     factualFallbackTitle: Special failure fallbacks on the factual layer
-    factualFallbackBody: 'The factual layer handles failures differently from the experiential layer. Retrieval stage (never blocks): the factual-layer retrieval code is fully wrapped in try-catch; any exception returns an empty result instead of throwing. Even if factual retrieval breaks, experiential retrieval proceeds normally and so does the review stage (just without the "world settings" block). Write stage (per-change tolerance): each fact delta gets its own try-catch; a single failure only logs and never propagates. Even if some factual writes fail, experiential memories always get written. Why this design? Because AI output-format problems are frequent (missing fields, nonexistent entityId, etc.); rolling back the whole round on any delta failure would leave "new conversations with a permanently empty memory store" — the most serious usability problem there is. So a little atomicity is traded away for availability.'
+    factualFallbackBody: 'The factual layer handles failures differently from the experiential layer. Retrieval stage (never blocks): the factual-layer retrieval code is fully wrapped in try-catch; any exception returns an empty result instead of throwing. Even if factual retrieval breaks, experiential retrieval proceeds normally and so does the review stage (just without the "World lore" block). Write stage (per-change tolerance): each fact delta gets its own try-catch; a single failure only logs and never propagates. Even if some factual writes fail, experiential memories always get written. Why this design? Because AI output-format problems are frequent (missing fields, nonexistent entityId, etc.); rolling back the whole round on any delta failure would leave "new conversations with a permanently empty memory store" — the most serious usability problem there is. So a little atomicity is traded away for availability.'
   storyVsChatWiki:
     title: How Story mode and Chat mode differ
   storyVsChat:
-    intro: LMStory has three modes — Chat is like a "tool", Story is like "immersive narrative", and Director is like "handing the world to an AI showrunner" (experimental). The three modes have separate entries and interfaces; pick as needed.
+    intro: LMStory has three modes — Chat is like a "tool", Story is like "immersive narrative", and Director is like "handing the world to an AI showrunner". The three modes have separate entries and interfaces; pick as needed.
     compareTitle: The three modes at a glance
     compareSubtitle: 4 dimensions of clear differences
     columnChat: Chat mode
@@ -2622,7 +2935,7 @@ help:
     chatPalette: Neutral colors + a single accent
     chatFont: Sans-serif font (Inter)
     chatInput: 'Input placeholder: send a message'
-    storyEntry: '"New story" card entry on the home page'
+    storyEntry: '"New story" card entry on the home page (hidden by default; shows once enabled)'
     storyPalette: Follows global appearance (serif narrative prose)
     storyFont: Serif font (narrative prose)
     storyInput: 'Input placeholder: move the story forward'
@@ -2631,20 +2944,20 @@ help:
     chatModeBody: Like a typical AI chat tool, focused on "getting conversations done efficiently". Good for questions, writing, translation, research and the like. The interface is restrained and quiet, letting the tool disappear into the task.
     storyModeTitle: Story mode = immersion
     storyModeBody: Built for long-running roleplay and narrative, focused on "being there". It automatically memorizes the plot, retrieves past events and maintains character settings. Narrative prose uses a serif font to reinforce the mood, and colors follow the global appearance settings.
-    directorModeTitle: Director mode = the AI holds the pen (experimental)
+    directorModeTitle: Director mode = the AI holds the pen
     directorModeBody: You write the "project rules", and the AI showrunner autonomously retrieves memories, maintains settings and writes the prose backstage — the prose is the only output. For when you want to see how the AI understands your world, or want to semi-hand-off the plot. On by default; can be turned off in settings.
     whenTitle: When to pick which
     whenBody: Pick Chat mode for one-off tasks with AI (write an email, look something up, translate); pick Story mode to personally drive a long story (roleplay, interactive fiction, world exploration); pick Director mode to write good rules, then let the AI hold the pen fully while you only vet and steer. The three modes never interfere — you can keep sessions in all of them at once.
     switchTitle: How to switch modes
-    switchBody: There is no separate mode-switch toggle. On the home page, tap "New chat" for Chat mode, "New story" for Story mode, and "New director" for Director mode (on by default, can be turned off in settings). Existing sessions are told apart in the sidebar by their mode icon (chat/story/director); tap one to switch to a session of that mode.
+    switchBody: There is no separate mode-switch toggle. On the home page, tap "New chat" for Chat mode and "New director" for Director mode (on by default, can be turned off in settings); tap "New story" for Story mode — that entry is hidden by default and can be enabled in Settings → Story mode settings; existing story sessions are unaffected. Sessions are told apart in the sidebar by their mode icon (chat/story/director); tap one to switch to a session of that mode.
   firstStoryWiki:
     title: Creating your first story
   firstStory:
-    intro: First time with Story mode? Start from "New story" on the home page — three steps get your first story going.
+    intro: First time with Story mode? Enable the entry first in Settings → Story mode settings (hidden by default), then tap "New story" on the home page — three steps get your first story going.
     flowTitle: The 3-step flow for creating a story
     flowSubtitle: From tapping New to the first message
     flow1Label: Tap New story
-    flow1Desc: The "New story" entry card on the home page
+    flow1Desc: The "New story" entry card on the home page (enable the entry first)
     flow2Label: Configure model and prompt
     flow2Desc: Configure at least one usable phase model
     flow3Label: Send the first message
@@ -2654,9 +2967,9 @@ help:
     bannerAction: Configure
     stepsTitle: The 3 steps in detail
     step1Title: Tap New story
-    step1Body: Tap the "New story" card on the home page to enter a new Story mode session. The first time in, an empty-state guide prompts you to type a line to start the story.
+    step1Body: Make sure the entry is enabled (Settings → Story mode settings), then tap the "New story" card on the home page to enter a new Story mode session. The first time in, an empty-state guide prompts you to type a line to start the story.
     step2Title: Configure model and prompt
-    step2Body: Open session settings and, under "Per-phase model configuration", configure at least one usable model for generating or extracting. Each phase prefers the session-level configuration, then the global configuration for the same phase; phases not individually configured reuse the currently effective extracting/generating model. Only when neither is available does it report configuration error E010.
+    step2Body: Open session settings and, under "Per-step model configuration", configure at least one usable model for generating or extracting. Each phase prefers the session-level configuration, then the global configuration for the same phase; phases not individually configured reuse the currently effective extracting/generating model. Only when neither is available does it report configuration error E010.
     step3Title: Send the first message
     step3Body: Type a line that moves the story forward and tap send. The AI walks the full six-step generation flow and outputs the final reply. The first reply may be a little slow because initial memories are being built.
     promptTitle: System prompt
@@ -2682,21 +2995,21 @@ help:
     op1Title: Copy
     op1Body: Copies the raw message text to the clipboard. Copy is always available, unaffected by the Fork window.
     op2Title: Regenerate (assistant messages only)
-    op2Body: 'Has the AI rerun the six-step generation flow and write a new reply. Note: the original reply is directly replaced by the new one — no old version is kept (unlike Chat mode''s branching Fork).'
+    op2Body: 'Has the AI rerun the six-step generation flow and write a new reply. The old version is not lost: each reply for that round is kept as a draft variant, and the variant switcher on the draft card lets you revisit and switch between them.'
     op3Title: Edit and resend (user messages only)
-    op3Body: 'Change a message you sent earlier; the six-step generation reruns based on the new content. Note: that round''s original reply is directly replaced, with no old version kept.'
+    op3Body: Change a message you sent earlier; the six-step generation reruns based on the new content. The original reply is likewise kept as a draft variant you can revisit via the variant switcher.
     op4Title: Delete round
     op4Body: Deletes the whole round (your message + the AI's reply + all intermediate artifacts). Deletion asks for confirmation, and only rounds inside the Fork window can be deleted.
     windowTitle: The Fork window limit
     windowBody: In Story mode, only messages from the most recent rounds can be edited or regenerated; buttons on earlier messages gray out. This protects memories that have already set — events from early rounds may have been distilled into factual memories, and changing them would make memory inconsistent. Copy is always available regardless of the window.
     diffTitle: Differences from Chat mode
-    diffBody: Story mode has no "Quote" button (immersive narrative doesn't need quoted context); no "Continue generating" button (the six-step generation is complete, so there is never an "unfinished" case); and it adds the Fork window limit (to protect memory consistency). The other actions (copy/edit/regenerate/delete) work the same as in Chat mode.
+    diffBody: Story mode has no "Quote" button (immersive narrative doesn't need quoted context), and "Continue generating" is not attached to messages — a full six-step round never comes out "unfinished", and if generation is interrupted the recovery actions live in the failure bar ("Continue writing", "Accept partial draft", and friends). It adds the Fork window limit (to protect memory consistency). The other actions (copy/edit/regenerate/delete) work the same as in Chat mode.
   storySessionSettingsWiki:
     title: Story session settings
   storySessionSettings:
     intro: Story mode session settings are richer than Chat mode's — every step of the six-step generation can have its own model, plus sections like context budget, review stage and suggested replies.
     diagramTitle: 4 phase models + 10 sections
-    diagramSubtitle: Independent per-phase models + the full settings sections
+    diagramSubtitle: Independent per-step models + the full settings sections
     diagramPhasesTitle: Independent models for 4 phases
     phaseGenerating: Generate reply
     phaseExtracting: Keyword extraction
@@ -2704,7 +3017,7 @@ help:
     phaseSummarizing: Event summary
     diagramPhasesDesc: Each phase can use a different model; use small models for simple tasks to cut costs
     diagramSectionsTitle: Session settings has 10 sections
-    sectionPhaseModels: Per-phase model configuration
+    sectionPhaseModels: Per-step model configuration
     sectionPhaseModelsDesc: Independent config for 4 phases
     sectionPrompt: Prompt
     sectionPromptDesc: System prompt + templates
@@ -2722,10 +3035,10 @@ help:
     sectionSuggestReplyDesc: Model + prompt overrides
     sectionMemory: Memory management
     sectionMemoryDesc: Rebuild vector indexes
-    phaseModelsTitle: Per-phase model configuration
+    phaseModelsTitle: Per-step model configuration
     phaseModelsBody: Each Story mode round has 3 AI requests by default (extract/generate/summarize), or 4 with review enabled. Each phase prefers the session-level configuration, then the global configuration for the same phase; phases not individually configured reuse the effective extracting/generating model. Only when neither is available does it report E010.
     sectionsTitle: The 10 sections explained
-    section1Title: Per-phase model configuration
+    section1Title: Per-step model configuration
     section1Body: Pick models for each stage of the six-step generation — a Story-mode-only configuration. Each step can individually override the global configuration; the reset button writes the current global value into that step as a snapshot (later global changes don't affect this session).
     section2Title: Prompt
     section2Body: The system prompt controls the AI's character setup and narrative style. Left blank, the built-in default character setup is used. You can pick a preset from the template library or type your own.
@@ -2762,7 +3075,7 @@ help:
     suggestIntroTitle: The suggested-replies button
     suggestIntroBody: When you don't know what to say next — or just feel lazy — tap "Suggest replies". The AI reads the latest round (your last line + the AI's reply) plus the plot summaries of the two rounds before, and generates 3 candidate replies floating above the input box. Tap one to fill the input box; send it as-is or polish it first.
     generatingTitle: While generating
-    generatingBody: After you tap, the toolbar shows a small "Generating..." animation. The AI reads only the latest round and the previous two summaries, so it's very token-friendly and usually finishes in seconds. You can keep typing and tap other buttons while it generates.
+    generatingBody: After you tap, the toolbar shows a small "Generating…" animation. The AI reads only the latest round and the previous two summaries, so it's very token-friendly and usually finishes in seconds. You can keep typing and tap other buttons while it generates.
     bubblesTitle: Working with the candidate bubbles
     bubblesBody: The 3 candidate replies stack vertically above the input box as floating bubbles. Tapping one fills the input box (overwriting its content). The bubbles can be collapsed (via the collapse button on the "Suggested replies" header) or closed with the X. Sending a message dismisses them automatically — that round is over.
     lifecycleTitle: When the bubbles go away
@@ -2798,7 +3111,7 @@ help:
     opsTitle: The 7 operations explained
     opsBody: 'Search: filter memories by keyword within the current tab. Add: manually add an experience or entity. Edit: change memory content (importance, event description, etc.). Delete: remove a single memory — confirmation required, unrecoverable. Multi-select: batch-check items to tidy up. Force inject: once checked, that entity enters every round''s context, no longer depending on retrieval scoring. AI merge: check 2 or more duplicate entities in the factual tab, and the AI drafts a merge plan for preview and confirmation; once confirmed, the canonical entry is updated and the rest are archived (recoverable). Read-only resources (worldbook/character card projections) cannot be edited or deleted, only unapplied; attribute rows split into "baseline" (read-only) and "evolved" (added by the AI as the plot moves), and "add attribute" lands as an evolved row; entities archived by the AI can be restored from the menu. Entity card badges: "source" = seed origin or AI auto-extraction, "constant · world / constant · directive" = always enters context every round; the menu''s "Disable injection" can temporarily keep something out of the context (browsing and retrieval unaffected), and is reversible. The memory index health bar flags two kinds of gaps — "missing rows" and "embedding dimension mismatch" — both fixable with one-click rebuild, and it hides itself when the index is complete. The experiential tab has an "All/Active/Archived" three-way filter at the top (archived memories don''t join retrieval).'
     entryTitle: How to enter the memory store
-    entryBody: Open the menu at the top-right of a Story or Director session page and enter "Session settings"; the "Memory management" section is right at the top. Tap "View memory store" to open the standalone full-screen page. Both modes share the same memory store.
+    entryBody: Open the menu at the top-right of a Story or Director session page and enter "Session settings"; the "Memory management" section is right at the top. Tap "Open memory store" to open the standalone full-screen page. Both modes share the same memory store.
   apiProviderWiki:
     title: Managing API providers
   apiProvider:
@@ -2979,7 +3292,7 @@ help:
     segGenerateInject: Generation injection
     segMemoriesInject: Memory injection
     segExtractFacts: Fact extraction
-    segFactInject: World setting injection
+    segFactInject: World lore injection
     diagramEditorTitle: The editor's 3 blocks
     editorField: Editing area
     editorFieldDesc: Monospace font + character count
@@ -3009,7 +3322,7 @@ help:
     step10Title: World setting injection title
     step10Body: The block title used when current factual settings are injected into generating/reviewing requests.
     previewTitle: Assembly preview
-    previewBody: Tap the "Preview assembly" button at the bottom to see the complete messages list actually sent to the AI during the 4-step generation, shown with mock data.
+    previewBody: Tap the "Preview assembly" button at the bottom to see the complete messages list actually sent to the AI during the six-step generation, shown with mock data.
     dirtyTitle: Dirty detection
     dirtyBody: The "Save" button becomes tappable only when the editor text differs from the saved value. Leaving with unsaved changes pops a confirmation dialog so edits are never lost to a slip.
     entryTitle: How to enter
@@ -3042,11 +3355,11 @@ help:
     step3Title: Font size
     step3Body: A slider adjusts across 11 steps from 12-22 px, default 15 px, applying uniformly to message prose in all three modes. A "Default" badge shows at the default value, with a live preview below.
     a11yTitle: Accessibility and large screens
-    a11yBody: A reduce-motion toggle follows the system switch (effects downgrade in one place); on desktop the keyboard focus ring is visible and icon-only buttons carry readable names; under wide windows the content column narrows and centers automatically (measure), and narrative prose is width-limited to protect reading rhythm; desktop shortcuts are registered from a single source (Ctrl+N new chat, Ctrl+Shift+N new story, Ctrl+, settings, Ctrl+K global search, Ctrl+F in-session search; Esc closes overlays layer by layer).
+    a11yBody: A reduce-motion toggle follows the system switch (effects downgrade in one place); on desktop the keyboard focus ring is visible and icon-only buttons carry readable names; under wide windows the content column narrows and centers automatically, and narrative prose is width-limited to protect reading rhythm; desktop shortcuts are registered from a single source (Ctrl+N new chat, Ctrl+Shift+N new story (effective after the story mode entry is enabled), Ctrl+, settings, Ctrl+K global search, Ctrl+F in-session search; Esc closes overlays layer by layer).
     entryTitle: How to enter
     entryBody: Settings → General settings → Appearance.
   languageInputWiki:
-    title: Language and input
+    title: Language & input
   languageInput:
     intro: LMStory's interface language supports both Simplified Chinese and English — switching applies instantly and the choice is remembered; Follow system remains a placeholder preview. On desktop the send key and newline key are independently configurable; on mobile, "Enter sends" and "Enter inserts a newline" are the two options shown.
     diagramTitle: Language, pick 1 of 3 + send key/newline key
@@ -3077,7 +3390,7 @@ help:
     step2Title: Send key and newline key
     step2Body: On desktop, the send key picks one of three (Enter / Shift+Enter / Ctrl+Enter) and the newline key one of four (Enter / Shift+Enter / Ctrl+Enter / Alt+Enter); the two can't be identical. On mobile, the two options shown are "Enter sends" and "Enter inserts a newline". In Enter-sends mode, some input methods let you long-press the send key for a newline.
     entryTitle: How to enter
-    entryBody: Settings → General settings → Language and input.
+    entryBody: Settings → General settings → Language & input.
   advancedSettingsWiki:
     title: Advanced settings
   advancedSettings:
@@ -3145,7 +3458,7 @@ help:
     autoBackupTitle: Automatic backup
     autoBackupBody: 'Once enabled, the app checks automatically a while after launch: if more than 24 hours have passed since the last backup and session data exists, it silently exports a full backup into the backups/ folder of the app documents directory (app-private storage, invisible to file managers; no API Key included), keeping only the 3 most recent. Toggle it on the "Data management" page, or tap "Back up now" or "Open backup folder" anytime.'
     singleSessionTitle: Single-session export
-    singleSessionBody: Long-press a session in the session list, or pick "Export conversation" from the in-session menu, then choose JSON (with the session's associated data), Markdown or plain text. JSON suits migration and restore; the other two suit reading and sharing.
+    singleSessionBody: Long-press a session in the session list, or pick "Export this session" from the in-session menu, then choose JSON (with the session's associated data), Markdown or plain text. JSON suits migration and restore; the other two suit reading and sharing.
     entryTitle: How to enter
     entryBody: 'Settings → Data management → Export / Import. Single-session export: long-press menu in the session list or the in-session menu.'
   dataRecoveryWiki:
@@ -3290,7 +3603,7 @@ help:
     scene2Title: Streaming cut off mid-reply
     scene2Body: Chat mode keeps what was received; regenerate or edit and resend. Story mode streaming interruptions usually show E016 and retry per policy; after a whole-round failure the partial prose is kept as an unfinished-draft card (copyable), and the failure bar offers "Accept as final", "Continue writing" or a full-round retry. For per-stage failure behavior see "Using Story mode → Handling failures".
     scene3Title: Do messages get lost after a Story mode round fails
-    scene3Body: No. Your message is fully kept; only intermediate artifacts (generated content/retrieval results/summary) are cleared. Tap "Continue from where it stopped" to keep completed-stage outputs, or "Retry round" to start over; when the generation stage failed, the partial prose is kept as an unfinished-draft card for "Accept as final" or "Continue writing". See "Using Story mode → Handling failures".
+    scene3Body: No. Your message is fully kept; only intermediate artifacts (generated content/retrieval results/summary) are cleared. Tap "Continue from interruption" to keep completed-stage outputs, or "Retry whole round" to start over; when the generation stage failed, the partial prose is kept as an unfinished-draft card for "Accept as final" or "Continue writing". See "Using Story mode → Handling failures".
     scene4Title: Compacting the conversation fails
     scene4Body: Chat mode shows a compaction-failed card; tap "Retry" or send again later. You can also shorten the conversation or switch to a model with a larger context window. Follow the suggested actions on the current error card.
     scene5Title: Embedding model call failed (E104)
@@ -3302,7 +3615,7 @@ help:
     scene8Title: Incomplete database table structure
     scene8Body: Back up first, then try "Settings → Data management → Repair table structures". The tool additively fills in tables, columns and indexes per the current schema; if it still fails, keep the logs and update the app or report the issue.
     scene9Title: Choosing between Director mode and Story mode
-    scene9Body: 'It comes down to whether you want to hold the pen yourself: Story mode is you write a line, the AI continues a stretch — you personally drive the plot; Director mode (experimental, on by default) is you set the rules, steer the direction and vet the writes while the AI showrunner holds the pen autonomously. Both share the memory store and character cards/worldbooks. See "Director mode → What Director mode is".'
+    scene9Body: 'It comes down to whether you want to hold the pen yourself: Story mode is you write a line, the AI continues a stretch — you personally drive the plot; Director mode (on by default) is you set the rules, steer the direction and vet the writes while the AI showrunner holds the pen autonomously. Both share the memory store and character cards/worldbooks. See "Director mode → What Director mode is".'
     identifyTitle: Guide to reading error messages
     identifyBody: 'Every error card carries the trio: error code (Chat mode S codes / Story mode E codes, e.g. S001, E010) + error category (e.g. config/network/auth) + suggested action (concrete executable steps). Start with the suggested action — it solves most problems directly.'
     linkTitle: Story mode failure handling in depth
@@ -3325,7 +3638,7 @@ help:
     memoryExamples: CompactionPoint / embedding model / FTS5
     diagramProjectTitle: Project-specific group
     projectCount: 34 core terms
-    projectCountDesc: Three modes (Director is experimental)
+    projectCountDesc: Three modes
     projectExamples: Chat / Story / Director / Fork / worldbook / character card
     apiTitle: LLM / API terms
     apiKey:
@@ -3369,30 +3682,30 @@ help:
       term: Hybrid search
       desc: Finds memories over two lanes at once — FTS5 (keywords) + vectors (semantics) — then merges the results. In Story mode each lane weighs 0.5.
     factualMemory:
-      term: Factual layer (Factual Memory)
-      desc: Memories storing "world settings" — character attributes, world rules, place names. Long-lived and stable, stored as key-value.
+      term: Factual layer
+      desc: Memories storing "world lore" — character attributes, world rules, place names. Long-lived and stable, stored as key-value.
     experientialMemory:
       term: Experiential layer (Experiential Memory)
       desc: Memories storing "plot events" — things that happened. Append-only, never modified, like a Java append-only log.
     eventSummary:
-      term: Event summary (EventSummary)
+      term: Event summary
       desc: The "plot digest" the AI writes at the end of each round, with the 5W1E six fields (when/where/who/what/significance/extra). Stored in the experiential layer.
     projectTitle: Project-specific terms
     simpleMode:
-      term: Chat mode (Simple)
+      term: Chat mode
       desc: Delivered in v0.1 — a ChatBox-like free conversation tool. Neutral colors + sans-serif font; the tool disappears into the task.
     intermediateMode:
-      term: Story mode (Intermediate)
+      term: Story mode
       desc: Delivered in v0.2 — a narrative immersion mode. Serif narrative prose + follows the global appearance; remembers the plot automatically.
     advancedMode:
       term: Director mode (Advanced)
-      desc: 'The third mode (experimental, on by default): an AI showrunner runs the world backstage and writes the prose following project rules. Capabilities include supervision mode, ask-the-director, and the event log; the old standalone HUD blueprint is deprecated.'
+      desc: 'The third mode (on by default): an AI showrunner runs the world backstage and writes the prose following project rules. Capabilities include supervision mode, ask-the-director, and the event log; the old standalone HUD blueprint is deprecated.'
     configDisplayMode:
       term: Config display mode
       desc: The "Simple/Advanced" toggle at the bottom of Settings → General (Simple by default). Simple shows only everyday configuration (providers, model picking, template resources, narrative pacing and other plain-language items); Advanced shows everything. Switching applies instantly; the filter only touches the presentation layer — hidden items with values keep working.
     themeStructure:
       term: Theme structure
-      desc: The appearance axis for "what the interface looks like" (since v0.4.0). Classic = the current flat language; Glass = frosted-glass materials (the native carrier of the Bordeaux palette); Jagged = bold black-outlined ticket language (phase 1, with a "pressed into the paper" feel on press). Choose under Settings → General → Appearance, freely combined with any palette.
+      desc: The appearance axis for "what the interface looks like" (since v0.4.0). Classic = clean flat; Glass = frosted-glass materials (the native carrier of the Bordeaux palette); Engraved = crisp outlines and presses (formerly "Jagged"); Roam = a narrative gallery. Choose under Settings → General → Appearance, freely combined with any palette.
     paletteFamily:
       term: Palette family
       desc: The appearance axis for "which palette to use" (since v0.4.0). Classic = daylight/night-flight; Bordeaux = a late-night tavern booth (night) + white gallery walls at dawn (day). Any structure × any palette combination is valid.
@@ -3494,9 +3807,9 @@ help:
     diagramIntermediateTitle: Story mode (v0.2)
     intermediateCount: 12+ features
     intermediateCountDesc: Six-step generation/memory/factual layer
-    diagramDirectorTitle: Director mode (v0.3, experimental)
+    diagramDirectorTitle: Director mode (v0.3)
     directorCount: 30+ capabilities
-    directorCountDesc: Rules/supervision/logs...
+    directorCountDesc: Rules/supervision/logs…
     diagramSettingsTitle: Settings (v0.1+v0.2)
     settingsCount: 10+ features
     settingsCountDesc: Providers/models/templates/appearance
@@ -3509,23 +3822,23 @@ help:
     moduleSimpleTitle: Chat mode features
     moduleSimpleBody: Delivered in v0.1. Session management (create/delete/star/reorder/search), message sending (streaming/edit/resend/quote), Fork branches, CompactionPoint compaction, model selection, session settings, thinking budget, template system, attachment upload, tool-call display, thinking-content display, context usage ring and manual compaction (shared with Story/Director), streaming long-conversation rendering optimization (frozen-prefix chunked rendering), in-session search (menu/Ctrl+F, non-modal search bar + hit-location flash, branch-consistent filtering).
     moduleIntermediateTitle: Story mode features
-    moduleIntermediateBody: Delivered in v0.2. The six-step generation flow (compaction → extraction → retrieval → generation → review → summary → persistence), experiential memory, the three factual-memory tables, cumulative compaction summary and segmented macro summary, 5W1E, narrative time, memory store, embedding model, FTS5+Vector retrieval, per-phase models, tool-calling mode, failure handling E010-E018/E104 and round-artifact persistence; context usage ring and manual compaction, world state bar at the top of sessions, compaction summary card with "archived rounds X–Y" label and "Undo compaction", find-similar clustering and suspected-duplicate merge preselection, empty-state sample openings, streaming thinking area (auto-expand/height cap/copy), continue-generating splice merge (single bubble + continuation badge), streaming long-conversation rendering optimization (frozen-prefix chunked rendering); memory-retrieval reachability hardening (word segmentation and main-table substring fallback — visible in the store means findable), memory index health bar (missing rows/embedding dimension mismatch) with one-click rebuild, experiential archive badges and three-way filter, duplicating a session fully inherits memories and vectors, compacted macro summaries are retrievable, worldbook/character-card read-only semantics (baseline never rewritten, evolved coexists, row-level badges in the memory store, three-part apply preview); story draft variants (regenerate/edit-resend auto-snapshots the old draft, ◀ n/m ▶ switcher under the draft card to view/copy/set-as-current/delete, context changes after switching), interrupted-prose retention (partial prose kept as an unfinished-draft card, failure bar offers "Accept as final" or "Continue writing" without repeating existing content), draft export (range × content to Markdown), in-session search (menu or Ctrl/Cmd+F, hit jumping + highlight flash), reading position memory (re-entering restores where you left off).
-    moduleDirectorTitle: Director mode (experimental)
-    moduleDirectorBody: Delivered in v0.3 (experimental). Project rules, main model and per-phase models, step/time budgets with soft landing, supervision mode (item-by-item write approval), ask-director (with an "always wait" level and banner countdown), onstage/backstage process layering (round timeline), interlude recap cards (setting changes link straight to the memory store), event log and restart recovery, skill notes, subagents (re-dispatching the same task brief returns the last conclusion directly), memory store entity merging, standalone settings system (three-state tool permissions), three-level narrative pacing, context usage indicator and manual compaction, compaction summary card undo, periodic foreshadow sweep (every-N-round reminders at round end + final-review reconciliation gate on sweep rounds), character card/worldbook seed-apply entry, streaming long-conversation rendering optimization (draft-card frozen prefix + frame merging), draft variants (regenerate doesn't overwrite old versions, n/m switcher at the draft card's bottom-right), retry-wait countdown status bar and session-open loading skeleton, event log rolling retention (last 20 rounds by default, auto-pruned past the limit), memory store source/constant badges and entry-level injection disabling, character card/worldbook preview before applying, suggested-reply candidate count and per-item length entries, session retrieval strictness three levels (Conservative/Balanced/Loose, snapshot written to the session column), in-round budget progress title (step N/M · elapsed time, turns warning-colored as budget runs out), duplicating a session completes round artifacts and draft variants, draft export (range × content, four choices, Markdown), story anchor editing (Recap card entry, same data source as the AI), clapperboard view ("now, as the AI sees it", same source as the injection side), failed-round unfinalized badge, expand-all foreshadow list, de-emphasized narration lines, like-action aggregate rows (×N expand), pure reading mode (preference remembered per session), 3s system-adjudication notices (overflow self-healing/HITL timeout), context composition distribution (four-segment estimates in the ring detail panel), a single "context compaction threshold" knob (percentage ⇄ token dual display, direct token input back-computes; window cap folds into Advanced, 0 = auto + effective value disclosed).
+    moduleIntermediateBody: Delivered in v0.2. The six-step generation flow (compaction → extraction → retrieval → generation → review → summary → persistence), experiential memory, the three factual-memory tables, cumulative compaction summary and segmented macro summary, 5W1E, narrative time, memory store, embedding model, FTS5+Vector retrieval, per-step models, tool-calling mode, failure handling E010-E018/E104 and round-artifact persistence; context usage ring and manual compaction, world state bar at the top of sessions, compaction summary card with "archived rounds X–Y" label and "Undo compaction", find-similar clustering and suspected-duplicate merge preselection, empty-state sample openings, streaming thinking area (auto-expand/height cap/copy), continue-generating splice merge (single bubble + continuation badge), streaming long-conversation rendering optimization (frozen-prefix chunked rendering); memory-retrieval reachability hardening (word segmentation and main-table substring fallback — visible in the store means findable), memory index health bar (missing rows/embedding dimension mismatch) with one-click rebuild, experiential archive badges and three-way filter, duplicating a session fully inherits memories and vectors, compacted macro summaries are retrievable, worldbook/character-card read-only semantics (baseline never rewritten, evolved coexists, row-level badges in the memory store, three-part apply preview); story draft variants (regenerate/edit-resend auto-snapshots the old draft, ◀ n/m ▶ switcher under the draft card to view/copy/set-as-current/delete, context changes after switching), interrupted-prose retention (partial prose kept as an unfinished-draft card, failure bar offers "Accept as final" or "Continue writing" without repeating existing content), draft export (range × content to Markdown), in-session search (menu or Ctrl/Cmd+F, hit jumping + highlight flash), reading position memory (re-entering restores where you left off); entry toggle (hidden by default — enable it in Settings → Story mode settings to restore the home/sidebar/shortcut entries; existing data is untouched).
+    moduleDirectorTitle: Director mode
+    moduleDirectorBody: Delivered in v0.3. Project rules, main model and per-step models, step/time budgets with soft landing, supervision mode (item-by-item write approval), ask-director (with an "always wait" level and banner countdown), onstage/backstage process layering (round timeline), interlude recap cards (setting changes link straight to the memory store), event log and restart recovery, skill notes, subagents (re-dispatching the same task brief returns the last conclusion directly), memory store entity merging, standalone settings system (three-state tool permissions), three-level narrative pacing, context usage indicator and manual compaction, compaction summary card undo, periodic foreshadow sweep (every-N-round reminders at round end + final-review reconciliation gate on sweep rounds), character card/worldbook seed-apply entry, streaming long-conversation rendering optimization (draft-card frozen prefix + frame merging), draft variants (regenerate doesn't overwrite old versions, n/m switcher at the draft card's bottom-right), retry-wait countdown status bar and session-open loading skeleton, event log rolling retention (last 20 rounds by default, auto-pruned past the limit), memory store source/constant badges and entry-level injection disabling, character card/worldbook preview before applying, suggested-reply candidate count and per-item length entries, session retrieval strictness three levels (Conservative/Balanced/Loose, snapshot written to the session column), in-round budget progress title (step N/M · elapsed time, turns warning-colored as budget runs out), duplicating a session completes round artifacts and draft variants, draft export (range × content, four choices, Markdown), story anchor editing (Recap card entry, same data source as the AI), clapperboard view ("now, as the AI sees it", same source as the injection side), failed-round unfinalized badge, expand-all foreshadow list, de-emphasized narration lines, like-action aggregate rows (×N expand), pure reading mode (preference remembered per session), 3s system-adjudication notices (overflow self-healing/HITL timeout), context composition distribution (four-segment estimates in the ring detail panel), a single "context compaction threshold" knob (percentage ⇄ token dual display, direct token input back-computes; window cap folds into Advanced, 0 = auto + effective value disclosed). Failure true-resume (after a failure, "continue from where it stopped" rebuilds the model-visible message sequence from the event-log projection, so completed LLM steps and tool outputs are never re-burned; the half-written prose kept after a stop is synthesized into the resume context so the model continues from its own broken-off sentence), director session creation wizard (a standalone home entry walks three steps — model, embedding model, project rules — straight into a ready session — unconfigured users connect a provider from a template, paste a key and fetch models while global defaults get written along the way; configured users pick a model for this session only; embedding has three optional states; the rules step offers a ready template or a three-question questionnaire feeding local assembly or informed model generation, adopted after preview and saved as a template by default).
     moduleSettingsTitle: Settings features
-    moduleSettingsBody: 'v0.1-v0.3. API provider management (7 built-in templates + custom; advanced parameters passed through as JSON for protocol-specific options), default model selection, per-phase models (with "affects: XX" consumer labels), prompt template system, Story mode''s 10 customizable prompt segments, appearance (three axes: theme structure × palette family × light/dark, 12-22 font levels), language and input (interface language: Simplified Chinese/English, switching applies instantly), advanced settings (thinking budget/timeouts/title model/ask-wait including the always-wait level), display preferences, auto compaction, global generation defaults (Chat maxTokens left blank means the model decides), model testing, Director mode toggle, character card/worldbook resource library entry, AI card building (chat with an agent to generate/edit character card and worldbook drafts, saved to the library after confirmation, with overwrite-save guardrails and exit interception), session-level settings panels (model/temperature/single-round steps + live draft preview + finish-create, auto-exits after saving), assistant-message Markdown rendering and revision-process lines, first-use model selection truly taking effect, dual config modes (the "Config display mode" toggle in Settings → General: Simple shows only everyday configuration, Advanced = everything; all settings pages and in-session panels filter by level, and hidden items with values keep working).'
+    moduleSettingsBody: 'v0.1-v0.3. API provider management (7 built-in templates + custom; advanced parameters passed through as JSON for protocol-specific options), default model selection, per-step models (with "affects: XX" consumer labels), prompt template system, Story mode''s 10 customizable prompt segments, appearance (three axes: theme structure × palette family × light/dark, 12-22 font levels), language and input (interface language: Simplified Chinese/English, switching applies instantly), advanced settings (thinking budget/timeouts/title model/ask-wait including the always-wait level), display preferences, auto compaction, global generation defaults (Chat maxTokens left blank means the model decides), model testing, Director mode toggle, character card/worldbook resource library entry, AI card building (chat with an agent to generate/edit character card and worldbook drafts, saved to the library after confirmation, with overwrite-save guardrails and exit interception), session-level settings panels (model/temperature/single-round steps + live draft preview + finish-create, auto-exits after saving), assistant-message Markdown rendering and revision-process lines, first-use model selection truly taking effect, dual config modes (the "Config display mode" toggle in Settings → General: Simple shows only everyday configuration, Advanced = everything; all settings pages and in-session panels filter by level, and hidden items with values keep working; the embedding (vector) model is visible even in Simple mode).'
     moduleDataTitle: Data maintenance features
-    moduleDataBody: v0.1+v0.3. Full export (multi-select + API Key toggle, v3 backups include character cards/worldbooks/self-built templates/Director event logs), single-session export (JSON/Markdown/TXT), full import (append/overwrite, completion report with asset counts and an API Key re-entry shortcut; overwrite import auto-snapshots to backups/ beforehand keeping the last 2, and aborts on snapshot failure), automatic backup (24h silent rolling retention of 3, domain-split by prefix without touching snapshots or foreign files), data recovery (orphan messages), table structure repair (purely additive, no data loss), clear all data, diagnostics page (failure history + logs + debug toggles + Agent Loop/Director round-trail self-check entry), storage statistics (including Director event log counts and size, rolling retention of the last 20 rounds by default).
+    moduleDataBody: v0.1+v0.3. Full export (multi-select + API Key toggle, v3 backups include character cards/worldbooks/self-built templates/Director event logs), single-session export (JSON/Markdown/TXT), full import (append/overwrite, completion report with asset counts and an API Key re-entry shortcut; overwrite import auto-snapshots to backups/ beforehand keeping the last 2, and aborts on snapshot failure), automatic backup (24h silent rolling retention of 3, domain-split by prefix without touching snapshots or foreign files), data recovery (orphan messages), table structure repair (purely additive, no data loss), clear all data, diagnostics page (failure history + logs + debug toggles), storage statistics (including Director event log counts and size, rolling retention of the last 20 rounds by default), import progress feedback (a non-dismissible overlay for the whole import), external-open routing (backup JSON opened via "Open with"/share goes straight to data import instead of the resource library).
     moduleHelpTitle: Help features
-    moduleHelpBody: 'Delivered in v0.2. Beginner guide (6-step first launch + replayable), Wiki home (8 chapter groups, 47 entries, with search): Getting started / Using Chat mode / Using Story mode / How Story mode works / Director mode / Configuration and customization / Data and maintenance / Appendix.'
+    moduleHelpBody: 'Delivered in v0.2. Beginner guide (six-step first launch + replayable), Wiki home (8 chapter groups, 47 entries, with search): Getting started / Using Chat mode / Using Story mode / How Story mode works / Director mode / Configuration and customization / Data and maintenance / Appendix.'
     entryTitle: How to enter
     entryBody: Help → Appendix → Feature index.
   versionHistoryWiki:
     title: Version history
   versionHistory:
-    intro: The current app version is 0.4.0, with Director mode as the core experience (experimental); Chat mode and Story mode (delivered in v0.2, now in maintenance) remain available; the database schema is at 51, with upgrades and repairs following a data-preserving incremental strategy.
+    intro: The current app version is $appVersion, with Director mode as the core experience; Chat mode and Story mode (delivered in v0.2, now in maintenance) remain available; the database schema is at $schemaVersion, with upgrades and repairs following a data-preserving incremental strategy.
     diagramTitle: 3 version phases
-    diagramSubtitle: Delivered / Delivered / Experimental
+    diagramSubtitle: Delivered / Delivered / Implemented
     diagramV01Title: v0.1 Chat mode
     v01Status: Delivered
     v01StatusDesc: Chat mode fully usable
@@ -3537,18 +3850,28 @@ help:
     v02Schema: schemaVersion 16-36
     v02SchemaDesc: Incremental evolution
     diagramV03Title: v0.3 Director mode
-    v03Status: Experimental
+    v03Status: Implemented
     v03StatusDesc: Implemented, on by default
-    v03Schema: schemaVersion 37-51
+    v03Schema: schemaVersion 37-$schemaVersion
     v03SchemaDesc: Includes event log and other increments (no HUD)
     v01Title: v0.1 Chat mode (delivered)
     v01Body: 'A ChatBox-like free conversation tool. Core deliverables: streaming conversation, session management (create/delete/star/reorder/search), CompactionPoint compaction, Fork branches, session-level parameter overrides, template system, thinking budget, attachment upload, data import/export. Infrastructure: SSE stream parsing, an OpenAI-compatible API client, the drift database, flutter_secure_storage, theme and base UI components.'
     v02Title: v0.2 Story mode (delivered)
-    v02Body: Today's Story mode includes the extracting/retrieving/generating/reviewing?/summarizing/persisting flow, experiential memory with FTS5+Vector retrieval, the factual layer's entity/attribute/audit three tables, cumulative compaction summary and segmented macro summary, 5W1E, the memory store, diagnostics and incremental table repair. There are currently 7 provider templates with three implemented protocols — OpenAI-compatible, Anthropic, Gemini; Responses is not implemented.
-    v03Title: v0.3 Director mode (experimental)
-    v03Body: 'Director mode (product name "Director mode", experimental): an AI showrunner retrieves memories, maintains settings and writes prose backstage following project rules; the prose is the only output. Implemented so far: project rules, main model and per-phase models, per-round step/time budgets with soft landing, supervision mode (item-by-item write approval, with "always allow this session"), ask-director, onstage/backstage process layering (round timeline + a single fold group), interlude recap cards, event log and restart recovery, skill notes, subagents, memory store entity merging (AI merge of duplicate entities), a standalone settings system (global settings page + session panels, three-state tool permissions), three-level narrative pacing, context usage indication (ring + manual compaction). It reuses Story mode''s memory foundation with no standalone HUD; the old HUD blueprint is deprecated. Also delivered: the worldbook/character card resource library (SillyTavern-compatible import). The Director experience keeps being rounded out: draft variants, draft export, story anchor editing, clapperboard view, pure reading and in-round budget progress; context configuration converged into a single "context compaction threshold" knob (percentage ⇄ token dual display) replacing the three-ratio surface, with the window cap demoted to an advanced override; session configuration fully snapshotized (reset = new = copy the current global value; existing sessions materialize automatically when opened).'
+    v02Body: Today's Story mode includes the extracting/retrieving/generating/reviewing/summarizing/persisting flow, experiential memory with FTS5+Vector retrieval, the factual layer's entity/attribute/audit three tables, cumulative compaction summary and segmented macro summary, 5W1E, the memory store, diagnostics and incremental table repair. There are currently 7 provider templates with three implemented protocols — OpenAI-compatible, Anthropic, Gemini; Responses is not implemented.
+    v03Title: v0.3 Director mode
+    v03Body: 'Director mode: an AI showrunner retrieves memories, maintains settings and writes prose backstage following project rules; the prose is the only output. Implemented so far: project rules, main model and per-step models, per-round step/time budgets with soft landing, supervision mode (item-by-item write approval, with "always allow this session"), ask-director, onstage/backstage process layering (round timeline + a single fold group), interlude recap cards, event log and restart recovery, skill notes, subagents, memory store entity merging (AI merge of duplicate entities), a standalone settings system (global settings page + session panels, three-state tool permissions), three-level narrative pacing, context usage indication (ring + manual compaction). It reuses Story mode''s memory foundation with no standalone HUD; the old HUD blueprint is deprecated. Also delivered: the worldbook/character card resource library (SillyTavern-compatible import). The Director experience keeps being rounded out: draft variants, draft export, story anchor editing, clapperboard view, pure reading and in-round budget progress; context configuration converged into a single "context compaction threshold" knob (percentage ⇄ token dual display) replacing the three-ratio surface, with the window cap demoted to an advanced override; session configuration fully snapshotized (reset = new = copy the current global value; existing sessions materialize automatically when opened).'
     milestonesTitle: Milestones
     milestones:
+    - '2026-10-18 Director instruction visibility & rules echo fixes: while a round is live, if streaming content pushes the sent instruction bubble out of view, a tappable Current instruction strip appears at the top of the timeline (tap to jump back; stays out of the way in failed/idle states); the session settings Project rules field now always echoes the effective value — sessions without an override prefill the global rules instead of showing blank'
+    - '2026-10-18 Wizard UX rework: the home entry becomes a standalone emphasized guide card (rendered after the creation buttons in both compact and regular layouts); the model step gains a plain-language teaching block, a prefilled default model for configured users, a grouped provider picker sheet behind Change the pen (no more flat full-inventory list) and one-line provider recommendations; the embedding step drops its turn-off state for two full-row paths, with unconfigured users required to choose explicitly before continuing; the rules step gains back navigation at every level plus a confirmation page (model name, content and cost preview) before Start writing actually calls, and generation can be stopped after a cost-aware confirmation; selection shows its meaning everywhere, with all copy aligned to the world-narrative-engine voice (zh/en in sync)'
+    - '2026-10-17 Director session creation wizard: a standalone Director wizard home entry (coexisting with the direct New director card) walks model, embedding model and project rules, then lands in a configured session; unconfigured users connect a provider from a template, paste a key, fetch models and get global defaults written along the way (Simple default plus director GM), configured users pick a model for this session only without touching globals; the embedding step has three optional states and can connect a second provider; the rules step offers a ready template or a three-question questionnaire (genre/style/person) with local assembly or informed model generation, adopted after preview and saved as a template by default'
+    - '2026-10-16 Beta feedback batch: director decision and approval cards reworked (bottom fade plus a scroll-for-more hint on capped scroll areas, full-row option buttons, a unified card frame, question text scaling with the font-size setting); the director default project rules now carry the full narrative-engine spec and stay in sync with the built-in Narrative engine system prompt template; the wide-window reading measure widens 720 to 800 with the story/director input toolbar and suggestion overlay aligned to it; failure-detail scroll areas gain fade hints'
+    - '2026-10-11 Apple platform adaptation: systematic iOS/macOS pass on top of first bootability — fixed three root causes (macOS sandbox blocking file panels, iOS share hard-failing without an anchor, macOS keychain writes for API keys), unified branding and window sizing, added mobile permission feedback; same-day decision batch landed close-window interception, platform-aware desktop shell, portrait lock, iOS back arrow, backup resume-check and WAL cap; dual-platform acceptance in progress'
+    - '2026-10-09 Narrative motion: continuous waiting dots across modes, staged home entrances, responsive cards, sending and suggestion transitions, process and completion feedback; four themes supported, activity pauses offscreen, in the background and with reduced motion; device review pending'
+    - '2026-10-08 Creative and archive interfaces polished: long-message editing, prompt previews, tablet resource layouts, director records and decisions, failure feedback and reply suggestions; all four iterations pending combined device review'
+    - '2026-10-08 Narrative design polished: model and provider forms, session and export panels, search previews, resource details, data and diagnostics; narrow-screen, large-text and keyboard adjustments; all three iterations pending combined device review'
+    - '2026-10-07 Narrative design expanded: positive device feedback on the first iteration; grouped settings, sidebar, composer, providers, templates, onboarding and help; second iteration pending device review'
+    - '2026-10-07 Narrative design experiment: continue-story home, scrolling opening titles, unframed reading, name-based identity and experience timeline; experimental branch, device review pending'
     - 2026-06-12 First draft of the project outline design
     - 2026-06-29 v0.1 full review (59 issues)
     - 2026-06-30 Intermediate mode design doc review (13 blockers)
@@ -3590,18 +3913,26 @@ help:
     - '2026-09-21/22 Appearance and accessibility polish (T05-T11): unified overlay entries showLmDialog/showLmSheet (74 dialogs + 30 sheets migrated, Classic parameter-for-parameter equal), glows derived per palette family + ≤2 real-time blurs per screen runtime red line, five glass interaction states and single-source motion LmMotion (centralized reduce-motion downgrade), semantic completion (readable names for icon-only buttons) and keyboard focus rings, large-screen rules (single-source breakpoints 600/1280/1920 + measure convergence + narrative reading column capped at 720), Glass swipe-back overprint and black-frame fixes + self-hosted stages for first screen/per route, white-glass steps dual-axis (direction derived from surface luminance) and truly flat four button types, Android window/splash background aligned to the default appearance, single-source desktop keyboard interaction layer (shortcut registry/focus traversal/overlay Esc routing), ClassicStructure light/dark skeleton deduplicated (699→442 lines), Glass rendering pipeline and long-session-list scrolling performance optimization'
     - '2026-09-22 Fourteenth full-project review fix batch (ten batches): Story/Director edit-resend variant wiring (old-version snapshots reachable), Director mode wired to the global font size, compaction-wrap-up window late-cancel race fixed, input history navigation gate corrected, regenerate-preparing window send guard, accept-as-final button availability unified, Simple-mode embedding banner dead-end exemption, Glass AppBar/stage stragglers closed out, seven groups of small copy items across the provider page/data maintenance/memory, and five help documents proofed (Wiki appearance chapter rewritten for three axes + night-flight residue cleanup + milestones supplemented with the decision batch and T05-T11 nodes + config display mode path annotation + README bilingual capability lines + visual dictionary font registration)'
     - '2026-09-28 English (en-US) officially supported as the UI language: Settings → Language and input offers Simplified Chinese / English, switching takes effect instantly and persists; all user-facing copy (including the help wiki and onboarding) follows the language; Follow system not yet available'
+    - '2026-09-24 Release and knowledge-base infrastructure: official release signing (key.properties + CI secrets injection + debug fallback), debug builds get a .debug suffix and coexist with release builds (isolated data directories); unified knowledge-base documentation system with public-export check gates; the embedding (vector) model moved into Simple-mode visibility (director memory section split per row)'
+    - '2026-09-25 Director mode on by default (works out of the box for new users; users who explicitly turned it off stay off); built-in template rotation — the Isekai narrator replaces Infinite-flow/Ancient-transmigration (existing sessions hold content snapshots and are unaffected); three backup/import touches (sandbox-directory notice, backup JSON opened via Open-with routed to data import, auto-backup buttons wrap on narrow screens)'
+    - '2026-09-29 Security-audit fix batch and import experience: cleartext http warning, import file depth pre-check, log-level tightening with share confirmation, explicit Android allowBackup=false; full import progress overlay'
+    - '2026-09-29 Story mode demoted to hidden by default (home shows New chat/New director side by side; entry toggle off by default, re-enable in Settings → Story mode settings; existing sessions and data untouched) and the home page fixed to one screen (zero scroll range, pull-to-refresh only, recent-session rows hidden whole when they do not fit)'
+    - '2026-10-05 Classic component consumption fully absorbed into the component interface layer: LmComponentKit gains 17 responsibility methods (page app bar, setting section, selection row, empty state, entry transition, banner, history panel shell, input toolbar, confirm and edit dialogs, markdown body, message navigation, message actions, compaction summary card, narrative bubble, suggested-reply overlay, floating panel venue, narrative paragraph style); the features layer holds zero structure-implementation imports, pinned by a guard test (pure refactor; visuals and behavior unchanged across all four appearance combos)'
+    - '2026-10-05 Frozen-window rendering for ultra-long streaming messages (pure performance work, zero visual change): the already-rendered prefix of a very long single-paragraph text is frozen line-aligned into cached Text chunks so each frame lays out only the live tail window, with block-splitting and plain-text checks made incremental — per-frame cost is now insensitive to total length (64k chars in the same range as 16k), shared automatically by all three modes plus thinking and compaction streaming areas'
+    - '2026-10-06 Director failure true-resume: "continue from where it stopped" (including the E104 degrade-and-continue path) rebuilds the model-visible message sequence at failure time from the event-log projection — completed LLM steps and tool outputs are never re-burned, and step/token budgets count prior-attempt spend; the half-written prose kept after a stop is synthesized into the resume context; when resuming is not possible (model endpoint changed, no event log, etc.) it falls back to a full round re-run'
+    - '2026-10-06 Diagnostics overhaul: developer gate re-lockable + 2s tap window; app version/schema numbers single-sourced (kAppVersion bridge + currentSchemaVersion, wiki count lock extended to en + app version); release log-level display unified and failure count reads the true total'
     entryTitle: How to enter
     entryBody: Help → Appendix → Version history.
   directorModeWiki:
     title: What Director mode is
   directorMode:
-    intro: 'Director mode (experimental) is a third way to play: you write the "project rules", and the AI showrunner autonomously retrieves memories, maintains settings and writes the prose backstage — the only finished product you see is the novel''s prose, with all the preparation tucked backstage.'
+    intro: 'Director mode is a third way to play: you write the "project rules", and the AI showrunner autonomously retrieves memories, maintains settings and writes the prose backstage — the only finished product you see is the novel''s prose, with all the preparation tucked backstage.'
     diagramTitle: The loop of one round of director work
     diagramSubtitle: You advance → backstage work → prose → the world settles
     loopYouLabel: You advance
     loopYouDesc: Send a directive or an opening line
     loopBackstageLabel: Showrunner works backstage
-    loopBackstageDesc: Reviews earlier events, verifies settings, logs the scene...
+    loopBackstageDesc: Reviews earlier events, verifies settings, logs the scene…
     loopOutputLabel: The prose
     loopOutputDesc: The only onstage content
     loopWorldLabel: The world settles
@@ -3613,8 +3944,8 @@ help:
     vsStoryBody: You write a line, the AI continues a stretch; memory settles automatically; you personally drive the plot.
     vsDirectorTitle: Director mode = the AI holds the pen, you direct
     vsDirectorBody: You set the rules, you steer, you vet the writes; the AI showrunner writes the prose.
-    experimentTitle: Experimental status
-    experimentBody: Director mode is still being polished and is on by default. The home page has a "New director" entry; you can turn the toggle off anytime under "Settings → Director mode settings" — existing Director sessions are unaffected.
+    experimentTitle: On by default
+    experimentBody: Director mode is on by default. The home page has a "New director" entry; you can turn the toggle off anytime under "Settings → Director mode settings" — existing Director sessions are unaffected.
   directorFirstWiki:
     title: Creating a Director session
   directorFirst:
@@ -3629,14 +3960,14 @@ help:
     rulesTitle: What to write in project rules
     rulesBody: 'Resident background rules: worldview, characters, writing style and narrative principles. Effective for the whole session and never rewritten by the AI. For example: "A low-magic wuxia world, austere and restrained prose; the protagonist is an out-of-work escort; every act ends with an unresolved piece of foreshadowing".'
     startTitle: The opening
-    startBody: Just send the first line, e.g. "The escort agency went under; I'm counting my last copper coins under the city gate". The director will conceive and deliver the prose itself; while waiting for the first character you'll see a "The director is conceiving..." heartbeat hint.
+    startBody: Just send the first line, e.g. "The escort agency went under; I'm counting my last copper coins under the city gate". The director will conceive and deliver the prose itself; while waiting for the first character you'll see a "The director is conceiving…" heartbeat hint.
   directorWatchWiki:
     title: 'Supervision mode: asks and approvals'
   directorWatch:
-    intro: 'Supervision mode lets you vet every write to the "official plot history" item by item: before the director changes settings or records major events, a card asks you first.'
+    intro: 'Supervision mode lets you vet every write to the "story canon" item by item: before the director changes settings or records major events, a card asks you first.'
     diagramTitle: The approval flow of one write
     diagramRequestLabel: The director wants to write
-    diagramRequestDesc: e.g. "revise the setting collection" or "record into the annals"
+    diagramRequestDesc: e.g. "revise the setting collection" or "record into the chronicle"
     diagramCardLabel: A confirmation card pops
     diagramCardDesc: Shows the content to be written, waiting for your choice
     diagramAllowLabel: Allow
@@ -3646,18 +3977,18 @@ help:
     askTitle: Ask director
     askBody: 'At forks that need your call (like "does the villain surrender or flee now?"), the director proactively pops a "Director decision" card: you can type an answer, or "Skip" to let it decide. The card header has a countdown (ticking once a minute): with no response before it expires, it decides on its own; set "Ask-wait timeout" to 0 (always wait) in settings and the card will wait for you indefinitely without adjudicating itself. Approval cards likewise show a countdown, but a timeout counts as a denial (the safe default, not disableable).'
     toggleTitle: The toggle and its cost
-    toggleBody: 'Supervision mode is toggled in Director session settings. On: every write pauses for your confirmation — the strictest vetting, but generation stops frequently. Off: writes execute automatically and the prose flows unbroken. Turn it on when you want to vet canonical changes item by item. "Always allow this session" on an approval card remembers your clearance for a tool, so the same tool stops popping cards for the rest of the session; to take it back, tap "Clear this session''s clearances" in the "Supervision and tools" section of session settings (it also expires automatically when the session closes).'
+    toggleBody: 'Supervision mode is toggled in Director session settings. On: every write pauses for your confirmation — the strictest vetting, but generation stops frequently. Off: writes execute automatically and the prose flows unbroken. Turn it on when you want to vet canonical changes item by item. "Always allow for this session" on an approval card remembers your clearance for a tool, so the same tool stops popping cards for the rest of the session; to take it back, tap "Clear session allows" in the "Supervision & tools" section of session settings (it also expires automatically when the session closes).'
   directorProcessWiki:
     title: 'Reading the process: onstage and backstage'
   directorProcess:
     intro: A Director session shows only the prose by default; the showrunner's preparation is tucked "backstage" — expand it anytime you want to look.
     diagramTitle: Onstage and backstage
     stageLabel: Onstage
-    stageDesc: Prose + one process line ("Reviewing earlier events... · step 3")
+    stageDesc: Prose + one process line ("Reviewing earlier events… · step 3")
     backstageLabel: Backstage
     backstageDesc: Tap the backstage summary row (or the right arrow) to expand the per-step work cards
     verbsTitle: The "lines" on backstage work cards
-    verbsBody: 'Work cards use stage verbs to show what each step does: review earlier events (dig up old happenings), reread the original text (re-read the prose), verify settings (check facts), reread the mainline (go over summaries), revise the setting collection (change settings), merge settings (combine duplicate entries), record into the annals (log events), log the scene (note the current position), consult the handbook (check writing methods), dispatch a subagent (assign a small task), ask the director (get your call), bring down the curtain (deliver the draft).'
+    verbsBody: 'Work cards use stage verbs to show what each step does: review earlier events (dig up old happenings), reread the original text (re-read the prose), verify settings (check facts), reread the mainline (go over summaries), revise the setting collection (change settings), merge settings (combine duplicate entries), record into the chronicle (log events), log the scene (note the current position), consult the handbook (check writing methods), dispatch a subagent (assign a small task), ask the director (get your call), bring down the curtain (deliver the draft).'
     costTitle: Cost hint
     costBody: The small ring by the input box shows how far the current context is from auto compaction; tap it for window usage, cache hit rate and the last round's request consumption, and to manually compact now — with a stable prefix, input costs drop to roughly a tenth.
   directorLogWiki:
@@ -3683,11 +4014,11 @@ help:
     diagramRetryLabel: Failure-bar retry
     diagramRetryDesc: Rerun this round from the failure point
     retryTitle: What happens on retry
-    retryBody: Small hiccups are auto-retried a few times; if it still fails, it stops and waits for you — tapping retry reruns the whole round of director work. Completed rounds and memories are unaffected. Common failure causes are network timeouts, model quota or configuration problems — check the model configuration in session settings first, then the failure history on the diagnostics page.
+    retryBody: Small hiccups are auto-retried a few times; if it still fails, it stops and waits for you. "Retry round" reruns the whole round of director work from scratch, while "Continue from interruption" reuses what this round already produced (text already written and tool steps already done are kept instead of re-billed) and only falls back to a full rerun when nothing can be resumed. Completed rounds and memories are unaffected. Common failure causes are network timeouts, model quota or configuration problems — check the model configuration in session settings first, then the failure history on the diagnostics page.
   directorSettingsWiki:
     title: Director session settings
   directorSettings:
-    intro: 'Director mode''s settings live on two levels — the global "Director mode settings" page (Settings → Director mode settings, including the mode toggle) and the session panel (top-right of the session page, 8 collapsible sections: Memory management/Project rules/Models and generation/Narrative pacing/Supervision and tools/Budget/Context and compaction/Character cards/Worldbooks; Project rules moved to 2nd, Character cards/Worldbooks last). Items not adjusted within the session use global values; once adjusted, the reset button writes the current global value into that field as a snapshot (the two no longer affect each other afterwards).'
+    intro: 'Director mode''s settings live on two levels — the global "Director mode settings" page (Settings → Director mode settings, including the mode toggle) and the session panel (top-right of the session page, 8 collapsible sections: Memory management/Project rules/Models & generation/Narrative pacing/Supervision & tools/Budget/Context and compaction/Character cards/Worldbooks; Project rules moved to 2nd, Character cards/Worldbooks last). Items not adjusted within the session use global values; once adjusted, the reset button writes the current global value into that field as a snapshot (the two no longer affect each other afterwards).'
     settingsTitle: Key settings
     modelTitle: Main model
     modelBody: The model the director uses for autonomous execution; defaults to the global "Generate" model when not individually configured. When you want the director on a stronger model while everyday chat runs on a cheap one, specify it here. The vectorization model is configured separately (Retrieval and memory section).
@@ -3702,7 +4033,7 @@ help:
     contextTitle: Context and compaction
     contextBody: 'The small ring by the input area shows context usage (full scale = context compaction threshold); tap to open the detail panel for window usage/cache hit rate/the last round''s breakdown, and "Compact now" once the conversation is long enough; the compaction summary card, expanded, offers "Undo compaction" to restore the archived conversation. Context has a single knob, "Context compaction threshold": when history usage reaches that share of the effective window (the smaller of the model window and the window cap), compaction runs automatically before the next round; the effective token value shows beside the percentage, or you can type tokens directly to back-compute the percentage. Two more engine-built protections sit off the settings surface: a forced wrap-up when in-round context hits the 85% survival line, and a soft landing for per-round cumulative consumption on a cost basis (a separate ledger from how much got loaded). The window cap lives in the "Advanced: window cap" fold — 0 = auto (use the model window); you only need to declare it manually when the model''s registration is inaccurate or to dodge TPM rate limits.'
     suggestReplyTitle: Suggested replies
-    suggestReplyBody: 'The model and parameters for the input box''s "Suggest" button live in the suggested-reply group of the "Models and generation" section: suggested model (blank uses the Director main model), prompt, temperature, generation cap, candidate count (how many to generate at once) and per-item maximum length (per-item length controlled at the prompt level).'
+    suggestReplyBody: 'The model and parameters for the input box''s "Suggest" button live in the suggested-reply group of the "Models & generation" section: suggested model (blank uses the Director main model), prompt, temperature, generation cap, candidate count (how many to generate at once) and per-item maximum length (per-item length controlled at the prompt level).'
     memoryTitle: Memory store entry
     memoryBody: Settings also has a "Memory store" section for browsing, searching and manually editing this session's memories — the same memory store shared with Story mode. The session panel's "Memory management" section also has "retrieval strictness" in three levels (Conservative/Balanced/Loose) controlling how much the director dredges up and how strictly it picks when going through old accounts; selecting one writes that level's concrete values into this session, and the two no longer affect each other afterwards.
   resourceLibraryWiki:
@@ -3737,8 +4068,10 @@ resourceAi:
   send: Send
   stop: Stop
   attach: Attach reference material
-  attachTooLarge: File exceeds the 10 MB limit and was not attached
+  attachUnsupported: Picking local files is not supported on this platform; use the desktop or mobile app
   attachFailed: 'Attach failed: $error'
+  photoPermissionDenied: Photo access was denied. Allow Photos access in system settings, then try again
+  attachReadFailed: Could not read the file; try again or pick another one
   attached: Attached "$name"
   generatingHint: Working with the model…
   retryLast: Retry last message
@@ -3789,14 +4122,16 @@ resourceAi:
   finishCreate: Finish creation
   finishDisabledHint: The draft is still empty — go back to the chat and let the AI start writing
   finishFatalHint: This round failed and can be retried; if the draft already has content, you can also finish creation directly
-  finishCreateBody: This saves "$name" to the resource library and ends this card-writing session.
-  finishEditBody: Before ending this card-writing session, choose how the draft is saved.
+  finishCreateBody: This saves "$name" to the resource library and ends this AI card-building session.
+  finishEditBody: Before ending this AI card-building session, choose how the draft is saved.
   finishSaveAsNew: Save as a new resource
   finishUpdate: Finish and update original
   finishConfirm: Finish creation
   draftFinalizedBanner: Draft finalized
   errorModelUnavailable: 'Model unavailable ($detail): check the API provider and key, then retry.'
   errorTurnIncomplete: This round is incomplete ($detail) — you can resend.
+  # Empty-name guard (finalize failure envelope)
+  errorNameMissing: "The AI didn't give this resource a name. Add one in the draft before saving, or go back to the chat and ask the AI to name it."
   unnamedCard: Untitled character card
   unnamedBook: Untitled worldbook
 appearance:
@@ -3808,3 +4143,201 @@ appearance:
   palettes:
     classic: Classic
     bordeaux: Bordeaux
+
+# Director session creation wizard : home entry -> 3 steps -> ready session
+directorWizard:
+  # Home guide card (standalone emphasized row after the creation buttons, rendered in both compact and regular layouts)
+  entryTitle: Director Mode Setup Wizard
+  entryDesc: Not familiar with configuration? This wizard walks you into a director-mode session with ease
+  # Stepper page common
+  exit: Skip
+  prev: Back
+  next: Next
+  finish: Done
+  stepIndicator(current, total): "Step $current / $total"
+  # Step titles (step bodies filled by later batches)
+  modelStepTitle: Choose your chat model
+  embeddingStepTitle: Embedding model
+  rulesStepTitle: Project rules
+  # Model step
+  model:
+    teach: "The model is this editor-in-chief's brain: you push the story forward, it writes the prose — all through this one model. Providers differ in style, temperament, and price. You can start with DeepSeek-flash — all it takes is one API key."
+    introConfigured: Want a different editor for this story? Otherwise your default model is used — just go to the next step.
+    pickerTitle: Pick the model that writes this story
+    pickToast: The model for this story is set.
+    changePen: Change the editor-in-chief
+    selectedHintNew(model): "$model will write your story — you can switch anytime."
+    selectedHintConfigured(model): This story will be written by $model.
+    templateHints:
+      deepseek: Direct access in China, fast, cheap — the value pick
+      openai: The best known, richest ecosystem, mid-priced
+      openrouter: One key for models from many providers, via an aggregator
+      anthropic: Strong at long-form writing, pricier
+      gemini: Made by Google, generous free tier
+      nvidia: Free models to try, solid embedding models
+      agnes: China-based aggregator — one key, many models
+    pickProvider: Pick a provider
+    applyKey: Get an API Key
+    nameField: Name
+    keyField: API Key
+    createAndFetch: Create and fetch model list
+    pickModel: Pick a model
+    manualModelId: Enter a model ID
+    useManual: Use this ID
+    testConnection: Test endpoint connectivity
+    noModelsYet: No fetched models yet. Fetch them in Settings, or connect a new provider here.
+    addProvider: Connect a new provider
+  # Embedding model step
+  embedding:
+    teach: "The embedding model governs how memories are found: with one, the world digs up the past by meaning — mention an old event in different words and it still surfaces; without one, recall matches keywords. It works without one too — the world just has a poorer memory."
+    optionSetupTitle: Set one up (recommended)
+    optionSetupDesc: Recall by meaning — stronger memory, sharper finds; adds a little to your model bill.
+    optionSkipTitle: Skip for now
+    optionSkipDesc: Keyword matching is good enough; set one up later in Settings anytime.
+    currentCard(model): "Your director's memory currently runs on $model — it finds old events by meaning, accurately."
+    optionKeepTitle: Keep as is
+    optionKeepDesc: Change nothing and continue.
+    optionChangeTitle: Switch
+    optionChangeDesc: Pick a better fit from the providers you already have.
+    pickSection: Pick an embedding model
+    connectProvider: Connect a new provider
+    embOnlyHint: "Only models typed as embedding are listed. If the list comes back empty, enter an ID — it will be tagged as embedding for you."
+    manualEmbModelId: Enter an embedding model ID
+    selectedEmb: Selected embedding model
+  # Project rules step
+  rules:
+    intro: "Project rules are this world's laws — worldview, writing style, taboos, anything can go in; leave it empty and the AI will run a default playbook for you."
+    pathTemplateTitle: Use a ready template
+    pathTemplateDesc: Pick a ready set of world rules and start writing
+    pathQuizTitle: Shape your own world
+    pathQuizDesc: Three questions shape your world, then it's written for you
+    backToPath: Go back
+    quizOpening: Want to shape your world along the way? Just pick a rough direction — the AI handles the rest.
+    quizHint: Pick one, or say it yourself; leave it blank and the AI decides.
+    genreQuestion: What kind of world do you want to play in?
+    genreCustomHint: Or describe your world in one sentence
+    styleQuestion: What narration style do you like?
+    styleCustomHint: Or describe the style you want
+    personQuestion: Which point of view should the story use?
+    personNone: Leave blank
+    personNoneDesc: Let the model decide
+    personFirst: First person
+    personFirstDesc: Be the protagonist, told by "I" (I push the door open and the rain pours in)
+    personSecond: Second person
+    personSecondDesc: The world addresses you directly — most immersive (You push the door open and the rain pours in)
+    personThird: Third person
+    personThirdDesc: Objective narration, or you stay out of this world (He pushes the door open and the rain pours in)
+    knowTitle: You have picked a direction for your world
+    knowAssemble: Assemble now
+    knowAssembleDesc: No model call, no credit spent — ready for your review right away.
+    knowGenerate: Let the model write it
+    knowGenerateDesc(model): A closer fit to your choices (especially what you wrote yourself); calls your model ($model) and spends a little credit.
+    knowTail: Either way you get to review it first — redo or edit if you are not satisfied.
+    confirmTitle(model): Have $model write your world rules
+    confirmBody: It will write a roughly 300–700 character set of world rules from your three choices — you review it first and decide whether to use it. This calls your model and spends a little credit.
+    startGenerate: Start writing
+    generatingHint(model): "$model is writing for you…"
+    generatingCancel: Stop
+    cancelGenTitle: Stop this run?
+    cancelGenBody: What's already spent won't be refunded. You'll go back one page and can start again anytime.
+    cancelGenConfirm: Stop
+    quizHintGenre(label): The world takes its base tone from "$label".
+    quizHintStyle: The prose follows this flavor.
+    quizHintPerson:
+      first: '"I" narrate this story.'
+      second: The world speaks to you directly — deepest immersion.
+      third: Watch this story like a novel.
+      none: Let the AI pick the person.
+    # Seed your character (questionnaire-path toggle)
+    characterInitTitle: Seed your character
+    characterInitDesc: Want a character to appear in the very first round? Say so here instead of leaving it to chance.
+    characterInitHint: Describe the character you want from round one — name, gender, background… anything about them goes.
+    characterInitDescribeTitle: I'll describe them
+    characterInitDescribeDesc: Write the character yourself; the opening round settles them in before the story starts
+    characterInitCardTitle: Pick an existing character card
+    characterInitCardDesc: Choose a card from your library; the character enters this world's data directly
+    characterInitPickCard: Pick a card
+    characterInitCardEmpty: No character cards yet — create or import one in the Library first, then come back.
+    characterInitCardSelected(name): "Selected card: $name"
+    promptPreviewLabel: Will be added to the prompt
+    nextQuestion: Next question
+    finishQuestions: Done answering
+    previewTitle: Preview
+    useIt: Use this
+    regenerate: Regenerate
+    switchToAssemble: Build from my choices instead
+    editSelf: Let me tweak it myself
+    reAnswer: Answer again
+    saveTemplate: Save to my templates
+    genFallbackHint: The model did not deliver this time — here is the version built from your choices. Use it as is, or try the model again.
+    editFieldLabel: Project rules content
+    editConfirm: Confirm changes
+    templateSection: Templates we prepared
+    nameDialogTitle: Save as template
+    nameDialogHint: Name this world
+    save: Save
+    customWorldBase: Custom world
+    unanswered: Not chosen
+    noneExtra: None
+    # Question option labels (shared by chips and generation prompt)
+    genreOptions:
+      xianxia: Xianxia fantasy
+      isekai: Japanese isekai
+      scifi: Sci-fi future
+      wuxia: Wuxia jianghu
+      urban: Urban realism
+      mystery: Mystery & occult
+      apocalypse: Post-apocalypse survival
+      altHistory: Alternate history
+      courtIntrigue: Court intrigue
+    styleOptions:
+      plain: Plain and fluent
+      literary: Literary and rich
+      humorous: Light and humorous
+      terse: Cold and sharp
+      classical: Classical elegance
+    # Assembly blocks (identity and person-second are the finalized copy; others follow the same style)
+    blocks:
+      identity: 'You are the narrator of an interactive story, building and driving an open world. You never speak, act, or decide for the user.'
+
+      userSupplementPrefix: "User addition: "
+      genre:
+        xianxia: 'This is an Eastern cultivation world: spiritual energy abounds, sects stand like forests, and mortals can reach immortality through cultivation. A ranked cultivation system, sect rivalries, heavenly treasures, and inner demons form the world''s logic.'
+
+        isekai: 'This is a Japanese-style otherworld: magic and swords coexist, adventurer guilds anchor the order, and legends of demon lords and heroes still circulate. Class systems, party bonds, and continental crises form the world''s logic.'
+
+        scifi: 'This is a sci-fi future world: interstellar colonization and artificial intelligence have reshaped life, and in cyber cities data is power. Megacorps, body augmentation, and deep-space unknowns form the world''s logic.'
+
+        wuxia: 'This is a wuxia jianghu world: martial arts and honor weigh together, sects and the court wrestle for power, and stories of gratitude and revenge flow between streets and mountain gates. Jianghu codes, secret arts, and tangled feuds form the world''s logic.'
+
+        urban: 'This is an urban contemporary world: the story happens in a present-day city where offices, streets, and human ties are the stage. Realistic social rules, everyday choices, and relationships form the world''s logic.'
+
+        mystery: 'This is a mystery-occult world: undercurrents stir beneath ordinary life, with the paranormal, deduction, and the unnameable lurking at the edges. Clues, riddles, and a closing-in truth form the world''s logic.'
+
+        apocalypse: 'This is a post-apocalypse survival world: the old order has collapsed and survivors scrape by among ruins and scarce resources. Strongholds, supplies, mutated threats, and human choices form the world''s logic.'
+
+        altHistory: 'This is an alternate-history world: familiar dynasties and figures, yet one divergence point steered history onto a different course. Court, jianghu, and the tides of the age form the world''s logic.'
+
+        courtIntrigue: 'This is a court-intrigue world: behind palace walls everyone wears a mask, and a single move may decide life or death. Faction struggles, an unfathomable throne, and the game between court and harem form the world''s logic.'
+
+      style:
+        plain: 'The narration is plain and fluent: like a readable web novel, unpretentious and easy to follow.'
+
+        literary: 'The narration is literary and rich: attentive to imagery and rhetoric, crafting mood and detail without piling on ornament.'
+
+        humorous: 'The narration is light and humorous: it quips and plays with memes, keeping fun even in tense moments without undercutting serious arcs.'
+
+        terse: 'The narration is cold and sharp: mostly short sentences, clean and brisk, dense with information, no dragging.'
+
+        classical: 'The narration has classical elegance: mixing classical and vernacular wording with a storyteller''s poise, never at the cost of readability.'
+
+      person:
+        first: 'The story is told in first person: narrated by "I", capturing what I see and feel and how the world responds.'
+
+        second: 'The story is told in second person: the protagonist is "you", describing what you see and feel and how the world answers you.'
+
+        third: 'The story is told in third person: objectively depicting words, deeds, and events from an observer''s view.'
+
+    # Generation prompts (finalized copy)
+    genSystem: "You are a world-setting writer for interactive stories. Based on the user's world choices, write a project rule that drives an interactive story engine.\n\nRequirements:\n1. Write only about the world itself and how it responds to the user: world rules, narration style, and (if chosen) narrative person. Do not write engine instructions such as how you should respond or how the plot must advance (the engine has its own spec; writing them causes conflicts).\n2. Follow the user's choice of narrative person; if left blank, decide the most fitting person yourself.\n3. Weave the user's custom descriptions into the setting faithfully, without omission or distortion.\n4. In the user's language, 300-700 characters. Output the body text directly: no titles, numbering, explanations, or preamble."
+    genUser(genreLabel, genreExtra, styleLabel, styleExtra, person): "My world choices:\nGenre: $genreLabel (my addition: $genreExtra)\nStyle: $styleLabel (my addition: $styleExtra)\nPerson: $person"

@@ -1,8 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Explicitly disable system backup channels (adb backup / cloud backup /
-         OEM full-device migration): conversation data is private; the app
-         ships its own export & auto-backup flow under Data Management. -->
+    <!-- 安全评测 P3-6：显式禁用系统备份通道（adb backup / 云备份 / 部分
+         厂商整机迁移）。会话数据库与偏好属隐私数据，app 自带「数据管理」
+         导出/自动备份链路（含 API Key 可选勾选），不需要系统通道。 -->
     <application
         android:allowBackup="false"
         android:label="LMStory"

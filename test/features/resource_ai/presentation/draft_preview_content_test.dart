@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/simple/components/simple_markdown_body.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_markdown_body.dart';
 import 'package:lmstory/features/resource_ai/domain/entities/draft_entities.dart';
 import 'package:lmstory/features/resource_ai/presentation/widgets/draft_preview_content.dart';
 import 'package:lmstory/i18n/strings.g.dart';

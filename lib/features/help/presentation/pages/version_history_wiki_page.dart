@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/meta/app_meta.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/help/presentation/widgets/version_history_diagram.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_page_scaffold.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_section_title.dart';
@@ -21,7 +23,12 @@ class VersionHistoryWikiPage extends StatelessWidget {
       title: t.help.versionHistoryWiki.title,
       children: [
         Text(
-          t.help.versionHistory.intro,
+          // 版本号/Schema 号从代码真源注入（kAppVersion 对账 pubspec，
+          // AppDatabase.currentSchemaVersion 对账 drift），文案不再手写数字
+          t.help.versionHistory.intro(
+            appVersion: kAppVersion,
+            schemaVersion: AppDatabase.currentSchemaVersion,
+          ),
           style:
               SimpleTextStyles.body.copyWith(color: colors.muted, height: 1.7),
         ),

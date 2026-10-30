@@ -3,10 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_section.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
+import 'package:lmstory/features/settings/presentation/widgets/sections/auto_retry_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/default_reasoning_effort_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/timeout_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/title_model_section.dart';
@@ -37,7 +37,8 @@ class GeneralAdvancedSettingsPage extends ConsumerWidget {
         ConfigVisibilityKeys.generalAdvancedReasoningEffort,
         level,
       ))
-        SimpleSettingSection(
+        context.lmUi.settingSection(
+          context,
           title: t.settings.general.defaultReasoningEffort,
           child: const DefaultReasoningEffortSection(),
         ),
@@ -45,15 +46,26 @@ class GeneralAdvancedSettingsPage extends ConsumerWidget {
         ConfigVisibilityKeys.generalAdvancedTimeout,
         level,
       ))
-        SimpleSettingSection(
+        context.lmUi.settingSection(
+          context,
           title: t.settings.general.timeout,
           child: const TimeoutSection(),
+        ),
+      if (ConfigVisibility.of(
+        ConfigVisibilityKeys.generalAdvancedAutoRetry,
+        level,
+      ))
+        context.lmUi.settingSection(
+          context,
+          title: t.settings.general.autoRetry,
+          child: const AutoRetrySection(),
         ),
       if (ConfigVisibility.of(
         ConfigVisibilityKeys.generalAdvancedTitleModel,
         level,
       ))
-        SimpleSettingSection(
+        context.lmUi.settingSection(
+          context,
           title: t.settings.general.titleModel,
           child: const TitleModelSection(),
         ),
@@ -62,7 +74,8 @@ class GeneralAdvancedSettingsPage extends ConsumerWidget {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(title: t.settings.general.categories.advanced.title),
+      appBar: context.lmUi
+          .appBar(context, title: t.settings.general.categories.advanced.title),
       body: LmMeasure(
         child: ListView(
           padding: const EdgeInsets.all(SimpleSpacing.sLg),
@@ -71,6 +84,9 @@ class GeneralAdvancedSettingsPage extends ConsumerWidget {
               if (i > 0) const SizedBox(height: SimpleSpacing.sLg),
               sections[i],
             ],
+            const AdvancedLevelHint(
+              surfaceId: ConfigVisibilitySurfaces.generalAdvanced,
+            ),
           ],
         ),
       ),

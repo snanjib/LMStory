@@ -1,15 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/api/lm_motion_profile.dart';
+import 'package:lmstory/core/theme/shared/components/composer_surface.dart';
+import 'package:lmstory/core/theme/shared/components/navigation_card_content.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/classic_components.dart';
 import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_setting_card.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/system/structures/glass/glass_factories.dart';
 import 'package:lmstory/core/theme/system/structures/glass/glass_materials.dart';
 import 'package:lmstory/core/theme/system/structures/glass/glass_radii.dart';
 
-class GlassComponents implements LmComponentKit {
+/// Extends [ClassicComponents] so undifferentiated surfaces keep the
+/// established look; overrides carry the glass differentiation.
+class GlassComponents extends ClassicComponents {
   const GlassComponents();
+
+  @override
+  LmMotionProfile get motionProfile => const LmMotionProfile(
+        enterOffset: Offset(0, 8),
+        hoverOffset: Offset(0, -2),
+      );
 
   @override
   double radius(LmCorner corner) => switch (corner) {
@@ -77,55 +89,22 @@ class GlassComponents implements LmComponentKit {
         title: title,
         subtitle: subtitle,
         onTap: onTap,
+        enabled: enabled,
       );
     }
-    final palette = context.lm.palette;
-    return GlassCard(
-      onTap: onTap,
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: palette.primaryDim,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: palette.primary, size: 20),
+    return Opacity(
+      opacity: enabled ? 1 : 0.5,
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        child: GlassCard(
+          onTap: enabled ? onTap : null,
+          child: NavigationCardContent(
+            icon: icon,
+            title: title,
+            subtitle: subtitle,
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: palette.ink,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    height: 1.4,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: palette.muted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w400,
-                    height: 1.4,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          Icon(Icons.chevron_right, size: 20, color: palette.faint),
-        ],
+        ),
       ),
     );
   }
@@ -235,6 +214,16 @@ class GlassComponents implements LmComponentKit {
     bool narrative = false,
   }) {
     final palette = context.lm.palette;
+    if (narrative) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isUser ? palette.primaryDim : Colors.transparent,
+          borderRadius: BorderRadius.circular(GlassRadii.card),
+        ),
+        child: child,
+      );
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -263,13 +252,9 @@ class GlassComponents implements LmComponentKit {
     bool narrative = false,
   }) {
     final palette = context.lm.palette;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: narrative ? palette.bg : GlassMaterials.fill10(palette.bg),
-        border: const Border(
-          top: BorderSide(color: GlassMaterials.topInnerHighlight),
-        ),
-      ),
+    return ComposerSurface(
+      color: palette.surfaceElevated,
+      borderColor: palette.dividerStrong,
       child: child,
     );
   }

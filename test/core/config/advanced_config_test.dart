@@ -11,7 +11,7 @@ void main() {
     expect(c.defaults.maxSteps, 8);
     expect(c.budget.maxDurationMinutes, 5);
     expect(c.budget.tokenBudgetRatio, 0.6);
-    expect(c.budget.maxRequestRetries, 1);
+    expect(c.budget.maxRequestRetries, 5); // P5 默认上调（2026-10-15 批 E）
     expect(c.doomLoop.threshold, 8);
     expect(c.hitl.askUserTimeoutMinutes, 3);
     expect(c.hitl.approvalTimeoutMinutes, 5);

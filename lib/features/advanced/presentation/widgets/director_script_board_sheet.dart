@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_radius.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -83,13 +84,7 @@ class _DirectorScriptBoardSheetState extends State<DirectorScriptBoardSheet> {
               ),
             ),
             const SizedBox(height: IntermediateSpacing.sMd),
-            Text(
-              t.advanced.scriptBoard.title,
-              style: IntermediateTextStyles.title.copyWith(
-                color: colors.ink,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            PanelHeading(title: t.advanced.scriptBoard.title),
             const SizedBox(height: IntermediateSpacing.s2xs),
             Text(
               t.advanced.scriptBoard.hint,

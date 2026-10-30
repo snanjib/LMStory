@@ -72,8 +72,10 @@ class IntermediateMessageActions extends StatelessWidget {
     // 对齐：用户消息右对齐，助手消息左对齐（与气泡对齐一致）
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Wrap(
+        alignment: isUser ? WrapAlignment.end : WrapAlignment.start,
+        spacing: LmSpacing.sMd,
+        runSpacing: LmSpacing.sXs,
         children: _buildButtons(context, colors),
       ),
     );
@@ -97,7 +99,6 @@ class IntermediateMessageActions extends StatelessWidget {
         onPressed: onCopy,
       ),
       // 2. 重新生成（两种消息均显示）
-      const SizedBox(width: LmSpacing.sMd),
       _buildIconButton(
         icon: Icons.refresh_rounded,
         color: canOperate ? colors.muted : colors.faint,
@@ -105,7 +106,6 @@ class IntermediateMessageActions extends StatelessWidget {
         onPressed: () => _handleOperate(context, onRegenerate),
       ),
       // 3. 编辑（两种消息均显示，对话框内区分保存/保存并发送）
-      const SizedBox(width: LmSpacing.sMd),
       _buildIconButton(
         icon: Icons.edit_outlined,
         color: canOperate ? colors.muted : colors.faint,
@@ -113,7 +113,6 @@ class IntermediateMessageActions extends StatelessWidget {
         onPressed: () => _handleOperate(context, onEdit),
       ),
       // 4. 删除整轮（两种消息均显示，危险操作用 error 色）
-      const SizedBox(width: LmSpacing.sMd),
       _buildIconButton(
         icon: Icons.delete_outline,
         color: canOperate ? colors.error : colors.faint,

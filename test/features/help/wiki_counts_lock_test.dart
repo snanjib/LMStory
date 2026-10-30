@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/meta/app_meta.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_data.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -71,7 +72,10 @@ void main() {
     addTearDown(db.close);
 
     expect(
-      t.help.versionHistory.intro,
+      t.help.versionHistory.intro(
+        appVersion: kAppVersion,
+        schemaVersion: db.schemaVersion,
+      ),
       contains('Schema 为 ${db.schemaVersion}'),
       reason:
           '版本记录 intro 宣称的 Schema 号与 AppDatabase.schemaVersion（${db.schemaVersion}）不一致——WK-3 同型漂移回归',
@@ -79,11 +83,65 @@ void main() {
     // 同页 schema 演进图节点曾停在 37-49 而实际已
     // 升 50（的另一半）——intro 与图节点必须同源同值。
     expect(
-      t.help.versionHistory.v03Schema,
+      t.help.versionHistory.v03Schema(schemaVersion: db.schemaVersion),
       contains('37-${db.schemaVersion}'),
       reason:
           '版本记录 schema 演进图节点与 AppDatabase.schemaVersion（${db.schemaVersion}）不一致——intro/图节点双口径漂移回归',
     );
+  });
+
+  // intro/v03Schema 的 en 侧此前不在锁内——本地化批手动同步 52→53 即此账
+  // 活例，en 单独漂移无守卫拦截。同型数字双语必锁。
+  test('Schema 号（en）：版本记录 intro/v03Schema 宣称数 = drift schemaVersion', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    // slang 的 setLocale 返回 Future，必须 await 才对 t 生效
+    await LocaleSettings.setLocale(AppLocale.enUs);
+    expect(
+      t.help.versionHistory.intro(
+        appVersion: kAppVersion,
+        schemaVersion: db.schemaVersion,
+      ),
+      contains('schema is at ${db.schemaVersion}'),
+      reason:
+          'en 版本记录 intro 的 Schema 号与 AppDatabase.schemaVersion（${db.schemaVersion}）不一致——en 侧数字漂移回归',
+    );
+    expect(
+      t.help.versionHistory.v03Schema(schemaVersion: db.schemaVersion),
+      contains('37-${db.schemaVersion}'),
+      reason:
+          'en 版本记录 schema 演进图节点与 AppDatabase.schemaVersion（${db.schemaVersion}）不一致——en 侧数字漂移回归',
+    );
+
+    await LocaleSettings.setLocale(AppLocale.zhCn);
+  });
+
+  // 应用版本号：intro 与诊断页版本行同源 kAppVersion（kAppVersion 对账
+  // pubspec 由 app_meta_guard_test 负责），zh/en 双语必锁。
+  test('应用版本：intro 宣称数 = kAppVersion（zh/en 双语）', () async {
+    final zhIntro = t.help.versionHistory.intro(
+      appVersion: kAppVersion,
+      schemaVersion: AppDatabase.currentSchemaVersion,
+    );
+    expect(
+      zhIntro,
+      contains('当前应用版本 $kAppVersion'),
+      reason: 'zh intro 应用版本与 kAppVersion（$kAppVersion）不一致',
+    );
+
+    await LocaleSettings.setLocale(AppLocale.enUs);
+    final enIntro = t.help.versionHistory.intro(
+      appVersion: kAppVersion,
+      schemaVersion: AppDatabase.currentSchemaVersion,
+    );
+    expect(
+      enIntro,
+      contains('app version is $kAppVersion'),
+      reason: 'en intro 应用版本与 kAppVersion（$kAppVersion）不一致',
+    );
+
+    await LocaleSettings.setLocale(AppLocale.zhCn);
   });
 
   // helpCount 是第四处人工维护数字

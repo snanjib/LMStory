@@ -8,6 +8,7 @@ import 'package:lmstory/core/llm/tool_calling/tool_definition.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/intermediate/domain/services/intermediate_context_builder.dart';
@@ -197,72 +198,63 @@ class _IntermediatePromptPreviewPageState
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: AppBar(
-        title: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            t.settings.intermediate.preview.title,
-            style: IntermediateTextStyles.title.copyWith(color: colors.ink),
-          ),
-        ),
-        backgroundColor:
-            context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-        foregroundColor: colors.ink,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        surfaceTintColor: Colors.transparent,
-      ),
-      body: Column(
-        children: [
-          _buildMockBanner(colors, t),
-          if (_error != null)
-            _buildError(colors, _error!)
-          else if (_loading ||
-              _generateResult == null ||
-              _extractResult == null ||
-              _reviewResult == null ||
-              _summarizeResult == null)
-            Expanded(child: _buildLoading(colors))
-          else
-            Expanded(
-              child: Column(
-                children: [
-                  _buildTabBar(colors, t),
-                  Expanded(
-                    child: TabBarView(
-                      controller: _tabController,
-                      children: [
-                        _PreviewTabContent(
-                          result: _generateResult!,
-                          stepDesc:
-                              t.settings.intermediate.preview.generateStep,
-                          tokenBudget: _generateBudget,
-                        ),
-                        _PreviewTabContent(
-                          result: _extractResult!,
-                          stepDesc: t.settings.intermediate.preview.extractStep,
-                          toolCallingEnabled: _toolCallingEnabled,
-                          toolDefinition: kExtractKeywordsToolDefinition,
-                        ),
-                        _PreviewTabContent(
-                          result: _reviewResult!,
-                          stepDesc: t.settings.intermediate.preview.reviewStep,
-                          tokenBudget: _reviewBudget,
-                        ),
-                        _PreviewTabContent(
-                          result: _summarizeResult!,
-                          stepDesc:
-                              t.settings.intermediate.preview.summarizeStep,
-                          toolCallingEnabled: _toolCallingEnabled,
-                          toolDefinition: kExtractSummaryToolDefinition,
-                        ),
-                      ],
+      appBar: context.lmUi
+          .appBar(context, title: t.settings.intermediate.preview.title),
+      body: LmMeasure(
+        child: Column(
+          children: [
+            _buildMockBanner(colors, t),
+            if (_error != null)
+              _buildError(colors, _error!)
+            else if (_loading ||
+                _generateResult == null ||
+                _extractResult == null ||
+                _reviewResult == null ||
+                _summarizeResult == null)
+              Expanded(child: _buildLoading(colors))
+            else
+              Expanded(
+                child: Column(
+                  children: [
+                    _buildTabBar(colors, t),
+                    Expanded(
+                      child: TabBarView(
+                        controller: _tabController,
+                        children: [
+                          _PreviewTabContent(
+                            result: _generateResult!,
+                            stepDesc:
+                                t.settings.intermediate.preview.generateStep,
+                            tokenBudget: _generateBudget,
+                          ),
+                          _PreviewTabContent(
+                            result: _extractResult!,
+                            stepDesc:
+                                t.settings.intermediate.preview.extractStep,
+                            toolCallingEnabled: _toolCallingEnabled,
+                            toolDefinition: kExtractKeywordsToolDefinition,
+                          ),
+                          _PreviewTabContent(
+                            result: _reviewResult!,
+                            stepDesc:
+                                t.settings.intermediate.preview.reviewStep,
+                            tokenBudget: _reviewBudget,
+                          ),
+                          _PreviewTabContent(
+                            result: _summarizeResult!,
+                            stepDesc:
+                                t.settings.intermediate.preview.summarizeStep,
+                            toolCallingEnabled: _toolCallingEnabled,
+                            toolDefinition: kExtractSummaryToolDefinition,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -309,6 +301,8 @@ class _IntermediatePromptPreviewPageState
         border: Border(bottom: BorderSide(color: colors.divider)),
       ),
       child: TabBar(
+        isScrollable: true,
+        tabAlignment: TabAlignment.start,
         controller: _tabController,
         labelColor: colors.primary,
         unselectedLabelColor: colors.muted,
@@ -401,7 +395,7 @@ class _PreviewTabContent extends StatelessWidget {
               count: result.messages.length,
               tokens: result.tokenCount,
             ),
-            style: IntermediateTextStyles.caption.copyWith(color: colors.faint),
+            style: IntermediateTextStyles.caption.copyWith(color: colors.muted),
           ),
         ),
         // token 预算信息（仅 generating/reviewing，技术用户参考）
@@ -414,9 +408,9 @@ class _PreviewTabContent extends StatelessWidget {
                 reserve: tokenBudget!.maxTokens,
               ),
               style: IntermediateTextStyles.caption.copyWith(
-                color: colors.faint,
-                fontFamily: 'monospace',
-                fontSize: 11,
+                color: colors.muted,
+                fontFamily: 'LMMono',
+                fontSize: 13,
               ),
             ),
           ),
@@ -522,54 +516,34 @@ class _ToolCallingInfoBarState extends State<_ToolCallingInfoBar> {
                 horizontal: IntermediateSpacing.sMd,
                 vertical: IntermediateSpacing.sSm,
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: widget.enabled ? colors.primary : colors.muted,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: IntermediateSpacing.sSm),
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: IntermediateTextStyles.label.copyWith(
-                        color: colors.ink,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                  Text(
+                    label,
+                    style: IntermediateTextStyles.label.copyWith(
+                      color: colors.ink,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   if (widget.enabled)
-                    GestureDetector(
-                      onTap: () => setState(() => _expanded = !_expanded),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _expanded
-                                ? t.settings.intermediate.preview
-                                    .hideToolDefinition
-                                : t.settings.intermediate.preview
-                                    .showToolDefinition,
-                            style: IntermediateTextStyles.caption.copyWith(
-                              color: colors.primary,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Icon(
-                            _expanded
-                                ? Icons.keyboard_arrow_up
-                                : Icons.keyboard_arrow_down,
-                            size: 16,
-                            color: colors.primary,
-                          ),
-                        ],
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: () => setState(() => _expanded = !_expanded),
+                        icon: Icon(
+                          _expanded
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          size: 18,
+                        ),
+                        label: Text(
+                          _expanded
+                              ? t.settings.intermediate.preview
+                                  .hideToolDefinition
+                              : t.settings.intermediate.preview
+                                  .showToolDefinition,
+                        ),
                       ),
                     ),
                 ],
@@ -599,7 +573,7 @@ class _ToolCallingInfoBarState extends State<_ToolCallingInfoBar> {
                     Text(
                       t.settings.intermediate.preview.toolDefinition,
                       style: IntermediateTextStyles.caption.copyWith(
-                        color: colors.faint,
+                        color: colors.muted,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -607,10 +581,10 @@ class _ToolCallingInfoBarState extends State<_ToolCallingInfoBar> {
                     SelectableText(
                       _formatToolDefinition(widget.toolDefinition),
                       style: IntermediateTextStyles.bodyUi.copyWith(
-                        fontFamily: 'monospace',
+                        fontFamily: 'LMMono',
                         height: 1.6,
                         color: colors.ink,
-                        fontSize: 12,
+                        fontSize: 13,
                       ),
                     ),
                   ],
@@ -652,22 +626,22 @@ class _MessageCard extends StatelessWidget {
     final t = Translations.of(context);
     final (roleLabel, roleColor) = _roleStyle(role, t, colors);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-      ),
+    return context.lmUi.card(
+      context,
       padding: const EdgeInsets.all(IntermediateSpacing.sMd),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: IntermediateSpacing.sSm,
+            runSpacing: IntermediateSpacing.sXs,
             children: [
               Text(
                 '#$index',
                 style: IntermediateTextStyles.caption.copyWith(
-                  color: colors.faint,
-                  fontFamily: 'monospace',
+                  color: colors.muted,
+                  fontFamily: 'LMMono',
                 ),
               ),
               const SizedBox(width: IntermediateSpacing.sSm),
@@ -698,7 +672,7 @@ class _MessageCard extends StatelessWidget {
           SelectableText(
             content,
             style: IntermediateTextStyles.bodyUi.copyWith(
-              fontFamily: 'monospace',
+              fontFamily: 'LMMono',
               height: 1.6,
               color: colors.ink,
               fontSize: 13,

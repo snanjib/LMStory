@@ -58,7 +58,13 @@ sealed class AgentApprovalVerdict {
 }
 
 class AgentApprovalGranted extends AgentApprovalVerdict {
-  const AgentApprovalGranted();
+  /// [feedback]：批准时附带的导演批注（2026-10-15 批 B，P1 ：允许/
+  /// 拒绝共用批注框）。null/空 = 纯批准，行为与旧版完全一致；非空时随
+  /// 工具成功回执尾部信封下发（零额外模型请求）。可选参数保证
+  /// `const AgentApprovalGranted()` 既有调用点零改动。
+  const AgentApprovalGranted({this.feedback});
+
+  final String? feedback;
 }
 
 /// 用户明确拒绝（可带反馈，回带模型）
@@ -247,11 +253,12 @@ class AgentToolPipeline {
     }
 
     // 3. 审批（fail-closed）
+    String? approvalFeedback;
     if (approvalRequired) {
       final verdict = await _requestApprovalFailClosed(request);
       switch (verdict) {
-        case AgentApprovalGranted():
-          break;
+        case AgentApprovalGranted(:final feedback):
+          approvalFeedback = feedback;
         case AgentApprovalDenied(:final feedback):
           return _denied(
             request,
@@ -364,6 +371,26 @@ class AgentToolPipeline {
     // 在 post-execute 钩子之前执行，保证钩子（含替换结果）看到的输出也已受预算约束。
     if (toolOutputLimit != null && !_outputBudgetExempt.contains(tool.name)) {
       result = applyToolOutputBudget(result, toolOutputLimit!);
+    }
+
+    // 4.7 批准批注信封（2026-10-15 批 B，P1）：批准时附带的导演批注随
+    // 工具成功回执尾部下发——与 ask_user「导演答：…」、拒绝信封同通道
+    // 同成本（tool result 单通道，零额外模型请求），下次请求自然读到。
+    // 仅成功回执追加（失败信封已自带行动指引，批注挤尾部徒增噪声）；
+    // 在输出预算之后追加，保证批注全文不被截断。
+    final feedback = approvalFeedback;
+    if (feedback != null &&
+        feedback.trim().isNotEmpty &&
+        !result.isError &&
+        !result.terminal) {
+      result = AgentToolResult(
+        title: result.title,
+        output: '${result.output}\n——\n导演批注（随本次批准下发）：$feedback',
+        metadata: {...?result.metadata, 'approvalFeedback': true},
+        isError: result.isError,
+        terminal: result.terminal,
+        outputSchema: result.outputSchema,
+      );
     }
 
     // 5. post-execute 钩子（可替换结果）

@@ -3,11 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
 import 'package:lmstory/features/settings/presentation/pages/intermediate_generation_settings_page.dart';
 import 'package:lmstory/features/settings/presentation/pages/intermediate_help_settings_page.dart';
@@ -54,7 +54,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
 
     final cards = <Widget>[
       if (ConfigVisibility.of(ConfigVisibilityKeys.storyHubModels, level))
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.psychology_outlined,
           title: t.settings.intermediate.categories.models.title,
           subtitle: t.settings.intermediate.categories.models.subtitle,
@@ -64,7 +66,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
           ),
         ),
       if (ConfigVisibility.of(ConfigVisibilityKeys.storyHubSystemPrompt, level))
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.description_outlined,
           title: t.settings.intermediate.categories.systemPrompt.title,
           subtitle: t.settings.intermediate.categories.systemPrompt.subtitle,
@@ -74,7 +78,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
           ),
         ),
       if (ConfigVisibility.of(ConfigVisibilityKeys.storyHubToolsMemory, level))
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.hub_outlined,
           title: t.settings.intermediate.categories.toolsMemory.title,
           subtitle: t.settings.intermediate.categories.toolsMemory.subtitle,
@@ -87,7 +93,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
       // 5 个参数（温度/Top P/最大 Token/存在惩罚/频率惩罚）独立子页，
       // 与会话级生成参数对齐，作为新会话物化的快照源。
       if (ConfigVisibility.of(ConfigVisibilityKeys.storyHubGeneration, level))
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.tune_outlined,
           title: t.settings.intermediate.categories.generation.title,
           subtitle: t.settings.intermediate.categories.generation.subtitle,
@@ -97,7 +105,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
           ),
         ),
       if (ConfigVisibility.of(ConfigVisibilityKeys.storyHubPrompts, level))
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.edit_note_outlined,
           title: t.settings.intermediate.categories.prompts.title,
           subtitle: t.settings.intermediate.categories.prompts.subtitle,
@@ -107,7 +117,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
           ),
         ),
       if (ConfigVisibility.of(ConfigVisibilityKeys.storyHubSuggestReply, level))
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.auto_awesome_outlined,
           title: t.settings.intermediate.categories.suggestReply.title,
           subtitle: t.settings.intermediate.categories.suggestReply.subtitle,
@@ -116,7 +128,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
             const IntermediateSuggestReplySettingsPage(),
           ),
         ),
-      IntermediateSettingCard(
+      context.lmUi.settingCard(
+        context,
+        narrative: true,
         icon: Icons.help_outline,
         title: t.settings.intermediate.categories.help.title,
         subtitle: t.settings.intermediate.categories.help.subtitle,
@@ -158,6 +172,9 @@ class IntermediateSettingsPage extends ConsumerWidget {
               if (i > 0) const SizedBox(height: IntermediateSpacing.sMd),
               cards[i],
             ],
+            const AdvancedLevelHint(
+              surfaceId: ConfigVisibilitySurfaces.storyHub,
+            ),
           ],
         ),
       ),

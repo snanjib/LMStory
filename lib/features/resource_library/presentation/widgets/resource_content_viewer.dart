@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/narrative_identity.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
+import 'package:lmstory/core/theme/shared/components/section_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
@@ -7,6 +10,7 @@ import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_radius.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/resource_library/domain/entities/normalized_world_entry.dart';
+import 'package:lmstory/features/resource_library/domain/entities/parsed_character_card.dart';
 import 'package:lmstory/features/resource_library/domain/services/character_card_parser.dart';
 import 'package:lmstory/features/resource_library/domain/services/worldbook_parser.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -33,40 +37,7 @@ Future<void> showCardContentSheet(
       // 现场解析（与导入/应用同源）；解析失败给出原始 JSON 的兜底视图
       try {
         final card = CharacterCardParser.parse(rawJson);
-        return [
-          _sectionHeader(
-            context,
-            t.settings.resourceLibrary.viewer.version,
-            colors,
-          ),
-          _bodyText(card.specVersion, colors),
-          if (card.description.isNotEmpty) ...[
-            _sectionHeader(
-              context,
-              t.settings.resourceLibrary.viewer.description,
-              colors,
-            ),
-            _FoldableText(text: card.description, colors: colors),
-          ],
-          if (card.personality.isNotEmpty) ...[
-            _sectionHeader(
-              context,
-              t.settings.resourceLibrary.viewer.personality,
-              colors,
-            ),
-            _FoldableText(text: card.personality, colors: colors),
-          ],
-          if (card.embeddedEntries.isNotEmpty) ...[
-            _sectionHeader(
-              context,
-              t.settings.resourceLibrary.viewer.embeddedEntries(
-                count: card.embeddedEntries.length,
-              ),
-              colors,
-            ),
-            ..._entryList(card.embeddedEntries, t, colors),
-          ],
-        ];
+        return [CharacterCardViewer(card: card, colors: colors)];
       } catch (_) {
         return [
           _sectionHeader(
@@ -142,19 +113,9 @@ Future<void> _showSheet(
           children: [
             Padding(
               padding: const EdgeInsets.all(SimpleSpacing.sMd),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: SimpleTextStyles.title2.copyWith(
-                        color: inner.ink,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+              child: PanelHeading(
+                title: title,
+                actions: [
                   IconButton(
                     //  语义缺口：复用 common.close（不新增 i18n key）。
                     tooltip: t.common.close,
@@ -186,26 +147,7 @@ Widget _sectionHeader(BuildContext context, String label, LmPalette colors) {
       top: SimpleSpacing.sMd,
       bottom: SimpleSpacing.s2xs,
     ),
-    child: Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(
-        horizontal: SimpleSpacing.sSm,
-        vertical: SimpleSpacing.s2xs,
-      ),
-      decoration: BoxDecoration(
-        color: colors.surfaceVariant,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
-      ),
-      child: Text(
-        label,
-        style: SimpleTextStyles.caption.copyWith(
-          color: colors.muted,
-          fontWeight: FontWeight.w600,
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-    ),
+    child: SectionHeading(title: label),
   );
 }
 
@@ -410,6 +352,192 @@ class _FoldableTextState extends State<_FoldableText> {
           ],
         );
       },
+    );
+  }
+}
+
+/// 角色卡图形化查看器（人类可读性第一，不出原始 JSON）。
+///
+/// V2/V3 富字段分区展示：身份/标签 chip 流/场景/开场白/替代开场白/
+/// 描述/性格/对话示例/作者注/系统提示（长文折叠）+ 内嵌世界书词条 +
+/// 未消费简单字段的「其他字段」折叠组（复杂结构不展示）。空字段不渲染。
+class CharacterCardViewer extends StatelessWidget {
+  const CharacterCardViewer({
+    required this.card,
+    required this.colors,
+    super.key,
+  });
+
+  final ParsedCharacterCard card;
+  final LmPalette colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Translations.of(context);
+    final v = t.settings.resourceLibrary.viewer;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 身份区：名字/昵称/年龄/作者（键值行；全空则整区不渲染）
+        if (card.name.isNotEmpty ||
+            card.nickname.isNotEmpty ||
+            card.age.isNotEmpty ||
+            card.creator.isNotEmpty) ...[
+          NarrativeIdentity(
+            name: card.name,
+            label: v.identity,
+            details: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (card.nickname.isNotEmpty) _kvRow(v.nickname, card.nickname),
+                if (card.age.isNotEmpty) _kvRow(v.age, card.age),
+                if (card.creator.isNotEmpty) _kvRow(v.creator, card.creator),
+              ],
+            ),
+          ),
+        ],
+        // 标签 chip 流
+        if (card.tags.isNotEmpty) ...[
+          _sectionHeader(context, v.tags, colors),
+          Wrap(
+            spacing: SimpleSpacing.sXs,
+            runSpacing: SimpleSpacing.s2xs,
+            children: [
+              for (final tag in card.tags)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: SimpleSpacing.sSm,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.surfaceVariant,
+                    borderRadius: BorderRadius.circular(
+                      context.lmUi.radius(LmCorner.xs),
+                    ),
+                  ),
+                  child: Text(
+                    tag,
+                    style: SimpleTextStyles.caption.copyWith(
+                      color: colors.muted,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+          ),
+        ],
+        _kvRow(v.version, card.specVersion),
+        if (card.scenario.isNotEmpty)
+          _foldSection(context, v.scenario, card.scenario),
+        if (card.firstMes.isNotEmpty)
+          _foldSection(context, v.firstMes, card.firstMes),
+        if (card.alternateGreetings.isNotEmpty) ...[
+          _sectionHeader(
+            context,
+            v.alternateGreetings(count: card.alternateGreetings.length),
+            colors,
+          ),
+          for (var i = 0; i < card.alternateGreetings.length; i++)
+            _FoldableText(
+              text: '${i + 1}. ${card.alternateGreetings[i]}',
+              colors: colors,
+            ),
+        ],
+        if (card.description.isNotEmpty)
+          _foldSection(context, v.description, card.description),
+        if (card.personality.isNotEmpty)
+          _foldSection(context, v.personality, card.personality),
+        if (card.mesExample.isNotEmpty)
+          _foldSection(context, v.mesExample, card.mesExample),
+        if (card.creatorNotes.isNotEmpty)
+          _foldSection(context, v.creatorNotes, card.creatorNotes),
+        if (card.systemPrompt.isNotEmpty)
+          _foldSection(context, v.systemPrompt, card.systemPrompt),
+        if (card.embeddedEntries.isNotEmpty) ...[
+          _sectionHeader(
+            context,
+            v.embeddedEntries(count: card.embeddedEntries.length),
+            colors,
+          ),
+          ..._entryList(card.embeddedEntries, t, colors),
+        ],
+        if (card.extraFields.isNotEmpty)
+          Theme(
+            // 折叠组默认收起：未知字段属低频信息
+            data: Theme.of(
+              context,
+            ).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: Text(
+                v.otherFields(count: card.extraFields.length),
+                style: SimpleTextStyles.caption.copyWith(
+                  color: colors.muted,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              children: [
+                for (final f in card.extraFields)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: SimpleSpacing.s2xs),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          f.key,
+                          style: SimpleTextStyles.caption.copyWith(
+                            color: colors.muted,
+                          ),
+                        ),
+                        Text(
+                          f.value,
+                          style: SimpleTextStyles.bodySm.copyWith(
+                            color: colors.ink,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _kvRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: SimpleSpacing.s2xs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 72,
+            child: Text(
+              label,
+              style: SimpleTextStyles.caption.copyWith(color: colors.muted),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: SimpleTextStyles.bodySm.copyWith(color: colors.ink),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _foldSection(BuildContext context, String label, String text) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionHeader(context, label, colors),
+        _FoldableText(text: text, colors: colors),
+      ],
     );
   }
 }

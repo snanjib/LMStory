@@ -6,6 +6,7 @@ import 'package:lmstory/features/resource_library/domain/entities/character_card
 import 'package:lmstory/features/resource_library/domain/entities/worldbook.dart';
 import 'package:lmstory/features/resource_library/domain/repositories/resource_library_repository.dart';
 import 'package:lmstory/features/resource_library/domain/services/resource_import_service.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 
 /// 资源导入服务单元测试：PNG 卡 / 世界书 JSON / 纯 JSON 卡自动识别
 void main() {
@@ -15,6 +16,24 @@ void main() {
   setUp(() {
     repo = FakeResourceLibraryRepository();
     service = ResourceImportService(repository: repo);
+  });
+
+  group('导入错误文案随 UI 语言', () {
+    test('en 下结构错误为英文', () async {
+      await LocaleSettings.setLocale(AppLocale.enUs);
+      addTearDown(() => LocaleSettings.setLocale(AppLocale.zhCn));
+
+      await expectLater(
+        service.importCardJson('{"entries":{"e1":{}}}'),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('worldbook JSON'),
+          ),
+        ),
+      );
+    });
   });
 
   group('importCardBytes', () {
@@ -297,31 +316,21 @@ void main() {
     });
   });
 
-  group('导入体积上限按 UTF-8 字节数（WA8-6）', () {
-    /// '中' = 1 个 UTF-16 码元 / 3 个 UTF-8 字节。N 个汉字的
-    /// String.length ≈ N（旧口径放行）而字节数 = 3N（真口径拦截）。
-    final oversize = '中' * (ResourceImportService.maxImportBytes ~/ 3 + 1);
+  group('导入不设体积上限', () {
+    /// 超 10MB 的世界书 JSON（按 UTF-8 字节数计）正常导入。
+    /// '中' = 3 个 UTF-8 字节，直接字符串拼接构造避免 jsonEncode 开销。
+    test('超 10MB 世界书 JSON → 正常导入且入库', () async {
+      final oversizeContent = '中' * (10 * 1024 * 1024 ~/ 3 + 1);
+      final content =
+          '{"name":"大部头","entries":{"0":{"key":["x"],"content":"$oversizeContent"}}}';
 
-    test('世界书内容字节数超 10MB（码元数不超）→ 拒绝且不入库', () async {
-      expect(oversize.length, lessThan(ResourceImportService.maxImportBytes));
-      expect(
-        utf8.encode(oversize).length,
-        greaterThan(ResourceImportService.maxImportBytes),
+      final result = await service.importWorldbookContent(
+        content,
+        fallbackName: '大部头.json',
       );
-
-      await expectLater(
-        service.importWorldbookContent(oversize, fallbackName: '超限.json'),
-        throwsFormatException,
-      );
-      expect(repo.books, isEmpty, reason: '超限内容不得入库');
-    });
-
-    test('角色卡 JSON 字节数超 10MB → 拒绝且不入库', () async {
-      await expectLater(
-        service.importCardJson(oversize),
-        throwsFormatException,
-      );
-      expect(repo.cards, isEmpty);
+      expect(result.kind, ImportKind.worldbook);
+      expect(result.name, '大部头');
+      expect(repo.books, hasLength(1));
     });
   });
 

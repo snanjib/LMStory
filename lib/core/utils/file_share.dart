@@ -8,6 +8,7 @@ library;
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -35,6 +36,7 @@ Future<String?> shareTextAsFile({
   required String content,
   required String fileName,
   String? subject,
+  Rect? sharePositionOrigin,
 }) async {
   if (isDesktopPlatform) {
     final extension = _extensionOf(fileName);
@@ -54,8 +56,26 @@ Future<String?> shareTextAsFile({
   await Share.shareXFiles(
     [XFile(file.path, mimeType: 'text/plain')],
     subject: subject,
+    sharePositionOrigin: sharePositionOrigin,
   );
   return null;
+}
+
+/// iPad 上分享浮层（popover）必须有锚点矩形，缺失时会定位异常；
+/// 优先取调用点控件的屏幕矩形（浮层从触发处弹出），取不到时兜底
+/// 界面中心。
+Rect shareOriginFrom(BuildContext context) {
+  final renderObject = context.findRenderObject();
+  if (renderObject is RenderBox && renderObject.hasSize) {
+    final rect = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    if (rect.width > 0 && rect.height > 0) return rect;
+  }
+  final size = MediaQuery.sizeOf(context);
+  return Rect.fromCenter(
+    center: size.center(Offset.zero),
+    width: 1,
+    height: 1,
+  );
 }
 
 String? _extensionOf(String fileName) {

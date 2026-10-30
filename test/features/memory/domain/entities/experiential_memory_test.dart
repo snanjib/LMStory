@@ -177,5 +177,35 @@ void main() {
         expect(json.contains('"memoryId":"m1"'), isTrue);
       });
     });
+
+    group('formatDisplayText 与 displayText', () {
+      test('有内容时返回拼接结果', () {
+        final m = ExperientialMemory(
+          memoryId: 'm1',
+          sessionId: 's',
+          what: '发现了宝箱',
+          who: '主角',
+          importance: 3,
+          tags: const [],
+          turnNumber: 1,
+          createdAt: DateTime(2026),
+        );
+        expect(m.formatDisplayText(emptyPlaceholder: 'Empty'), '发现了宝箱 · 主角');
+        expect(m.displayText, '发现了宝箱 · 主角');
+      });
+
+      test('全空时 formatDisplayText 返回指定占位符，displayText 保持协议兜底', () {
+        final m = ExperientialMemory(
+          memoryId: 'm1',
+          sessionId: 's',
+          importance: 3,
+          tags: const [],
+          turnNumber: 1,
+          createdAt: DateTime(2026),
+        );
+        expect(m.formatDisplayText(emptyPlaceholder: 'No events'), 'No events');
+        expect(m.displayText, '(空事件)');
+      });
+    });
   });
 }

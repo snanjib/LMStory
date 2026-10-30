@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/appearance_controller.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
-import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_selection_option.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -28,7 +27,8 @@ class StructureSelectorSection extends ConsumerWidget {
       child: Column(
         children: [
           for (final entry in ThemeCatalog.structures)
-            SimpleSelectionOption(
+            context.lmUi.selectionOption(
+              context,
               label: t[entry.nameKey] as String,
               isSelected: appearance.structureId == entry.id,
               onTap: () => ref.read(appearanceProvider.notifier).setAppearance(

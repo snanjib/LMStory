@@ -28,7 +28,9 @@ void main() {
 
     test('旧版备份命中（version + presets）', () {
       expect(
-        DataManagementService.looksLikeAppBackupJson('{"version":1,"presets":[]}'),
+        DataManagementService.looksLikeAppBackupJson(
+          '{"version":1,"presets":[]}',
+        ),
         isTrue,
       );
     });
@@ -54,7 +56,9 @@ void main() {
 
     test('带 version 的第三方世界书不命中（无载荷键）', () {
       expect(
-        DataManagementService.looksLikeAppBackupJson('{"version":1,"entries":{}}'),
+        DataManagementService.looksLikeAppBackupJson(
+          '{"version":1,"entries":{}}',
+        ),
         isFalse,
       );
     });
@@ -68,6 +72,15 @@ void main() {
 
     test('顶层数组不命中', () {
       expect(DataManagementService.looksLikeAppBackupJson('[1,2]'), isFalse);
+    });
+
+    test('深嵌套内容不命中（粗检先于 jsonDecode，不栈溢出）', () {
+      expect(
+        DataManagementService.looksLikeAppBackupJson(
+          '{"version":3,"exportedAt":"x","deep":${'[' * 600 + ']' * 600}}',
+        ),
+        isFalse,
+      );
     });
   });
 }

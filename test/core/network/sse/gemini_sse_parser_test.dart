@@ -375,11 +375,11 @@ void main() {
       final events = await parser.parse(sseStream).toList();
 
       // 事件序列：
-      // 1. stream_error (PARSE_ERROR)
+      // 1. stream_error (FORMAT_ERROR)
       // 2. stream_done (兜底)
       expect(events.length, 2);
       expect(events[0], isA<LlmStreamError>());
-      expect((events[0] as LlmStreamError).code, 'PARSE_ERROR');
+      expect((events[0] as LlmStreamError).code, 'FORMAT_ERROR');
       expect(events[1], isA<LlmStreamDone>());
     });
 

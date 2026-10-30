@@ -22,19 +22,75 @@
 /// （渲染为字面文本）；LLM 叙事输出几乎不用引用定义，接受。
 /// 非 CommonMark 一致性实现——它是渲染缓存切分器，不是解析器；
 /// 切分过保守的代价只是冻结变少（退化为全文重解析），不产生错误渲染。
-List<int> markdownBlockStarts(String text) {
-  if (text.isEmpty) return const [];
-  final starts = <int>[0];
-  var inFence = false;
-  // 开栏围栏的标记字符（` / ~）与跑长——闭合须同字符且 ≥ 此长度
-  var fenceMarker = 0;
-  var fenceLength = 0;
-  var inMath = false;
-  var sawBlank = false;
-  // 上一非空行是否列表/引用（供延续判定）
-  var prevIsListOrQuote = false;
+/// 切块扫描器的逐行可变状态（[markdownBlockStarts] 纯函数与
+/// [MarkdownBlockStartsTracker] 增量路径共享同一份行循环，单源）。
+class MarkdownBlockScanState {
+  MarkdownBlockScanState() : starts = <int>[0];
 
-  for (var i = 0; i < text.length;) {
+  /// 已发现的块起点（升序；首元素恒 0）。
+  final List<int> starts;
+  bool inFence = false;
+
+  /// 开栏围栏的标记字符（` / ~）与跑长——闭合须同字符且 ≥ 此长度
+  int fenceMarker = 0;
+  int fenceLength = 0;
+  bool inMath = false;
+  bool sawBlank = false;
+
+  /// 上一非空行是否列表/引用（供延续判定）
+  bool prevIsListOrQuote = false;
+}
+
+/// 「最后一个完整行边界」的定稿快照：处理完 [end] 之前的所有行之后的
+/// 全部扫描器状态（标量拷贝 + starts 定稿长度）。末行（无 `\n`，仍在
+/// 增长）的效果**不携带**——它的判定会随内容变化（如围栏开栏行），下一
+/// 次调用从快照重放，与一次性扫描推进到该边界完全同基线。
+class _ScanCommit {
+  _ScanCommit(this.end, MarkdownBlockScanState s)
+      : startsLength = s.starts.length,
+        inFence = s.inFence,
+        fenceMarker = s.fenceMarker,
+        fenceLength = s.fenceLength,
+        inMath = s.inMath,
+        sawBlank = s.sawBlank,
+        prevIsListOrQuote = s.prevIsListOrQuote;
+
+  /// 定稿边界（行首偏移，续扫起点）。
+  final int end;
+  final int startsLength;
+  final bool inFence;
+  final int fenceMarker;
+  final int fenceLength;
+  final bool inMath;
+  final bool sawBlank;
+  final bool prevIsListOrQuote;
+
+  void restore(MarkdownBlockScanState live) {
+    live.starts.length = startsLength;
+    live
+      ..inFence = inFence
+      ..fenceMarker = fenceMarker
+      ..fenceLength = fenceLength
+      ..inMath = inMath
+      ..sawBlank = sawBlank
+      ..prevIsListOrQuote = prevIsListOrQuote;
+  }
+}
+
+/// 从行首偏移 [from] 扫 [text] 到末尾（[from] 须为行首，state 须为推进
+/// 到 [from] 时的状态——增量路径经 [_ScanCommit.restore] 重建该基线）。
+/// 返回最后一个**完整行**边界的定稿快照；本次没处理完整行时原样返回
+/// [committed]。
+_ScanCommit? _scanLines(
+  String text,
+  int from,
+  MarkdownBlockScanState state,
+  _ScanCommit? committed,
+) {
+  final starts = state.starts;
+  var best = committed;
+  var i = from;
+  for (; i < text.length;) {
     final lineEnd = text.indexOf('\n', i);
     final end = lineEnd == -1 ? text.length : lineEnd;
     final line = text.substring(i, end);
@@ -42,51 +98,125 @@ List<int> markdownBlockStarts(String text) {
     final isBlank = line.trim().isEmpty;
 
     if (!isBlank) {
-      if (inFence) {
+      if (state.inFence) {
         // 围栏闭合判定：同标记字符、长度 ≥ 开栏、标记后只剩空白
         //（CommonMark：闭合栏不得带 info 字符串）。更严格的方向是
         // 安全的——不闭合只是整块留活跃（少冻结），误闭合会把围栏
         // 内部切碎（错误渲染）。
         final run = _fenceRunOf(trimmedLeft);
         if (run != null &&
-            run.marker == fenceMarker &&
-            run.length >= fenceLength &&
+            run.marker == state.fenceMarker &&
+            run.length >= state.fenceLength &&
             trimmedLeft.substring(run.length).trim().isEmpty) {
-          inFence = false;
+          state.inFence = false;
         }
-      } else if (inMath) {
-        if (line.trim() == r'$$') inMath = false;
+      } else if (state.inMath) {
+        if (line.trim() == r'$$') state.inMath = false;
       } else {
         final run = _fenceRunOf(trimmedLeft);
         final isFenceOpener = run != null;
         final isMathOpener = line.trim() == r'$$';
         // 围栏/数学块起始行本身就是块边界（延续判定不适用——围栏标记
         // 不是任何块的延续）
-        if (sawBlank && !isFenceOpener && !isMathOpener) {
-          if (!_continuesBlock(line, prevIsListOrQuote)) {
+        if (state.sawBlank && !isFenceOpener && !isMathOpener) {
+          if (!_continuesBlock(line, state.prevIsListOrQuote)) {
             starts.add(i);
           }
-        } else if (sawBlank) {
+        } else if (state.sawBlank) {
           starts.add(i);
         }
         if (isFenceOpener) {
-          inFence = true;
-          fenceMarker = run.marker;
-          fenceLength = run.length;
+          state
+            ..inFence = true
+            ..fenceMarker = run.marker
+            ..fenceLength = run.length;
         } else if (isMathOpener) {
-          inMath = true;
+          state.inMath = true;
         }
-        prevIsListOrQuote =
+        state.prevIsListOrQuote =
             _isListMarkerLine(line) || line.trimLeft().startsWith('>');
       }
-      sawBlank = false;
-    } else if (!inFence && !inMath) {
-      sawBlank = true;
+      state.sawBlank = false;
+    } else if (!state.inFence && !state.inMath) {
+      state.sawBlank = true;
     }
     if (lineEnd == -1) break;
     i = lineEnd + 1;
+    best = _ScanCommit(i, state);
   }
-  return starts;
+  return best;
+}
+
+List<int> markdownBlockStarts(String text) {
+  if (text.isEmpty) return const [];
+  final state = MarkdownBlockScanState();
+  _scanLines(text, 0, state, null);
+  return state.starts;
+}
+
+/// [markdownBlockStarts] 的增量版（批2）：流式 append 场景下
+/// 每帧只扫**新增行 + 上一末行**，消灭超长单段的每帧全文行扫描
+/// （含每行 substring/regex 分配）。
+///
+/// 语义：对任意文本，[scan] 的返回值与 [markdownBlockStarts] 恒等
+/// （含围栏/数学块/列表引用延续/空行序列）。机制是**定界快照重放**：
+/// 每帧从「最后一个完整行边界」的 [_ScanCommit] 重建扫描器基线，重判
+/// 末行（仍在增长，判定可变——如围栏开栏行）+ 扫新增行。末行效果
+/// 从不进入快照，重放与一次性扫描推进到该边界**完全同基线**，不依赖
+/// 状态幂等性（围栏开栏行在 inFence=true 下重放会被误判闭合行——
+/// 2026-10-05 实测教训，见 streaming_markdown_blocks_incremental_test）。
+/// 非追加延展（替换/收缩）自动全量重建，调用方无须先行失效。
+class MarkdownBlockStartsTracker {
+  final MarkdownBlockScanState _state = MarkdownBlockScanState();
+  _ScanCommit? _committed;
+  String _scanned = '';
+
+  List<int> scan(String text) {
+    if (text.isEmpty) return const [];
+    if (identical(text, _scanned)) return _state.starts;
+    final isExtension =
+        text.length >= _scanned.length && text.startsWith(_scanned);
+    if (!isExtension) {
+      _reset();
+    } else if (text == _scanned) {
+      // 等值不同对象（常见：同帧同长 substring）：结果不变。
+      _scanned = text;
+      return _state.starts;
+    }
+    // 从定稿快照重放（无快照 = 首扫描，从 0 起）。
+    final committed = _committed;
+    if (committed == null) {
+      _state.starts.length = 0;
+      _state.starts.add(0);
+    } else {
+      committed.restore(_state);
+    }
+    _committed = _scanLines(
+      text,
+      committed?.end ?? 0,
+      _state,
+      committed,
+    );
+    _scanned = text;
+    return _state.starts;
+  }
+
+  void reset() => _reset();
+
+  void _reset() {
+    _state.starts
+      ..clear()
+      ..add(0);
+    _state
+      ..inFence = false
+      ..fenceMarker = 0
+      ..fenceLength = 0
+      ..inMath = false
+      ..sawBlank = false
+      ..prevIsListOrQuote = false;
+    _committed = null;
+    _scanned = '';
+  }
 }
 
 /// 行首围栏标记跑（入参须已去 ≤3 前导空格）：≥3 个连续同字符的
@@ -212,4 +342,49 @@ bool _lineLooksLikePlainText(String block, int start, int end) {
     }
   }
   return true;
+}
+
+/// [looksLikePlainText] 的增量版（批2）：流式 append 场景下对
+/// 「data[from..] 是否全纯」按行缓存判定，每帧只验**新增行 + 末行**。
+///
+/// 两个缓存维度（data 绝对坐标，append-only 下行界恒定、行内容不可变）：
+/// - [_verifiedEnd]：[0, _verifiedEnd) 内**完整行**已验纯（行对齐推进；
+///   末行无 `\n` 不推进——它还在增长，每帧重验，成本 O(行长) 有界）；
+/// - [_failStart]：首个失败行起点。append-only 下失败行的特征字符永远
+///   在（前缀不可变），命中即 O(1) 返回 false；该行被冻结前缀吞出查询
+///   范围（failStart < from）时清除重续——失败只对当前尾窗有意义。
+///
+/// 与 [looksLikePlainText(trim 后串)] 的等价性：trim 只切空白，空白行两侧
+/// 判定同为纯；特征字符非空白，不可能被 trim 裁掉——未 trim 坐标判定
+/// 是 trim 后判定的超集且同假值点。
+class StreamingPlainTextGate {
+  int _verifiedEnd = 0;
+  int? _failStart;
+
+  /// data[from..]（from 须为行首/块起点偏移）是否全纯。
+  bool isPlainFrom(String data, int from) {
+    final fail = _failStart;
+    if (fail != null) {
+      if (fail >= from) return false;
+      _failStart = null;
+    }
+    var i = _verifiedEnd > from ? _verifiedEnd : from;
+    while (i < data.length) {
+      final lineEnd = data.indexOf('\n', i);
+      final end = lineEnd == -1 ? data.length : lineEnd;
+      if (!_lineLooksLikePlainText(data, i, end)) {
+        _failStart = i;
+        return false;
+      }
+      if (lineEnd == -1) break;
+      i = lineEnd + 1;
+      _verifiedEnd = i;
+    }
+    return true;
+  }
+
+  void reset() {
+    _verifiedEnd = 0;
+    _failStart = null;
+  }
 }

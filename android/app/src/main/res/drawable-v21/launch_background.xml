@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Modify this file to customize your launch splash screen -->
+
+<!-- T10-4：API 21+ 同款启动图，同样对齐默认外观的**日间档** #F4F5F7
+     （此前取 ?android:colorBackground，是系统派生值，不可预测）。
+     夜间档由 res/drawable-night/launch_background.xml 承载 —— Android 资源
+     限定符优先级中 night mode 高于 platform version，故夜间 + API21+ 会命中
+     drawable-night 而不是本文件。 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <color android:color="#F4F5F7" />
+    </item>
+
+    <!-- You can insert your own image assets here -->
+    <!-- <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/launch_image" />
+    </item> -->
+</layer-list>

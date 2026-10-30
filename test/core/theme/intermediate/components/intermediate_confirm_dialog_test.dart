@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_confirm_dialog.dart';
 import 'package:lmstory/core/theme/system/palettes/classic/classic_palette.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_confirm_dialog.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 

@@ -4,11 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_compaction_summary_card.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_navigation.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
+import 'package:lmstory/core/theme/shared/components/narrative_identity.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -734,9 +733,8 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
         Center(
           child: RepaintBoundary(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: LmLayout.readingMeasure,
-              ),
+              constraints:
+                  BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
               child: ListView.builder(
                 controller: _scrollController,
                 scrollCacheExtent: const ScrollCacheExtent.pixels(600),
@@ -749,12 +747,24 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
                 itemCount: state.messages.length + tailItemCount,
                 itemBuilder: (context, index) {
                   if (index < state.messages.length) {
-                    return _buildPersistedMessageGroup(
+                    final item = _buildPersistedMessageGroup(
                       colors: colors,
                       state: state,
                       index: index,
                       lastAssistantMessageId: lastAssistantMessageId,
                       actionsEnabled: actionsEnabled,
+                    );
+                    if (index != 0) return item;
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        StoryOpening(
+                          title: state.session.title,
+                          modeLabel:
+                              Translations.of(context).chat.sidebar.modeStory,
+                        ),
+                        item,
+                      ],
                     );
                   }
 
@@ -828,17 +838,19 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
                 padding: const EdgeInsets.symmetric(
                   horizontal: IntermediateSpacing.sLg,
                 ),
-                child: ActionChip(
-                  avatar: Icon(
-                    Icons.check_circle_outline,
-                    size: 16,
-                    color: colors.primary,
+                child: LmArrival(
+                  child: ActionChip(
+                    avatar: Icon(
+                      Icons.check_circle_outline,
+                      size: 16,
+                      color: colors.primary,
+                    ),
+                    label: Text(t.intermediate.chat.roundDoneHint),
+                    onPressed: () {
+                      setState(() => _roundDoneHintVisible = false);
+                      _forceToBottomWithSettle();
+                    },
                   ),
-                  label: Text(t.intermediate.chat.roundDoneHint),
-                  onPressed: () {
-                    setState(() => _roundDoneHintVisible = false);
-                    _forceToBottomWithSettle();
-                  },
                 ),
               ),
             ),
@@ -848,7 +860,9 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
           Positioned(
             right: IntermediateSpacing.sSm,
             bottom: IntermediateSpacing.sMd,
-            child: IntermediateMessageNavigation(
+            child: context.lmUi.messageNavigation(
+              context,
+              narrative: true,
               visible: _isScrollActive && !_atBottom,
               onJumpToTop: _jumpToTop,
               onJumpToBottom: _jumpToBottom,
@@ -1034,7 +1048,8 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
           padding: const EdgeInsets.symmetric(
             horizontal: IntermediateSpacing.sSm,
           ),
-          child: IntermediateCompactionSummaryCard(
+          child: context.lmUi.compactionSummaryCard(
+            context,
             content: message.content ?? '',
             fontScale: widget.fontScale,
             //  触底警示：压缩后可见列表仅此一张摘要卡，
@@ -1068,7 +1083,8 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
         padding: const EdgeInsets.symmetric(
           vertical: IntermediateSpacing.s2xs,
         ),
-        child: IntermediateMessageBubble(
+        child: context.lmUi.narrativeBubble(
+          context,
           content: message.content ?? '',
           isUser: isUser,
           thinkingContent: message.thinkingContent,

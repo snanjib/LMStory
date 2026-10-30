@@ -2,7 +2,9 @@
   "version": "0.1",
   "network": {
     "connect_timeout_ms": 15000,
-    "receive_timeout_ms": 30000
+    "receive_timeout_ms": 30000,
+    "auto_retry_max_attempts": 5,
+    "auto_retry_wait_budget_ms": 90000
   },
   "common": {
     "title_model": {
@@ -57,13 +59,12 @@
       "effective_context_limit": null
     },
     "retry": {
-      "generating_max_retries": 2,
-      "extracting_max_retries": 2,
-      "retrieval_max_retries": 1,
-      "reviewing_max_retries": 2,
-      "summarizing_max_retries": 2,
-      "json_format_retry": 1,
-      "stream_interrupt_retry": 1
+      "generating_max_retries": 5,
+      "extracting_max_retries": 5,
+      "retrieval_max_retries": 5,
+      "reviewing_max_retries": 5,
+      "summarizing_max_retries": 5,
+      "stream_interrupt_retry": 5
     },
     "phase_models": {
       "generating_preset_id": "",
@@ -134,14 +135,15 @@
     "budget": {
       "max_duration_minutes": 5,
       "token_budget_ratio": 0.6,
-      "max_request_retries": 1
+      "max_request_retries": 5
     },
     "doom_loop": {
       "threshold": 8
     },
     "hitl": {
       "ask_user_timeout_minutes": 3,
-      "approval_timeout_minutes": 5
+      "approval_timeout_minutes": 5,
+      "approval_timeout_enabled": true
     },
     "subagent": {
       "max_steps": 6,

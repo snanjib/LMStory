@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart' show MarkdownBody;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/theme/shared/components/streaming_markdown_body.dart';
-import 'package:lmstory/core/theme/simple/components/simple_markdown_body.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_markdown_body.dart';
 
 /// 活跃块纯文本快速路径单测
 ///

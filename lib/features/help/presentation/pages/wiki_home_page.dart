@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
@@ -44,7 +43,7 @@ class _WikiHomePageState extends State<WikiHomePage> {
 
     return Scaffold(
       backgroundColor: context.scaffoldBgOf(colors.bg),
-      appBar: SimpleAppBar(title: t.help.wikiHome.title),
+      appBar: context.lmUi.appBar(context, title: t.help.wikiHome.title),
       body: LmMeasure(
         maxWidth: LmLayout.listMeasure,
         child: Column(

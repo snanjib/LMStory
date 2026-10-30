@@ -67,7 +67,8 @@ import 'package:lmstory/features/templates/data/repositories/template_repository
 import 'package:lmstory/features/templates/domain/repositories/template_repository.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
-const _kLocaleKey = 'app_locale';
+/// locale 持久化键（main 启动预读与 [LocaleNotifier] 写入共用，勿散写字面量）
+const localePrefKey = 'app_locale';
 
 /// Preferences Provider（全局单例）
 final preferencesProvider = Provider<Preferences>((ref) => Preferences());
@@ -85,7 +86,14 @@ class LocaleNotifier extends Notifier<AppLocale> {
     await LocaleSettings.setLocale(locale);
     state = locale;
     final prefs = ref.read(preferencesProvider);
-    await prefs.setString(_kLocaleKey, locale.languageTag);
+    // 持久化失败仅保留会话内生效（UI 已切换，不回弹；重启后回到上次
+    // 成功保存的语言）——静默失败记日志即可，属低概率存储异常。
+    try {
+      await prefs.setString(localePrefKey, locale.languageTag);
+    } catch (e) {
+      const Logger('LocaleNotifier')
+          .warn('Failed to persist locale switch', detail: '$e');
+    }
   }
 
   /// 重置为系统语言
@@ -93,7 +101,12 @@ class LocaleNotifier extends Notifier<AppLocale> {
     await LocaleSettings.useDeviceLocale();
     state = LocaleSettings.currentLocale;
     final prefs = ref.read(preferencesProvider);
-    await prefs.remove(_kLocaleKey);
+    try {
+      await prefs.remove(localePrefKey);
+    } catch (e) {
+      const Logger('LocaleNotifier')
+          .warn('Failed to persist locale reset', detail: '$e');
+    }
   }
 }
 
@@ -386,12 +399,22 @@ final resourceImportServiceProvider = Provider<ResourceImportService>(
 ///
 /// 单订阅 controller 在监听前缓冲事件；MainLayout 在 onboarding 完成
 /// 后监听，冷启动暂存的文件由原生 pending + getInitialFile 兜底补投。
-final incomingFileEventsProvider = StreamProvider<IncomingFile>((ref) {
+final incomingFileReceiverProvider = Provider<IncomingFileReceiver>((ref) {
   final receiver = IncomingFileReceiver();
   unawaited(receiver.init());
   ref.onDispose(receiver.dispose);
-  return receiver.stream;
+  return receiver;
 });
+
+final incomingFileEventsProvider = StreamProvider<IncomingFile>(
+  (ref) => ref.watch(incomingFileReceiverProvider).stream,
+);
+
+/// macOS 文件拖放→对话会话附件的注入桥（生产方=MainLayout 拖放分发，
+/// 消费方=ChatModeInputArea：附件构造与上限检查在消费侧统一）。
+/// 消费后置回空表。
+final pendingDropFilesProvider =
+    StateProvider<List<IncomingFile>>((ref) => const []);
 
 // -- Chat --
 

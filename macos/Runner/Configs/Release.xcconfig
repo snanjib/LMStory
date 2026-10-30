@@ -1,2 +1,7 @@
 #include "../../Flutter/Flutter-Release.xcconfig"
 #include "Warnings.xcconfig"
+// 代码签名身份链：Signing.xcconfig 给默认值（ad-hoc），本机跑
+// signing/create_local_signing.sh 生成 LocalSigning.xcconfig（gitignore）后覆盖为
+// 长期自签证书——签名身份稳定后，钥匙串"始终允许"才能跨构建记忆（见 signing/README.md）
+#include "Signing.xcconfig"
+#include? "LocalSigning.xcconfig"

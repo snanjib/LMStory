@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
@@ -82,47 +83,26 @@ class _CreatePresetSheetState extends State<CreatePresetSheet> {
                 SimpleSpacing.sLg,
                 SimpleSpacing.sMd,
               ),
-              child: Row(
-                children: [
-                  if (_step == _Step.name)
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back, size: 20),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      tooltip: t.settings.provider.templatePicker.back,
-                      onPressed: () => setState(() {
-                        _step = _Step.template;
-                        _nameController.clear();
-                      }),
-                    ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _step == _Step.template
-                              ? t.settings.provider.templatePicker.title
-                              : _selectedTemplate != null
-                                  ? _selectedTemplate!.name
-                                  : t.settings.provider.templatePicker.custom,
-                          style: SimpleTextStyles.title2,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: SimpleSpacing.s2xs),
-                        Text(
-                          _step == _Step.template
-                              ? t.settings.provider.templatePicker.subtitle
-                              : t.settings.provider.templatePicker.nameStep,
-                          style: SimpleTextStyles.caption
-                              .copyWith(color: colors.muted),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+              child: PanelHeading(
+                title: _step == _Step.template
+                    ? t.settings.provider.templatePicker.title
+                    : _selectedTemplate?.name ??
+                        t.settings.provider.templatePicker.custom,
+                subtitle: _step == _Step.template
+                    ? t.settings.provider.templatePicker.subtitle
+                    : t.settings.provider.templatePicker.nameStep,
+                leading: _step == _Step.name
+                    ? IconButton(
+                        icon: const Icon(Icons.arrow_back, size: 20),
+                        constraints:
+                            const BoxConstraints(minWidth: 44, minHeight: 44),
+                        tooltip: t.settings.provider.templatePicker.back,
+                        onPressed: () => setState(() {
+                          _step = _Step.template;
+                          _nameController.clear();
+                        }),
+                      )
+                    : null,
               ),
             ),
             Flexible(
@@ -461,23 +441,26 @@ class _ProtocolReadOnly extends StatelessWidget {
         color: colors.surfaceVariant,
         borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.lock_outline, size: 14, color: colors.faint),
-          const SizedBox(width: SimpleSpacing.sXs),
-          Expanded(
-            child: Text(
-              protocolDisplayName(protocol, t),
-              style: SimpleTextStyles.bodySm.copyWith(color: colors.ink),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.lock_outline, size: 14, color: colors.muted),
+              const SizedBox(width: SimpleSpacing.sXs),
+              Expanded(
+                child: Text(
+                  protocolDisplayName(protocol, t),
+                  style: SimpleTextStyles.bodySm.copyWith(color: colors.ink),
+                ),
+              ),
+            ],
           ),
+          const SizedBox(height: SimpleSpacing.sXs),
           Text(
             t.settings.provider.protocolReadOnly,
-            style: SimpleTextStyles.overline.copyWith(color: colors.faint),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+            style: SimpleTextStyles.caption.copyWith(color: colors.muted),
           ),
         ],
       ),

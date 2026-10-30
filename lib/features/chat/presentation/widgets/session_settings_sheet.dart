@@ -7,12 +7,13 @@ import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_card.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/core/widgets/editable_value_text.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
@@ -26,6 +27,7 @@ import 'package:lmstory/features/settings/presentation/pages/chat_settings_page.
 import 'package:lmstory/features/settings/presentation/widgets/default_model_picker_sheet.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
 import 'package:lmstory/features/templates/domain/repositories/template_repository.dart';
+import 'package:lmstory/features/templates/presentation/support/template_l10n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 温度/TopP 的「值恰等于全局」判定用
@@ -316,18 +318,9 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
             // Title
             Padding(
               padding: const EdgeInsets.all(SimpleSpacing.sLg),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      t.chat.sessionSettings.title,
-                      style: SimpleTextStyles.title2.copyWith(
-                        color: colors.ink,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+              child: PanelHeading(
+                title: t.chat.sessionSettings.title,
+                actions: [
                   IconButton(
                     icon: Icon(Icons.close, color: colors.muted, size: 20),
                     tooltip: t.common.close,
@@ -405,6 +398,9 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
                       _buildDeleteButton(t, colors),
                       const SizedBox(height: SimpleSpacing.sLg),
                       _buildGlobalSettingsLink(t, colors),
+                      const AdvancedLevelHint(
+                        surfaceId: ConfigVisibilitySurfaces.chatPanel,
+                      ),
                       SizedBox(
                         height: MediaQuery.of(context).viewInsets.bottom +
                             MediaQuery.of(context).padding.bottom +
@@ -484,7 +480,8 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
           ),
         ),
         const SizedBox(height: SimpleSpacing.sXs),
-        SimpleSettingCard(
+        context.lmUi.settingCard(
+          context,
           icon: Icons.smart_toy_outlined,
           title: t.chat.sessionSettings.model,
           subtitle: subtitle,
@@ -493,7 +490,8 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
         const SizedBox(height: SimpleSpacing.sXs),
         // 手动「更新标题」——自动重试不做，用户随时
         // 触发强制命名（失败不落截断名，见 controller _autoNameSession）。
-        SimpleSettingCard(
+        context.lmUi.settingCard(
+          context,
           icon: Icons.title_outlined,
           title: t.chat.sessionSettings.updateTitle,
           subtitle: _titleUpdating
@@ -639,7 +637,6 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
               borderSide: BorderSide.none,
             ),
             hintText: t.chat.sessionSettings.systemPromptHint,
-            hintStyle: SimpleTextStyles.bodySm.copyWith(color: colors.faint),
             contentPadding: const EdgeInsets.all(SimpleSpacing.sMd),
           ),
           onChanged: (value) {
@@ -696,7 +693,7 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
                 final template = _systemPromptTemplates[index];
                 return ListTile(
                   title: Text(
-                    template.name,
+                    template.localizedName(t),
                     style: SimpleTextStyles.bodySm.copyWith(
                       color: colors.ink,
                       fontWeight: FontWeight.w500,
@@ -705,7 +702,7 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text(
-                    template.content,
+                    template.localizedContent(t),
                     style:
                         SimpleTextStyles.caption.copyWith(color: colors.muted),
                     maxLines: 2,
@@ -717,14 +714,14 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
                   ),
                   onTap: () {
                     // 填入文本框并更新会话
-                    _systemPromptController.text = template.content;
+                    _systemPromptController.text = template.localizedContent(t);
                     _systemPromptController.selection =
                         TextSelection.fromPosition(
-                      TextPosition(offset: template.content.length),
+                      TextPosition(offset: template.localizedContent(t).length),
                     );
                     _updateSession(
                       _session.copyWith(
-                        systemPromptOverride: template.content,
+                        systemPromptOverride: template.localizedContent(t),
                       ),
                     );
                     Navigator.pop(ctx);
@@ -1047,7 +1044,6 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
               borderSide: BorderSide.none,
             ),
             hintText: t.chat.sessionSettings.maxTokensHint,
-            hintStyle: SimpleTextStyles.bodySm.copyWith(color: colors.faint),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: SimpleSpacing.sMd,
               vertical: SimpleSpacing.sSm,

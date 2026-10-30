@@ -94,15 +94,11 @@ class MainActivity : FlutterActivity() {
         channel?.invokeMethod("onIncomingFile", file)
     }
 
-    /** Single-slot cache file: the newest arrival deletes the previous one.
-     *  The copy is size-capped (same 10MB limit as the Dart-side
-     *  ResourceImportService.maxImportBytes) — previously an arbitrarily
-     *  large file was fully copied into cacheDir before Dart rejected it,
-     *  bloating the cache and wasting IO. On overflow we abort, delete the
-     *  partial file, and take the existing silent-ignore path in
-     *  handleIncomingIntent. */
+    /** 单槽缓存文件：新文件到达时删除旧的。
+     *  纯流式复制，不设体积上限（2026-10-07 产品拍板取消此前的 10MB
+     *  预检：数据备份等大文件需可经外部"打开方式/分享"导入；异常大
+     *  文件的复制与解析代价由用户侧承担）。 */
     private fun copyToCache(uri: Uri, mime: String?): Map<String, Any?> {
-        val maxImportBytes = 10L * 1024 * 1024
         val dir = File(cacheDir, "incoming").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() } // 清理旧文件（单槽）
 
@@ -110,17 +106,10 @@ class MainActivity : FlutterActivity() {
         val target = File(dir, System.currentTimeMillis().toString() + "_" + displayName)
         contentResolver.openInputStream(uri)?.use { input ->
             target.outputStream().use { output ->
-                var copied = 0L
                 val buffer = ByteArray(64 * 1024)
                 while (true) {
                     val n = input.read(buffer)
                     if (n < 0) break
-                    copied += n
-                    if (copied > maxImportBytes) {
-                        output.close()
-                        target.delete()
-                        throw IllegalStateException("import exceeds 10MB limit")
-                    }
                     output.write(buffer, 0, n)
                 }
             }

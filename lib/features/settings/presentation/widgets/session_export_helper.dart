@@ -105,8 +105,11 @@ Future<void> exportSession(
   try {
     // 桌面端返回保存路径（弹成功确认框明示位置）；
     // null = 移动端分享面板已调起，保留面板选择保存位置的提示
-    final savedPath =
-        await shareTextAsFile(content: content, fileName: fileName);
+    final savedPath = await shareTextAsFile(
+      content: content,
+      fileName: fileName,
+      sharePositionOrigin: shareOriginFrom(context),
+    );
     if (!context.mounted) return;
     if (savedPath != null) {
       await showFileSavedDialog(context, savedPath);

@@ -1,5 +1,6 @@
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 
 /// 事件日志存取抽象。
 ///
@@ -28,6 +29,31 @@ abstract class AgentEventLogStore {
   Future<void> deleteAtSeqs(String sessionId, List<int> seqs);
 }
 
+/// 中断半截正文补账事件（悬挂轮修复与失败真续跑共用）
+///
+/// 最后一个有 assistant/chunk 分片但无 assistant/message 收尾的 step，
+/// 其已流出正文经分片拼接后补一条 assistant/message 落账（surface
+/// append：模型续跑可见自己写过的半截稿；轮轨迹页可展示）。
+/// 无可重建正文时返回 null。
+AgentDurableEvent? interruptedTextRepairEvent(
+  List<AgentDurableEvent> turnEvents, {
+  required int? turn,
+}) {
+  final interruptedText = rebuildInterruptedAssistantText(turnEvents);
+  if (interruptedText == null || interruptedText.isEmpty) return null;
+  final data = AgentAssistantMessageData(
+    text: interruptedText,
+    stepIndex: AgentLogRecoveryService._lastChunkedStep(turnEvents),
+  ).toJson()
+    ..['interrupted'] = true;
+  if (turn != null) data['turn'] = turn;
+  return AgentDurableEvent(
+    type: AgentEventTypes.assistantMessage,
+    surfaceOp: AgentSurfaceOpKind.append,
+    data: data,
+  );
+}
+
 /// Agent 会话恢复器（dsh 崩溃恢复纪律，设计报告 §7.3）
 ///
 /// 打开会话时检查事件日志是否存在悬挂轮（turn/begin 无对应 turn/end）：
@@ -41,6 +67,39 @@ class AgentLogRecoveryService {
     Logger? logger,
   })  : _repository = repository,
         _logger = logger;
+
+  /// 崩溃恢复写入的未执行输出（历史存量协议值）
+  static const String legacyInterruptedOutput = '（应用中断，未执行；如仍需要请在后续轮次重试）';
+  static const String legacyInterruptedShortOutput = '（应用中断，未执行…）';
+  static const String legacyInterruptedEnglishOutput =
+      '(Application interrupted, not executed; please retry in subsequent turns if still needed)';
+
+  /// 崩溃恢复与主动中断写入的占位标题（历史存量协议值）
+  static const String legacyPlaceholderTitleZh = '中断占位';
+  static const String legacyPlaceholderTitleEn = 'Interrupted';
+  static const String legacyPlaceholderTitleSynthetic = '占位补齐';
+
+  /// 判定是否为崩溃恢复或中断占位标题（UI 渲染层据此转为当前 locale 的文案）
+  static bool isPlaceholderTitle(String title) =>
+      title == legacyPlaceholderTitleZh ||
+      title == legacyPlaceholderTitleEn ||
+      title == legacyPlaceholderTitleSynthetic;
+
+  /// 判定是否为崩溃恢复或中断占位输出（UI 渲染层据此转为当前 locale 的文案）
+  static bool isInterruptedOutput(String output) {
+    final trimmed = output.trim();
+    return trimmed == legacyInterruptedOutput ||
+        trimmed == legacyInterruptedShortOutput ||
+        trimmed == legacyInterruptedEnglishOutput ||
+        trimmed == '（本轮已中断，未执行）' ||
+        trimmed == '本轮已中断，未执行' ||
+        trimmed == '（本轮异常终止，未执行）' ||
+        trimmed == '本轮异常终止，未执行' ||
+        trimmed == '（循环保护拦截：同参数重复调用）' ||
+        trimmed == '循环保护拦截：同参数重复调用' ||
+        trimmed == '（finish_round 反复失败，本轮停止）' ||
+        trimmed == 'finish_round 反复失败，本轮停止';
+  }
 
   final AgentEventLogStore _repository;
   final Logger? _logger;
@@ -138,9 +197,9 @@ class AgentLogRecoveryService {
       final data = AgentToolResultData(
         callId: call['callId'] as String,
         toolName: call['toolName'] as String,
-        output: '（应用中断，未执行；如仍需要请在后续轮次重试）',
+        output: legacyInterruptedOutput,
         isError: true,
-        title: '中断占位',
+        title: t.advanced.process.interruptedToolPlaceholder,
       ).toJson();
       if (danglingTurn != null) data['turn'] = danglingTurn;
       repairEvents.add(
@@ -156,23 +215,12 @@ class AgentLogRecoveryService {
     // assistant/message 收尾的 step，其已流出正文经分片拼接后补一条
     // assistant/message 落账（surface append：下一轮重放可见自己写过的
     // 半截稿；轮轨迹页可展示）。写入位置在工具占位之后（协议配对优先）。
-    final interruptedText = rebuildInterruptedAssistantText(
+    final textRepair = interruptedTextRepairEvent(
       danglingTurnEvents,
+      turn: danglingTurn,
     );
-    if (interruptedText != null && interruptedText.isNotEmpty) {
-      final data = AgentAssistantMessageData(
-        text: interruptedText,
-        stepIndex: _lastChunkedStep(danglingTurnEvents),
-      ).toJson()
-        ..['interrupted'] = true;
-      if (danglingTurn != null) data['turn'] = danglingTurn;
-      repairEvents.add(
-        AgentDurableEvent(
-          type: AgentEventTypes.assistantMessage,
-          surfaceOp: AgentSurfaceOpKind.append,
-          data: data,
-        ),
-      );
+    if (textRepair != null) {
+      repairEvents.add(textRepair);
     }
 
     repairEvents.add(
@@ -188,10 +236,12 @@ class AgentLogRecoveryService {
     );
 
     await _repository.appendAll(sessionId, repairEvents);
+    final rebuiltText = textRepair?.data['text'];
+    final rebuiltChars = rebuiltText is String ? rebuiltText.length : 0;
     _logger?.info(
       'Agent dangling turn repaired',
       detail: 'sessionId=$sessionId, placeholders=${pendingCalls.length}, '
-          'rebuiltChars=${interruptedText?.length ?? 0}',
+          'rebuiltChars=$rebuiltChars',
     );
     return true;
   }

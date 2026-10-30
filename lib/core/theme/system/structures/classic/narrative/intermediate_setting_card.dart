@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/navigation_card_content.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -17,7 +17,7 @@ import 'package:lmstory/core/theme/system/lm_tokens.dart';
 /// 视觉决策（impeccable / product register / Restrained）：
 /// - surface 卡片底（surfaceVariant 与 surface 之间形成层次）
 /// - 图标方块：surface 底 + primary 图标，与 Simple 模式保持视觉一致性
-/// - 标题：label 字号 + ink 色，副标题：caption + muted 色
+/// - 标题：公共衬线目的地标题 + ink 色，副标题：caption + muted 色
 /// - chevron：faint 色，弱化但可识别
 /// - 直角边缘？不——夜航主题保留 rLg 圆角（DOC-06B 令牌体系），与对话
 ///   模式的 SimpleSettingCard 视觉节奏一致，避免破坏模式间识别
@@ -49,7 +49,7 @@ class IntermediateSettingCard extends StatelessWidget {
       );
 }
 
-/// Established story setting card used by the classic and glass kits.
+/// Story setting surface used by the classic and glass kits.
 class ClassicNarrativeSettingCard extends StatelessWidget {
   const ClassicNarrativeSettingCard({
     required this.icon,
@@ -71,70 +71,31 @@ class ClassicNarrativeSettingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
-
+    final borderRadius = BorderRadius.circular(
+      context.lmUi.radius(LmCorner.lg),
+    );
     return Opacity(
-      opacity: enabled ? 1.0 : 0.5,
+      opacity: enabled ? 1 : 0.5,
       child: Container(
         decoration: BoxDecoration(
-          // 琉璃下统一到 surfaceVariant 槽（与 SimpleSettingCard 同材质）；
-          // 经典保持原槽位零变化。
           color: context.lmSettingCardFace(colors.surface),
-          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
+          borderRadius: borderRadius,
         ),
         child: Material(
           color: Colors.transparent,
-          child: InkWell(
-            onTap: enabled ? onTap : null,
-            borderRadius:
-                BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-            child: Padding(
-              padding: const EdgeInsets.all(LmSpacing.sLg),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: colors.surfaceVariant,
-                      borderRadius: BorderRadius.circular(
-                        context.lmUi.radius(LmCorner.md),
-                      ),
-                    ),
-                    child: Icon(
-                      icon,
-                      color: colors.primary,
-                      size: 22,
-                    ),
-                  ),
-                  const SizedBox(width: LmSpacing.sMd),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: LmNarrativeTextStyles.label
-                              .copyWith(color: colors.ink),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          style: LmNarrativeTextStyles.caption
-                              .copyWith(color: colors.muted),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    Icons.chevron_right,
-                    color: colors.faint,
-                    size: 20,
-                  ),
-                ],
+          child: Semantics(
+            button: true,
+            enabled: enabled,
+            child: InkWell(
+              onTap: enabled ? onTap : null,
+              borderRadius: borderRadius,
+              child: Padding(
+                padding: const EdgeInsets.all(LmSpacing.sLg),
+                child: NavigationCardContent(
+                  icon: icon,
+                  title: title,
+                  subtitle: subtitle,
+                ),
               ),
             ),
           ),

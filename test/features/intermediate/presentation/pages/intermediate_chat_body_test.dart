@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_actions.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_navigation.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_actions.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_navigation.dart';
 import 'package:lmstory/core/utils/smooth_follow_scroller.dart'
     show streamingFollowCushionPx;
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';

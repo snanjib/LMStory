@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
@@ -166,18 +167,11 @@ class _ModelEditDialogState extends ConsumerState<ModelEditDialog> {
           SimpleSpacing.sMd,
           SimpleSpacing.sMd,
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _isEditing
-                    ? t.settings.provider.editModel
-                    : t.settings.provider.addModel,
-                style: SimpleTextStyles.title2,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+        child: PanelHeading(
+          title: _isEditing
+              ? t.settings.provider.editModel
+              : t.settings.provider.addModel,
+          actions: [
             IconButton(
               //  语义缺口：复用 common.close（不新增 i18n key）。
               tooltip: t.common.close,
@@ -195,7 +189,7 @@ class _ModelEditDialogState extends ConsumerState<ModelEditDialog> {
   }) =>
       InputDecoration(
         hintText: readOnlyHint ?? hint,
-        hintStyle: SimpleTextStyles.body.copyWith(color: colors.faint),
+        hintStyle: SimpleTextStyles.body.copyWith(color: colors.muted),
         isDense: true,
         filled: true,
         fillColor: colors.surfaceVariant,
@@ -251,7 +245,10 @@ class _ModelEditDialogState extends ConsumerState<ModelEditDialog> {
         child: DropdownButton<ModelType>(
           value: _type,
           isExpanded: true,
-          style: SimpleTextStyles.body.copyWith(color: colors.ink),
+          style: DefaultTextStyle.of(context)
+              .style
+              .merge(SimpleTextStyles.body)
+              .copyWith(color: colors.ink),
           items: [
             _dropdownItem(
               t.settings.provider.modelTypeOptions.chat,

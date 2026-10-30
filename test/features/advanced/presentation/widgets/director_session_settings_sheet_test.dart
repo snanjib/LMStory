@@ -709,4 +709,53 @@ void main() {
       expect(find.text('频率惩罚'), findsOneWidget);
     });
   });
+
+  // 回归：配置回显纪律——项目规则输入框恒显当前生效值
+  //（会话覆盖 null 时回填全局 system_prompt，不再空白）。
+  group('项目规则输入框回填', () {
+    TextField rulesFieldOf(WidgetTester tester) => tester
+        .widgetList<TextField>(find.byType(TextField))
+        .firstWhere((f) => f.decoration?.hintText == '世界观、人设、文风、叙事守则…');
+
+    Future<void> expandRules(WidgetTester tester) async {
+      await tester.ensureVisible(find.text('项目规则'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('项目规则'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('会话无覆盖 → 回填全局当前值', (tester) async {
+      await _pumpSheet(
+        tester,
+        config: const AdvancedConfig(systemPrompt: '全局编辑部规则：夜航文风。'),
+      );
+      await expandRules(tester);
+
+      expect(rulesFieldOf(tester).controller!.text, '全局编辑部规则：夜航文风。');
+    });
+
+    testWidgets('会话覆盖优先于全局', (tester) async {
+      await _pumpSheet(
+        tester,
+        sessionOverride: _directorSession().copyWith(
+          systemPromptOverride: '会话专属规则',
+        ),
+        config: const AdvancedConfig(systemPrompt: '全局编辑部规则'),
+      );
+      await expandRules(tester);
+
+      expect(rulesFieldOf(tester).controller!.text, '会话专属规则');
+    });
+
+    testWidgets('会话覆盖为空串（快照语义）→ 不回退全局', (tester) async {
+      await _pumpSheet(
+        tester,
+        sessionOverride: _directorSession().copyWith(systemPromptOverride: ''),
+        config: const AdvancedConfig(systemPrompt: '全局编辑部规则'),
+      );
+      await expandRules(tester);
+
+      expect(rulesFieldOf(tester).controller!.text, '');
+    });
+  });
 }

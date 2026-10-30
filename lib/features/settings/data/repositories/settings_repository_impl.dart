@@ -188,6 +188,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
       'network': <String, dynamic>{
         'connect_timeout_ms': config.network.connectTimeoutMs,
         'receive_timeout_ms': config.network.receiveTimeoutMs,
+        'auto_retry_max_attempts': config.network.autoRetryMaxAttempts,
+        'auto_retry_wait_budget_ms': config.network.autoRetryWaitBudgetMs,
       },
       'common': <String, dynamic>{
         'title_model': <String, dynamic>{
@@ -335,7 +337,6 @@ class SettingsRepositoryImpl implements SettingsRepository {
               config.intermediate.retry.reviewingMaxRetries,
           'summarizing_max_retries':
               config.intermediate.retry.summarizingMaxRetries,
-          'json_format_retry': config.intermediate.retry.jsonFormatRetry,
           'stream_interrupt_retry':
               config.intermediate.retry.streamInterruptRetry,
         },
@@ -402,6 +403,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
               config.advanced.hitl.askUserTimeoutMinutes,
           'approval_timeout_minutes':
               config.advanced.hitl.approvalTimeoutMinutes,
+          'approval_timeout_enabled':
+              config.advanced.hitl.approvalTimeoutEnabled,
         },
         'subagent': <String, dynamic>{
           'max_steps': config.advanced.subagent.maxSteps,

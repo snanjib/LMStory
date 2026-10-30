@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_selection_option.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -25,19 +24,22 @@ class LanguageSelectorSection extends ConsumerWidget {
       ),
       child: Column(
         children: [
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.languageOptions.zhCn,
             isSelected: currentLocale == AppLocale.zhCn,
             onTap: () =>
                 ref.read(localeProvider.notifier).switchLocale(AppLocale.zhCn),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.languageOptions.enUs,
             isSelected: currentLocale == AppLocale.enUs,
             onTap: () =>
                 ref.read(localeProvider.notifier).switchLocale(AppLocale.enUs),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.languageOptions.system,
             isSelected: false,
             isEnabled: false,

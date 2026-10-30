@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
-import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 
 /// 可折叠的设置分区（DOC-14 §3.4）。
@@ -49,25 +50,33 @@ class CollapsibleSettingsSection extends StatelessWidget {
                   Expanded(
                     child: Text(
                       title,
-                      style: IntermediateTextStyles.label
-                          .copyWith(color: colors.primary),
-                      maxLines: 1,
+                      style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+                        color: colors.ink,
+                        fontSize: 20,
+                        height: 1.35,
+                      ),
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  Icon(
-                    isExpanded
-                        ? Icons.keyboard_arrow_up
-                        : Icons.keyboard_arrow_down,
-                    color: colors.muted,
-                    size: 20,
+                  AnimatedRotation(
+                    turns: isExpanded ? 0.5 : 0,
+                    duration: LmMotion.durationFor(context, LmMotion.fold),
+                    curve: LmMotion.easeBoth,
+                    child: Icon(
+                      Icons.keyboard_arrow_down,
+                      color: colors.muted,
+                      size: 20,
+                    ),
                   ),
                 ],
               ),
             ),
           ),
           AnimatedSize(
-            duration: LmMotion.fold,
+            duration: LmMotion.reducedMotion(context)
+                ? LmMotion.instant
+                : LmMotion.fold,
             alignment: Alignment.topCenter,
             curve: LmMotion.easeBoth,
             child: isExpanded
@@ -78,7 +87,7 @@ class CollapsibleSettingsSection extends StatelessWidget {
                       IntermediateSpacing.sMd,
                       IntermediateSpacing.sMd,
                     ),
-                    child: child,
+                    child: LmArrival(child: child),
                   )
                 : const SizedBox(width: double.infinity),
           ),

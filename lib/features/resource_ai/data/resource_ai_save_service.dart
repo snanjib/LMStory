@@ -20,11 +20,12 @@ class ResourceAiSaveService {
   ///   update，未知字段原样保留，id 不变。
   Future<String> saveCharacterCard({
     required CardDraft draft,
+    required String defaultName,
     String? existingCardId,
     String? originalRawJson,
   }) async {
     final name = draft.value(CardField.name).trim().isEmpty
-        ? '未命名角色卡'
+        ? defaultName
         : draft.value(CardField.name).trim();
     if (existingCardId == null) {
       final created = await _repository.createCharacterCard(
@@ -52,10 +53,11 @@ class ResourceAiSaveService {
   /// 保存世界书草稿，返回 bookId（三路径同 [saveCharacterCard]）。
   Future<String> saveWorldbook({
     required WorldbookDraft draft,
+    required String defaultName,
     String? existingBookId,
     String? originalRawJson,
   }) async {
-    final name = draft.name.trim().isEmpty ? '未命名世界书' : draft.name.trim();
+    final name = draft.name.trim().isEmpty ? defaultName : draft.name.trim();
     if (existingBookId == null) {
       final created = await _repository.createWorldbook(
         name: name,

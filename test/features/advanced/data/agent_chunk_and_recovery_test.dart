@@ -502,6 +502,77 @@ void main() {
       expect(repo.appended, isEmpty);
     });
   });
+
+  group('turn/begin 的续跑标记（真续跑段落可辨）', () {
+    test('resumed=true 落进 turn/begin data；默认 false 不落键', () async {
+      final repo = _CapturingEventLogRepository();
+      final sink = DurableAgentEventSink(
+        repository: repo,
+        sessionId: 's1',
+        turnNumber: 3,
+      )
+        ..emit(AgentTurnStarted(maxSteps: 8))
+        ..emit(AgentTurnStarted(maxSteps: 8, resumed: true));
+      await sink.flush();
+
+      final begins = repo.appended
+          .where((e) => e.type == AgentEventTypes.turnBegin)
+          .toList();
+      expect(begins, hasLength(2));
+      expect(
+        begins[0].data.containsKey('resumed'),
+        isFalse,
+        reason: '全新轮不落 resumed 键（旧日志形态不变）',
+      );
+      expect(begins[1].data['resumed'], isTrue);
+      expect(begins[1].data['turn'], 3);
+    });
+  });
+
+  group('崩溃恢复占位识别与多语言兼容', () {
+    test('isPlaceholderTitle 识别中英双语存量占位标题与中断补齐标题', () {
+      expect(AgentLogRecoveryService.isPlaceholderTitle('中断占位'), isTrue);
+      expect(AgentLogRecoveryService.isPlaceholderTitle('Interrupted'), isTrue);
+      expect(AgentLogRecoveryService.isPlaceholderTitle('占位补齐'), isTrue);
+      expect(AgentLogRecoveryService.isPlaceholderTitle('正常标题'), isFalse);
+    });
+
+    test('isInterruptedOutput 识别存量各版本未执行输出与中断输出', () {
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput(
+          '（应用中断，未执行；如仍需要请在后续轮次重试）',
+        ),
+        isTrue,
+      );
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput('（应用中断，未执行…）'),
+        isTrue,
+      );
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput(
+          '(Application interrupted, not executed; please retry in subsequent turns if still needed)',
+        ),
+        isTrue,
+      );
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput('（本轮已中断，未执行）'),
+        isTrue,
+      );
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput('（本轮异常终止，未执行）'),
+        isTrue,
+      );
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput('（循环保护拦截：同参数重复调用）'),
+        isTrue,
+      );
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput('（finish_round 反复失败，本轮停止）'),
+        isTrue,
+      );
+      expect(AgentLogRecoveryService.isInterruptedOutput('正常输出'), isFalse);
+    });
+  });
 }
 
 class _CapturingEventLogRepository implements AgentEventLogRepository {

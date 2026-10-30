@@ -21,7 +21,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
-          flutter-version: '3.44.0'
+          flutter-version: '3.47.7'
           cache: true
 
       - name: Cache pub packages
@@ -46,10 +46,10 @@ jobs:
       - name: Regenerate i18n (yaml validity guard)
         run: dart run slang
 
-      # --no-fatal-infos: style-level lints (trailing commas, const hints) do
-      # not block CI; errors and warnings still fail the build.
+      # Strict analyze (same gate as the sync pipeline): infos and warnings
+      # both fail. The mainline keeps the same bar, so mirrored code lands clean.
       - name: Analyze
-        run: flutter analyze --no-fatal-infos
+        run: flutter analyze
 
       - name: Test
         run: flutter test
@@ -82,7 +82,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
-          flutter-version: '3.44.0'
+          flutter-version: '3.47.7'
           cache: true
 
       - name: Cache pub packages
@@ -116,7 +116,11 @@ jobs:
           LMSTORY_KEYSTORE_PASSWORD: ${{ secrets.LMSTORY_KEYSTORE_PASSWORD }}
         run: |
           if [ -z "$LMSTORY_KEYSTORE_BASE64" ]; then
-            echo "No signing secrets configured; falling back to debug signing."
+            # Release builds fail fast without keystore config (anti
+            # mis-distribution guard). CI smoke builds pass the documented
+            # escape hatch instead of silently producing debug-signed output.
+            echo "No signing secrets configured; allowing unsigned release for CI smoke build."
+            echo "allowUnsignedRelease=true" >> android/gradle.properties
             exit 0
           fi
           echo "$LMSTORY_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/lmstory-release.keystore"

@@ -7,6 +7,7 @@ library;
 // Web 平台实现文件，仅 Web 目标编译；迁移 package:web 前保持显式豁免。
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
+import 'dart:ui' show Rect;
 
 /// 当前平台桌面标记 - Web 恒为 false（原生实现见 file_share.dart）
 const bool isDesktopPlatform = false;
@@ -22,6 +23,7 @@ Future<String?> shareTextAsFile({
   required String content,
   required String fileName,
   String? subject,
+  Rect? sharePositionOrigin,
 }) async {
   // 创建 Blob（MIME 类型设为通用二进制，浏览器根据扩展名处理）
   final blob = html.Blob([content], 'application/octet-stream');

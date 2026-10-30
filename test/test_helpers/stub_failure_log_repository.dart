@@ -4,10 +4,14 @@ import 'package:lmstory/features/diagnostics/domain/repositories/failure_log_rep
 /// 测试用 FailureLogRepository Stub（所有方法 no-op，不依赖数据库）
 ///
 /// 用于 Controller/Page 测试，避免引入真实 drift 数据库。
-///  的 Repository 测试（failure_log_repository_impl_test.dart）用真实
+/// 域层 Repository 测试（failure_log_repository_impl_test.dart）用真实
 /// FailureLogRepositoryImpl + 内存数据库，不用本 Stub。
 class StubFailureLogRepository implements FailureLogRepository {
   const StubFailureLogRepository();
+
+  @override
+  @override
+  Future<void> markRecovered(int logId) async {}
 
   @override
   Future<FailureLogEntry> insertLog({
@@ -19,6 +23,7 @@ class StubFailureLogRepository implements FailureLogRepository {
     int? httpStatus,
     String? errorMessage,
     String? rawError,
+    String? outcome,
   }) async {
     return FailureLogEntry(
       id: 1,
@@ -42,6 +47,9 @@ class StubFailureLogRepository implements FailureLogRepository {
   }) async {
     return const <FailureLogEntry>[];
   }
+
+  @override
+  Future<int> countAll() async => 0;
 
   @override
   Future<void> clearAll() async {}

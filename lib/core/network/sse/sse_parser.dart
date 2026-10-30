@@ -263,7 +263,11 @@ class SseParser {
       final json = jsonDecode(data) as Map<String, dynamic>;
       events.addAll(_handleJsonChunk(json));
     } catch (e) {
-      events.add(StreamError('Failed to parse SSE data: $e'));
+      // FORMAT_ERROR（2026-10-15 批 D 归一）：JSON 解析失败/HTML 挑战页
+      // 伪装 200 同走此路——立即重试通道（免费站典型病）
+      events.add(
+        StreamError('Failed to parse SSE data: $e', code: 'FORMAT_ERROR'),
+      );
     }
 
     return events;

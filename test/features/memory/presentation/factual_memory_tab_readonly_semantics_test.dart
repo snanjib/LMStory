@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/di/providers.dart';
-import 'package:lmstory/core/theme/intermediate/components/factual_memory_tab.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/factual_memory_tab.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';

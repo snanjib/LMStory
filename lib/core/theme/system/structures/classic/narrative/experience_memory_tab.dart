@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/memory_timeline_entry.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
@@ -771,7 +772,7 @@ class _ExperienceMemoryTabState extends ConsumerState<ExperienceMemoryTab> {
     return RefreshIndicator(
       color: colors.primary,
       onRefresh: _loadMemories,
-      child: ListView.separated(
+      child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(
           LmSpacing.sLg,
           LmSpacing.sSm,
@@ -779,16 +780,26 @@ class _ExperienceMemoryTabState extends ConsumerState<ExperienceMemoryTab> {
           LmSpacing.sXl,
         ),
         itemCount: _filteredMemories.length,
-        separatorBuilder: (_, __) => const SizedBox(height: LmSpacing.sSm),
         itemBuilder: (context, index) {
           final memory = _filteredMemories[index];
-          return _MemoryCard(
+          final card = _MemoryCard(
             memory: memory,
             colors: colors,
             t: t,
             onEdit: () => _onEditMemory(memory),
             onDelete: () => _onDeleteMemory(memory),
             onArchive: () => _onArchiveMemory(memory),
+          );
+          if (_sortBy != 0) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: LmSpacing.sMd),
+              child: card,
+            );
+          }
+          return MemoryTimelineEntry(
+            isFirst: index == 0,
+            isLast: index == _filteredMemories.length - 1,
+            child: card,
           );
         },
       ),
@@ -907,33 +918,26 @@ class _MemoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: colors.surface,
-      borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-      child: InkWell(
-        onTap: onEdit,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-        child: Padding(
-          padding: const EdgeInsets.all(LmSpacing.sMd),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeader(),
-              // 叙事时间（narrativeTime 非空才展示，兼容旧数据）
-              if (_hasNarrativeTime) ...[
-                const SizedBox(height: LmSpacing.sXs),
-                _buildNarrativeTime(),
-              ],
-              const SizedBox(height: LmSpacing.sXs),
-              _buildContent(),
-              if (memory.tags.isNotEmpty) ...[
-                const SizedBox(height: LmSpacing.sXs),
-                _buildTags(),
-              ],
-              _buildActions(),
-            ],
-          ),
-        ),
+    return context.lmUi.card(
+      context,
+      onTap: onEdit,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildHeader(),
+          // 叙事时间（narrativeTime 非空才展示，兼容旧数据）
+          if (_hasNarrativeTime) ...[
+            const SizedBox(height: LmSpacing.sXs),
+            _buildNarrativeTime(),
+          ],
+          const SizedBox(height: LmSpacing.sXs),
+          _buildContent(),
+          if (memory.tags.isNotEmpty) ...[
+            const SizedBox(height: LmSpacing.sXs),
+            _buildTags(),
+          ],
+          _buildActions(),
+        ],
       ),
     );
   }
@@ -963,7 +967,10 @@ class _MemoryCard extends StatelessWidget {
   }
 
   Widget _buildHeader() {
-    return Row(
+    return Wrap(
+      spacing: LmSpacing.s2xs,
+      runSpacing: LmSpacing.s2xs,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Container(
           padding: const EdgeInsets.symmetric(
@@ -1027,6 +1034,7 @@ class _MemoryCard extends StatelessWidget {
           const SizedBox(width: LmSpacing.sXs),
         ],
         Row(
+          mainAxisSize: MainAxisSize.min,
           children: List.generate(
             5,
             (i) => Icon(
@@ -1036,7 +1044,6 @@ class _MemoryCard extends StatelessWidget {
             ),
           ),
         ),
-        const Spacer(),
         if (memory.hasEmbedding)
           Icon(Icons.bolt_outlined, size: 14, color: colors.success),
       ],
@@ -1045,7 +1052,9 @@ class _MemoryCard extends StatelessWidget {
 
   Widget _buildContent() {
     return Text(
-      memory.displayText,
+      memory.formatDisplayText(
+        emptyPlaceholder: t.intermediate.chat.memoryDetail.empty,
+      ),
       style: LmNarrativeTextStyles.narrativeBody.copyWith(color: colors.ink),
       maxLines: 4,
       overflow: TextOverflow.ellipsis,

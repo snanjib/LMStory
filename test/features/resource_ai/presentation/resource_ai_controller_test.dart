@@ -389,10 +389,18 @@ void main() {
   test('save：成功 → saved（返回 null）；新建走 create 路径', () async {
     final recording = _RecordingRepository();
     controller = build(
-      gw: _ScriptedGateway([_text('ok')]),
+      gw: _ScriptedGateway([
+        _tool('update_draft', {
+          'action': 'set_card_field',
+          'field': 'name',
+          'value': '阿尔',
+        }),
+        _text('ok'),
+      ]),
       repository: recording,
     );
     await controller.start();
+    await controller.send('写个名字');
 
     final error = await controller.save(overwrite: false);
 
@@ -400,6 +408,37 @@ void main() {
     expect(controller.state.phase, ResourceAiPhase.saved);
     expect(recording.createCalls, 1);
     expect(recording.updateCalls, 0);
+  });
+
+  test('save 空名 → nameMissing 失败信封：不落库、现场保留可补名再存', () async {
+    final recording = _RecordingRepository();
+    controller = build(
+      gw: _ScriptedGateway([
+        _tool('update_draft', {
+          'action': 'set_card_field',
+          'field': 'name',
+          'value': '阿尔',
+        }),
+        _text('好，名字定了'),
+      ]),
+      repository: recording,
+    );
+    await controller.start();
+
+    final error = await controller.save(overwrite: false);
+
+    expect(error, isNotNull);
+    expect(error?.kind, ResourceAiErrorKind.nameMissing);
+    expect(controller.state.phase, ResourceAiPhase.ready, reason: '现场保留');
+    expect(recording.createCalls, 0, reason: '不落未命名条目');
+
+    // 补名后再存 → 成功
+    final turn = controller.send('就叫他阿尔');
+    await turn;
+    final retry = await controller.save(overwrite: false);
+    expect(retry, isNull);
+    expect(controller.state.phase, ResourceAiPhase.saved);
+    expect(recording.createCalls, 1);
   });
 
   test('save 失败 → 回 ready 返回文案，现场保留可再存（不进 fatal）', () async {

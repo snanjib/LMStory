@@ -12,7 +12,7 @@ import 'package:lmstory/features/diagnostics/data/repositories/failure_log_repos
 /// - deleteBySession 仅清当前 session，不影响其他 session
 /// - 静默降级：数据库关闭后所有操作返回安全默认值，不抛异常
 ///
-/// 权威设计： 计划 / DOC-05（待  补充接口索引）。
+/// 权威设计：v0.2 收尾计划 / DOC-05（接口索引待补充）。
 void main() {
   late AppDatabase db;
   late FailureLogRepositoryImpl repo;
@@ -202,6 +202,29 @@ void main() {
 
       final logs = await repo.getRecentLogs();
       expect(logs, isEmpty);
+      expect(await repo.countAll(), 0);
+    });
+  });
+
+  // ── countAll ─────────────────────────────────────────────────────────
+
+  group('countAll', () {
+    test('9b. 计数= 表内真实总数（列表截断 50 条时计数不失真）', () async {
+      for (var i = 0; i < 3; i++) {
+        await repo.insertLog(
+          sessionId: 's$i',
+          mode: 'intermediate',
+          errorCategory: 'network',
+        );
+      }
+      expect(await repo.countAll(), 3);
+      // limit=1 的列表视角与总数解耦
+      expect((await repo.getRecentLogs(limit: 1)).length, 1);
+      expect(await repo.countAll(), 3);
+    });
+
+    test('9c. 空表计数 0', () async {
+      expect(await repo.countAll(), 0);
     });
   });
 
@@ -291,6 +314,12 @@ void main() {
 
       final deleted = await repo.deleteBySession('s1');
       expect(deleted, 0);
+    });
+
+    test('16. countAll 返回 0，不抛异常', () async {
+      await db.customStatement('DROP TABLE failure_logs');
+
+      expect(await repo.countAll(), 0);
     });
   });
 }

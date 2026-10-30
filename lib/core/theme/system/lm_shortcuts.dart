@@ -157,7 +157,7 @@ class LmShortcut {
 ///
 /// | 位置 | 键 | 为什么不进表 |
 /// |---|---|---|
-/// | `simple_chat_input.dart` | Enter / Shift+Enter 发送与换行 | 用户可配置（设置里的「发送键 / 换行键」），且属 IME 上下文 |
+/// | `chat_mode_input_area.dart` | Enter / Shift+Enter 发送与换行 | 用户可配置（设置里的「发送键 / 换行键」），且属 IME 上下文 |
 /// | `in_session_search_bar.dart` | Enter / Shift+Enter / Esc 命中跳转 | 只在搜索框获焦时成立，属输入框自身的编辑语义 |
 /// | `commit_slider.dart` | 方向键 / Home / End 调值 | 滑杆的值键语义（与 ARIA slider 同构） |
 ///

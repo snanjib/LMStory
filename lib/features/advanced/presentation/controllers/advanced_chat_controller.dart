@@ -11,8 +11,10 @@ import 'package:lmstory/core/utils/throttled_delta_buffer.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_live_block.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_timeline_block.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
+import 'package:lmstory/features/advanced/domain/entities/director_resume_context.dart';
 import 'package:lmstory/features/advanced/domain/entities/director_round_tuning.dart';
 import 'package:lmstory/features/advanced/domain/entities/retrieval_profile.dart';
 import 'package:lmstory/features/advanced/domain/entities/tool_permissions.dart';
@@ -40,6 +42,7 @@ import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
 import 'package:lmstory/features/memory/domain/repositories/factual_repository.dart';
 import 'package:lmstory/features/memory/domain/services/embedding_service.dart';
+import 'package:lmstory/features/resource_library/domain/services/resource_apply_service.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/message_variant_record.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_context.dart';
@@ -107,6 +110,9 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
     AgentEventLogStore? agentEventLogRepository,
     // CompactionPoint 压缩服务（导演轮轮前压缩；null = 未启用）
     StoryCompactionService? compactionService,
+    // 资源应用服务（向导「初始化你的角色」卡路径物化时应用；
+    // nullable 向后兼容旧测试）
+    ResourceApplyService? resourceApplyService,
   })  : _chatRepository = chatRepository,
         _configurationResolver = configurationResolver,
         _llmService = llmService,
@@ -122,6 +128,7 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
         _factualRepository = factualRepository,
         _agentEventLogRepository = agentEventLogRepository,
         _compactionService = compactionService,
+        _resourceApplyService = resourceApplyService,
         _streamRunner = StreamRunner(llmService: llmService),
         super(AdvancedChatState.initial(session)) {
     // 与故事模式一致：构造函数加载历史（会话切换时 State 复用兜底）
@@ -153,6 +160,9 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
 
   /// CompactionPoint 压缩服务（导演轮轮前压缩）
   final StoryCompactionService? _compactionService;
+
+  /// 资源应用服务（向导「初始化你的角色」卡路径：物化时应用卡）
+  final ResourceApplyService? _resourceApplyService;
 
   /// manualCompact 摘要增量合帧缓冲（见 [_onManualCompactionDelta]）
   ThrottledDeltaBuffer? _manualCompactionDeltaBuffer;
@@ -411,7 +421,11 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
         namingConfig: namingConfig,
         contextWindow: state.contextWindowTokens ??
             ConfigurationResolver.defaultContextWindow,
-        maxTokens: OutputTokenPolicy.compactionLimit,
+        // 输出帽与故事侧手动压缩同源：按会话配置与实际执行模型上限钳制。
+        maxTokens: _outputTokenReserveFor(
+          resolvedSettings.settings.maxTokens,
+          modelMaxOutput: namingConfig.maxOutputTokens,
+        ),
         budget: budget,
         connectTimeout: timeouts.connectTimeout,
         readTimeout: timeouts.readTimeout,
@@ -672,7 +686,7 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
         config.storyRuntime,
         resolved.settings,
       );
-      return assembleDirectorCoreBlocks(
+      return await assembleDirectorCoreBlocks(
         factual: factual,
         experienceRepository: _experienceRepository,
         sessionId: state.session.sessionId,
@@ -738,10 +752,33 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
       toolPermissions: draft.toolPermissions ?? _encodeToolsSnapshot(snapshot),
       retrievalOverrides:
           draft.retrievalOverrides ?? RetrievalProfile.balanced.encode(),
+      // 向导「初始化你的角色」两列随草稿物化（快照而非引用；null = 未启用）
+      characterInitPrompt: draft.characterInitPrompt,
+      characterInitCardId: draft.characterInitCardId,
     );
 
     final persisted = await _chatRepository.updateSession(sessionWithDefaults);
     state = state.copyWith(session: persisted);
+    // 卡路径：物化拿到真实 sessionId 后应用角色卡（资料通道建基线实体）。
+    // 失败只记 warn 不阻断开聊——用户可随时在会话设置里手动应用同款卡。
+    final cardId = draft.characterInitCardId;
+    if (cardId != null && cardId.isNotEmpty && _resourceApplyService != null) {
+      try {
+        await _resourceApplyService.applyCharacterCard(
+          sessionId: persisted.sessionId,
+          cardId: cardId,
+          defaultCharacterName: t.settings.resourceLibrary.unnamedCharacter,
+          defaultSettingName: t.settings.resourceLibrary.unnamedSetting,
+          duplicateErrorMessage:
+              t.common.seedResource.duplicateCharacter(name: cardId),
+        );
+      } catch (e) {
+        _logger.warn(
+          'Wizard character card apply failed',
+          detail: 'card=$cardId, error=$e',
+        );
+      }
+    }
   }
 
   /// 全局工具权限 → 12 工具完整 map 快照（会话列形态）
@@ -863,7 +900,12 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
 
   /// 发送用户消息，启动导演回合（agent loop）
   Future<void> sendMessage(String userInput) async {
-    if (state.phase != IntermediatePhase.idle) return;
+    // failed 放行直发新消息——放弃失败轮不必先清空（DOC-09C §3 单会话
+    // 串行口径下其余相位仍拦截）。
+    if (state.phase != IntermediatePhase.idle &&
+        state.phase != IntermediatePhase.failed) {
+      return;
+    }
     // 手动压缩以压缩事务为先（上下文用量指示 §4.3）
     if (state.isManualCompacting) return;
     if (state.isStopping) return;
@@ -871,6 +913,13 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
     // 多个 await）内 phase 仍为 idle——此窗口发送新消息会与随后的
     // regenerate copyWith（截断 messages/覆写 userInput）互踩两轮状态。
     if (state.isPreparingRegenerate) return;
+
+    // failed 态直发：先事务性清掉失败轮残留（旧 pending 气泡/直播块/
+    // 步骤/失败上下文/_round），不留幽灵态再走正常首发链。
+    if (state.phase == IntermediatePhase.failed) {
+      _round = null;
+      state = state.clearTemporary().copyWith(pendingUserMessage: null);
+    }
 
     // 草稿会话检查：首次发送消息时创建真实会话
     if (isDraftSession) {
@@ -884,6 +933,19 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
         state.session,
       );
       if (preGenerating == null) {
+        // 预检失败先落 userInput + pendingUserMessage（与故事侧同款）：
+        // 输入框在 onSend 前已被清空，若 state 不存这份输入，用户
+        // 首条消息直接蒸发；落态后气泡与失败栏「整轮重试」都有据可重放。
+        state = state.copyWith(
+          userInput: userInput,
+          pendingUserMessage: ChatMessage(
+            messageId: _uuid.v4(),
+            sessionId: state.session.sessionId,
+            role: 'user',
+            content: userInput,
+            createdAt: DateTime.now(),
+          ),
+        );
         await _fail(
           IntermediatePhase.generating,
           'E010',
@@ -1115,38 +1177,28 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
     StoryRuntimeConfig config,
     ChatSessionSettings settings,
   ) {
-    // CC-3：钳制到导演 UI 域 [0.30, 0.80]——
-    // 手改 user_overrides / 导入备份可写入域外值：≥0.86 被软着陆线 0.85
-    // 钳死触发线永远够不到（轮前压缩饿死），极小值近似禁用轮前压缩。
-    // 域约定见 DirectorCompactionThresholdField。
-    const kRatioFloor = 0.30;
-    const kRatioCeil = 0.80;
-
-    // 钳制不能只防会话覆盖路径——
-    // 全局 advanced.contextBudget.compaction_trigger_ratio 手改到
-    // (0.80,0.99) 时 fromJson 病态防御（≤0/≥1 才回默认）拦不住，无
-    // 会话覆盖的会话直达运行时同样饿死轮前压缩。全局值过同一钳制。
+    // 触发线钳制到导演 UI 域 [0.30, 0.80]（会话覆盖与全局都过钳制，
+    // 手改配置/导入备份的域外值不再直达运行时）；钳制与导演定值形态
+    // 收敛于 DirectorContextBudgetPin.directorClamped 单源。
     final sessionCompactionTrigger = settings.compactionTriggerRatioOverride;
     final globalBudget = config.contextBudget;
-    final effectiveTrigger =
-        (sessionCompactionTrigger ?? globalBudget.compactionTriggerRatio)
-            .clamp(kRatioFloor, kRatioCeil);
+    final mergedBudget = globalBudget.directorClamped(
+      sessionOverride: sessionCompactionTrigger,
+    );
     if (sessionCompactionTrigger == null &&
-        effectiveTrigger == globalBudget.compactionTriggerRatio) {
+        mergedBudget.compactionTriggerRatio ==
+            globalBudget.compactionTriggerRatio) {
       return config;
     }
-    final mergedBudget = ContextBudget(
-      compactionTriggerRatio: effectiveTrigger,
-      // 组装侧（AdvancedStoryRuntime）已定死：下限动态（默认 null）、
-      // 检索预留 0
-      retrievalRatio: 0,
-      recentMinTokenTarget: globalBudget.recentMinTokenTarget,
-    );
 
     return config.copyWith(contextBudget: mergedBudget);
   }
 
-  /// 取消：停止 agent 循环 + 清理临时状态 -> idle（不进 failed）
+  /// 取消：停止 agent 循环 + 清理临时状态。
+  ///
+  /// 直播正文已流出非空文本段时不再丢弃——与失败路径同款保留（直播
+  /// 块与稿件卡原样留在时间线），进「已停止」failed 态，失败栏提供
+  /// 「从中断处继续/整轮重试」出口（文案区分：手动停止非错误）。
   Future<void> cancel() async {
     if (state.isStopping) return;
     if (state.phase == IntermediatePhase.idle ||
@@ -1158,6 +1210,28 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
     final cancelFuture = _streamRunner.cancel();
     _directorRunner.cancelRound('用户停止');
 
+    final hasManuscript = state.liveBlocks.any(
+      (b) => b.kind == AgentLiveBlockKind.text && !b.isEmpty,
+    );
+    if (hasManuscript && _round != null) {
+      // 保留路径：_round 不清（「从中断处继续」复用已完成产出），
+      // pending 气泡与直播块保持（与失败态呈现同构）。
+      state = state.copyWith(
+        phase: IntermediatePhase.failed,
+        failureContext: FailureContext(
+          errorCode: 'user_stopped',
+          failedPhase: IntermediatePhase.generating,
+          errorMessage: t.intermediate.chat.failure.stopped,
+          retryable: true,
+        ),
+        isStopping: true,
+      );
+      unawaited(
+        _waitForCancelCompletion(cancelFuture, resetStreamAfter: true),
+      );
+      return;
+    }
+
     _round = null;
     state = state.clearTemporary().copyWith(
           pendingUserMessage: null,
@@ -1168,12 +1242,22 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
     unawaited(_waitForCancelCompletion(cancelFuture));
   }
 
-  /// 后台等待取消 Future 完成，然后清除 isStopping（3 秒超时兜底）
-  Future<void> _waitForCancelCompletion(Future<void> cancelFuture) async {
+  /// 后台等待取消 Future 完成，然后清除 isStopping（3 秒超时兜底）。
+  ///
+  /// [resetStreamAfter]：停止保留半截正文的分支置 true——订阅取消完成后
+  /// 复位流式取消标志（先于 isStopping 清除）；否则收稿后的续跑/重试
+  /// 出口不经 _prepareAndRunRound，后续流式事件会被残留标志丢弃。
+  Future<void> _waitForCancelCompletion(
+    Future<void> cancelFuture, {
+    bool resetStreamAfter = false,
+  }) async {
     try {
       await cancelFuture.timeout(const Duration(seconds: 3));
     } catch (_) {
       // 超时或异常都视为清理完成
+    }
+    if (resetStreamAfter) {
+      _streamRunner.resetCancelled();
     }
     if (state.isStopping) {
       state = state.copyWith(isStopping: false);
@@ -1211,6 +1295,26 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
   bool recoverIfStuck() {
     if (_backgroundInterrupted) {
       _backgroundInterrupted = false;
+      // 直播正文已流出非空文本段：与手动停止同款保留半截正文——
+      // 进「已停止」failed 态而非清场回 idle（失败栏给继续/重试出口）。
+      final hasManuscript = state.liveBlocks.any(
+        (b) => b.kind == AgentLiveBlockKind.text && !b.isEmpty,
+      );
+      if (hasManuscript && _round != null) {
+        state = state.copyWith(
+          phase: IntermediatePhase.failed,
+          failureContext: FailureContext(
+            errorCode: 'user_stopped',
+            failedPhase: IntermediatePhase.generating,
+            errorMessage: t.intermediate.chat.failure.stopped,
+            retryable: true,
+          ),
+          isStopping: false,
+        );
+        // 出口（继续/重试）不经 _prepareAndRunRound，同 cancel 复位标志
+        _streamRunner.resetCancelled();
+        return true;
+      }
       _round = null;
       state = state.clearTemporary().copyWith(
             pendingUserMessage: null,
@@ -1244,7 +1348,10 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
               await _configurationResolver
                   .resolveAdvancedGeneratingNamingConfig(state.session);
       if (namingConfig == null) {
-        final title = SessionTitleGenerator.fallbackTitle(userInput);
+        final title = SessionTitleGenerator.fallbackTitle(
+          userInput,
+          defaultTitle: t.advanced.home.newDirector,
+        );
         final written =
             await _chatRepository.updateSessionTitleIfCurrentTitleIn(
           state.session.sessionId,
@@ -1264,7 +1371,11 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
         namingConfig: namingConfig,
       );
 
-      final title = generated ?? SessionTitleGenerator.fallbackTitle(userInput);
+      final title = generated ??
+          SessionTitleGenerator.fallbackTitle(
+            userInput,
+            defaultTitle: t.advanced.home.newDirector,
+          );
 
       final written = await _chatRepository.updateSessionTitleIfCurrentTitleIn(
         state.session.sessionId,

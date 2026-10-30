@@ -29,6 +29,19 @@ abstract class ChatRepository {
   /// 更新会话
   Future<ChatSession> updateSession(ChatSession session);
 
+  /// 窄列写入收藏态（只写 is_starred 一列）。
+  ///
+  /// 收藏切换此前走「重读+全列回写」：重读到写入之间的窗口里，自动命名
+  /// 等并发写会被全列回写倒灌旧值。窄列写入不参与竞态列，天然无窗口。
+  Future<void> setSessionStarred(String sessionId, {required bool starred});
+
+  /// 未发送输入草稿的窄列读写（schemaVersion 52）。
+  ///
+  /// setSessionDraft 的 draft 传 null 即清空（发送后调用）。草稿会话
+  ///（未物化）无行，写入自然 no-op。
+  Future<String?> getSessionDraft(String sessionId);
+  Future<void> setSessionDraft(String sessionId, String? draft);
+
   /// 删除会话（级联删除相关消息和压缩点）
   Future<void> deleteSession(String sessionId);
 

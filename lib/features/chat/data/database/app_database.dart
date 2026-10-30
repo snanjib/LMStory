@@ -151,8 +151,14 @@ class AppDatabase extends _$AppDatabase {
   /// schema 修复日志（修复：ALTER 失败不再静默）
   static const Logger _repairLogger = Logger('AppDatabase.repairSchema');
 
+  /// 当前数据库 schema 版本号（单一事实源）
+  ///
+  /// UI 显示面（Wiki 版本记录等）经此静态常量取值，不各自手写数字；
+  /// test/features/help/wiki_counts_lock_test.dart 对账本值与文案参数。
+  static const int currentSchemaVersion = 54; // 54：failure_logs.outcome（recovered 标记）
+
   @override
-  int get schemaVersion => 51;
+  int get schemaVersion => currentSchemaVersion;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(

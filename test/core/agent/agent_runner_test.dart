@@ -274,6 +274,7 @@ AgentTurnSpec _spec(
   String? penReminderText,
   AgentCallConfig callConfig = const AgentCallConfig(),
   AgentOverflowCompactor? overflowCompactor,
+  AgentResumeSeed? resumeSeed,
 }) {
   return AgentTurnSpec(
     sessionId: 'test',
@@ -293,6 +294,7 @@ AgentTurnSpec _spec(
     penReminderText: penReminderText,
     callConfig: callConfig,
     overflowCompactor: overflowCompactor,
+    resumeSeed: resumeSeed,
   );
 }
 
@@ -1134,7 +1136,15 @@ void main() {
       final runner = AgentRunner(gateway: gateway);
 
       final result = await runner.runTurn(
-        _spec(gateway, surface: [AgentMessage.user('hi')]),
+        // 显式钉 1 次重试
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('hi')],
+          budget: const AgentBudget(
+            maxDuration: null,
+            maxRequestRetries: 1,
+          ),
+        ),
       );
 
       expect(result.reason, AgentStopReason.error);
@@ -1611,6 +1621,92 @@ void main() {
 
       expect(result.reason, AgentStopReason.error);
       expect(gateway.requests, hasLength(1));
+    });
+  });
+
+  group('续跑种子（resumeSeed）', () {
+    test('步号从种子续起，result.steps 含前序尝试步数，turn 标记 resumed', () async {
+      final gateway = _ScriptedGateway([_text('续写完成。')]);
+      final runner = AgentRunner(gateway: gateway);
+      final sink = BufferingAgentEventSink();
+
+      final result = await runner.runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('hi')],
+          events: sink,
+          resumeSeed: const AgentResumeSeed(initialSteps: 2),
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completed);
+      expect(result.steps, 3, reason: '种子 2 + 本次 1 步');
+      final starts = sink.of<AgentStepStarted>().toList();
+      expect(starts, hasLength(1));
+      expect(starts.first.stepIndex, 2, reason: '新步从上次尝试的下一序号起');
+      expect(sink.of<AgentTurnStarted>().single.resumed, isTrue);
+    });
+
+    test('无种子 → turn 不标记 resumed（既有行为零变化）', () async {
+      final gateway = _ScriptedGateway([_text()]);
+      final runner = AgentRunner(gateway: gateway);
+      final sink = BufferingAgentEventSink();
+
+      await runner.runTurn(
+        _spec(gateway, surface: [AgentMessage.user('hi')], events: sink),
+      );
+
+      expect(sink.of<AgentTurnStarted>().single.resumed, isFalse);
+      expect(sink.of<AgentStepStarted>().single.stepIndex, 0);
+    });
+
+    test('maxSteps 余量执法：种子已耗满 → 立即软着陆给一次纯文本收尾', () async {
+      final gateway = _ScriptedGateway([_text('用现有材料收尾的正文。')]);
+      final runner = AgentRunner(gateway: gateway);
+      final sink = BufferingAgentEventSink();
+
+      final result = await runner.runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('hi')],
+          events: sink,
+          budget: const AgentBudget(maxSteps: 2, maxDuration: null),
+          resumeSeed: const AgentResumeSeed(initialSteps: 2),
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completed);
+      expect(gateway.requests, hasLength(1), reason: '只剩软着陆的收尾请求');
+      // 软着陆通牒注入且工具停用（纯文本请求不带工具定义）
+      expect(gateway.requests.single.tools, isEmpty);
+      expect(
+        sink
+            .of<AgentInjectedMessageEvent>()
+            .any((e) => e.kind == AgentInjectedMessageKinds.budgetFinalNotice),
+        isTrue,
+      );
+    });
+
+    test('priorTotalTokens 余量执法：上次消耗计入 token 预算', () async {
+      final gateway = _ScriptedGateway([
+        _call('echo', {'text': 'x'}, id: 'c1'),
+        _call('echo', {'text': 'y'}, id: 'c2'),
+      ]);
+      final runner = AgentRunner(gateway: gateway);
+
+      final result = await runner.runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('hi')],
+          budget: const AgentBudget(maxTotalTokens: 240, maxDuration: null),
+          resumeSeed: const AgentResumeSeed(priorTotalTokens: 130),
+        ),
+      );
+
+      // 首步 110 + 种子 130 = 240 达线 → 软着陆；通牒后仍调工具 → 二次触发停轮
+      expect(result.reason, AgentStopReason.budgetTokens);
+      expect(result.errorMessage, contains('上次尝试 130'));
+      expect(gateway.requests, hasLength(2));
     });
   });
 }

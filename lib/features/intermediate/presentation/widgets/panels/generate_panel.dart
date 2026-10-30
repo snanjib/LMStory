@@ -2,9 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/history_panel_shell.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
@@ -18,7 +18,7 @@ import 'package:lmstory/i18n/strings.g.dart';
 /// - 完成：先展开 [foldDelayMs] 毫秒展示生成全文，然后自动折叠为
 ///   单行 "▸ 已生成"；用户点击可重新展开/折叠
 /// - 失败：AnimatedOpacity + 灰度滤镜过渡到 0.4（300ms ease-out，DOC-06B §5.3）
-/// - 历史态（[artifacts] != null）：用 [HistoryPanelShell] 渲染，默认折叠、
+/// - 历史态（[artifacts] != null）：用 HistoryPanelShell 渲染，默认折叠、
 ///   muted 箭头、入场淡入、无自动折叠定时器、无失败态
 ///
 /// V2 四步重构：generating 产出纯文本生成内容（不含关键词），关键词由 extracting
@@ -38,10 +38,16 @@ class GeneratePanel extends StatefulWidget {
     this.streamingGeneratedThinking,
     this.foldDelayMs = 2000,
     this.artifacts,
+    this.autoRetryCount,
     super.key,
   });
 
   final IntermediatePhase phase;
+
+  /// 自动重试进行中的第几次（2026-10-15 批 F：*Retry 期间内联状态行；
+  /// null/0 = 非重试态不显示。替换「刻意保持 generating 视觉态」旧决策——
+  /// 重试进度透明化（P5 知情自决的前提））
+  final int? autoRetryCount;
   final String? streamingGenerated;
   final String? generatedText;
   final FailureContext? failureContext;
@@ -60,7 +66,7 @@ class GeneratePanel extends StatefulWidget {
   /// 历史快照（非 null 时进入历史态渲染）。
   ///
   /// 完成后的轮次通过此参数传入持久化的 [StoryRoundArtifacts]，
-  /// 组件从 `artifacts.generatedText` 读取生成全文，用 [HistoryPanelShell]
+  /// 组件从 `artifacts.generatedText` 读取生成全文，用 HistoryPanelShell
   /// 渲染折叠/展开态。历史态忽略 [phase]/[streamingGenerated]/[failureContext]。
   final StoryRoundArtifacts? artifacts;
 
@@ -223,7 +229,7 @@ class _GeneratePanelState extends State<GeneratePanel> {
     );
   }
 
-  /// 历史态渲染：用 [HistoryPanelShell] 容器 + 生成全文展开内容。
+  /// 历史态渲染：用 HistoryPanelShell 容器 + 生成全文展开内容。
   Widget _buildHistory(BuildContext context) {
     final t = Translations.of(context);
     final artifacts = widget.artifacts!;
@@ -231,7 +237,8 @@ class _GeneratePanelState extends State<GeneratePanel> {
       turn: artifacts.turnNumber,
     );
 
-    return HistoryPanelShell(
+    return context.lmUi.historyPanelShell(
+      context,
       key: ValueKey('history-generate-${artifacts.turnNumber}'),
       summary: summary,
       animateEntrance: false,
@@ -274,14 +281,7 @@ class _GeneratePanelState extends State<GeneratePanel> {
         children: [
           Row(
             children: [
-              SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  color: colors.primary,
-                ),
-              ),
+              LmActivityDots(color: colors.primary),
               const SizedBox(width: IntermediateSpacing.sXs),
               Text(
                 t.intermediate.chat.generating,
@@ -293,6 +293,32 @@ class _GeneratePanelState extends State<GeneratePanel> {
               ),
             ],
           ),
+          // 批 F：自动重试内联状态行（generatingRetry 期间；成功随阶段
+          // 切走自然消失，不弹 failure bar）
+          if (widget.autoRetryCount != null && widget.autoRetryCount! > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: IntermediateSpacing.sXs),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.hourglass_top,
+                    size: 12,
+                    color: colors.muted,
+                  ),
+                  const SizedBox(width: IntermediateSpacing.s2xs),
+                  Text(
+                    t.intermediate.chat.autoRetryLine(
+                      count: widget.autoRetryCount!,
+                    ),
+                    style: IntermediateTextStyles.captionSm.copyWith(
+                      color: colors.muted,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
           // 2026-07-29 新增：流式思考内容（reasoning_content）
           // 模型支持思考时，reasoning_content 通常先于正文输出，
           // 在生成正文上方以可折叠区块展示，让用户确认模型确实在思考。

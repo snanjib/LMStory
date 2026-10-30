@@ -3,14 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_compaction_summary_card.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_markdown_body.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_actions.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_navigation.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
+import 'package:lmstory/core/theme/shared/components/narrative_identity.dart';
 import 'package:lmstory/core/theme/shared/components/streaming_markdown_body.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/follow_scroll_executor.dart';
@@ -177,6 +176,16 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
   /// build 期 O(n) 扫描 messages 收集（不依赖行构建，行已懒化）。
   List<String> _userRowIds = const [];
 
+  /// 工作态「正在执行的指示」浮条可见性——指令气泡被直播尾区挤出
+  /// 视口时置位（续跑/长轮直播把 pending 气泡顶出视口且被懒加载逐出
+  /// 构件树，用户视角=「指示消失、成功折叠后才重现」）。
+  bool _instructionStripVisible = false;
+
+  /// 指令行最后已知滚动偏移。轮进行期间该行上方无插入（历史与
+  /// StoryOpening 均不变），偏移稳定；懒加载逐出后 `_revealOf` 失联，
+  /// 用缓存定位回看。
+  double? _pendingRowTopCache;
+
   @override
   void initState() {
     super.initState();
@@ -185,7 +194,10 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
       vsync: this,
     );
     _scrollController.addListener(_onScroll);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _alignToLatestOnce());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _alignToLatestOnce();
+      if (mounted) _syncInstructionStrip();
+    });
   }
 
   @override
@@ -244,6 +256,7 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
         _followExecutor.state.forceFollowing();
       }
       _syncAwayFromBottom();
+      _syncInstructionStrip();
     });
   }
 
@@ -406,6 +419,7 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
     });
 
     _syncAwayFromBottom();
+    _syncInstructionStrip();
   }
 
   void _syncAwayFromBottom() {
@@ -414,6 +428,49 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
     if (_awayFromBottom != away) {
       setState(() => _awayFromBottom = away);
     }
+  }
+
+  /// 指示浮条可见性对账：工作态且指令气泡（pending）不在视口内 → 显示。
+  ///
+  /// 可见性判据按「完整可见」（±4px 容差）。行失联（GlobalKey 无 context
+  /// = 被懒加载逐出，cacheExtent 600px 仍保活不到）即视为出视口——发送
+  /// 路径强制贴底且行在列表尾部，正常布局下失联只可能是被直播尾区推远。
+  void _syncInstructionStrip() {
+    if (!_scrollController.hasClients) return;
+    final pending = widget.state.pendingUserMessage;
+    final eligible = _isWorking && !widget.pureReading && pending != null;
+    var rowVisible = true;
+    if (eligible) {
+      final extent = _rowExtent(pending.messageId);
+      if (extent != null) {
+        _pendingRowTopCache = extent.$1;
+        final position = _scrollController.position;
+        final vpTop = position.pixels;
+        final vpBottom = vpTop + position.viewportDimension;
+        rowVisible = extent.$1 >= vpTop - 4 && extent.$2 <= vpBottom + 4;
+      } else {
+        rowVisible = false;
+      }
+    }
+    final shouldShow = eligible && !rowVisible;
+    if (_instructionStripVisible != shouldShow) {
+      setState(() => _instructionStripVisible = shouldShow);
+    }
+  }
+
+  /// 回看正在执行的指示：滚到指令气泡（顶端对齐）。
+  void _jumpToPendingRow() {
+    final pending = widget.state.pendingUserMessage;
+    if (pending == null || !_scrollController.hasClients) return;
+    _followExecutor.stop(); // 宿主自驱滚动：避免与桌面 ticker 抢帧
+    final target =
+        _revealOf(pending.messageId, target: 0) ?? _pendingRowTopCache;
+    if (target == null) return;
+    _scrollController.animateTo(
+      target.clamp(0.0, _scrollController.position.maxScrollExtent),
+      duration: LmMotion.emphasis,
+      curve: LmMotion.easeStandard,
+    );
   }
 
   /// row 的 reveal 偏移（child 与视口对齐所需的滚动位置，与当前
@@ -639,89 +696,131 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
         // 的 builder 范式）——此前 _buildRows 每 build 全量实例化所有行
         // widget、itemBuilder 只取数组下标，直播期间每个 delta 都为全部
         // 历史轮付出行装配成本；现在只有可见轮付 Markdown/面板/布局成本。
+        //
+        // 阅读限宽（大屏口径）：整列收进阅读版心——用户气泡、幕后折叠组
+        //（工作状态行/警示条）、重试状态条、摘要卡与正文同列，不再出现
+        // "工作状态通铺整窗、正文却收窄"的错位（与故事/对话两模式的
+        // 列表版心同构）。列表内逐行钳制保留为窄窗冗余，零回退；Stack
+        // 内的回到最新胶囊 / 滚动导航 / 准备中遮罩等兄弟节点仍整窗定位。
         RepaintBoundary(
-          child: ListView.builder(
-            controller: _scrollController,
-            scrollCacheExtent: const ScrollCacheExtent.pixels(600),
-            // 2026-09-10：底部缓冲留白（惰性跟随用）——写入行在缓冲内下走时
-            // 视口不动，已读文字保持静止。
-            padding: const EdgeInsets.fromLTRB(
-              IntermediateSpacing.sMd,
-              IntermediateSpacing.sMd,
-              IntermediateSpacing.sMd,
-              IntermediateSpacing.sMd + streamingFollowCushionPx,
+          child: Center(
+            child: ConstrainedBox(
+              constraints:
+                  BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
+              child: ListView.builder(
+                controller: _scrollController,
+                scrollCacheExtent: const ScrollCacheExtent.pixels(600),
+                // 2026-09-10：底部缓冲留白（惰性跟随用）——写入行在缓冲内下走时
+                // 视口不动，已读文字保持静止。
+                padding: const EdgeInsets.fromLTRB(
+                  IntermediateSpacing.sMd,
+                  IntermediateSpacing.sMd,
+                  IntermediateSpacing.sMd,
+                  IntermediateSpacing.sMd + streamingFollowCushionPx,
+                ),
+                itemCount: state.messages.length + tailItemCount,
+                // 键 → index 回查——builder 型 sliver 默认不做跨索引 key
+                // 移位（SliverChildBuilderDelegate.findIndexByKey 无回调时恒
+                // null），删除中间轮后轮聚合项的展开态要跟随轮迁移必须显式回查
+                //（回调收到的键已经过 delegate 解盐，即 itemBuilder 产出的原键）。
+                findChildIndexCallback: _findRoundChildIndex,
+                itemBuilder: (context, index) {
+                  if (index < state.messages.length) {
+                    final item = _buildPersistedItem(state, index);
+                    if (index != 0) return item;
+                    return KeyedSubtree(
+                      key: const ValueKey('story-opening'),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          StoryOpening(
+                            title: state.session.title,
+                            modeLabel: t.chat.sidebar.modeDirector,
+                          ),
+                          item,
+                        ],
+                      ),
+                    );
+                  }
+                  var tailIndex = index - state.messages.length;
+                  if (hasPending) {
+                    if (tailIndex == 0) return _pendingUserRow(state);
+                    tailIndex--;
+                  }
+                  // 重试等待状态条（折叠组上方单行）
+                  if (hasRetryRow) {
+                    if (tailIndex == 0) {
+                      return AgentRetryWaitRow(
+                        key: const ValueKey('agent-retry-wait-row'),
+                        wait: state.agentRetryWait!,
+                      );
+                    }
+                    tailIndex--;
+                  }
+                  if (hasLiveGroup) {
+                    if (tailIndex == 0) {
+                      // live 跟随工作态——取消/失败后残留的
+                      // 过程行不再以「正在 X…」的 shimmer 形态挂在 idle 界面
+                      //（历史态渲染为已收起的 idle 汇总行）
+                      return DirectorWorkGroup(
+                        timeline: liveTimeline,
+                        live: _isWorking,
+                        // 正文流式接管焦点后，末段思考行自动收起（同旧直播行为）
+                        textStreaming: _isWorking &&
+                            blocks.isNotEmpty &&
+                            blocks.last.kind == AgentLiveBlockKind.text,
+                        // 预算进度快照（live 标题「第 N/M 步 · 已用 X:XX」）
+                        progress: state.agentRoundProgress,
+                      );
+                    }
+                    tailIndex--;
+                  }
+                  if (hasTailBody) {
+                    // 稿件卡：升格正文块（直播流式 / 失败轮半截中性收尾）
+                    if (manuscriptBlock != null) {
+                      return Center(
+                        // 阅读行宽钳制（与历史稿件行同款）
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: LmLayout.readingWidthOf(context),
+                          ),
+                          child: _ManuscriptCard(
+                            key: const ValueKey('live-manuscript'),
+                            text: manuscriptBlock.text,
+                            streaming: _isWorking,
+                            fontScale: widget.fontScale,
+                            // 失败轮的半截稿件未定稿也不会入库，不得挂
+                            //「落幕线」定稿视觉（重试即蒸发），留中性收尾
+                            failed: state.phase == IntermediatePhase.failed,
+                          ),
+                        ),
+                      );
+                    }
+                    // 刚发送、尚无任何增量时的呼吸标签（有步骤/时间线时由折叠组报告）
+                    return const _PendingNarrative(showLabel: true);
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
             ),
-            itemCount: state.messages.length + tailItemCount,
-            // 键 → index 回查——builder 型 sliver 默认不做跨索引 key
-            // 移位（SliverChildBuilderDelegate.findIndexByKey 无回调时恒
-            // null），删除中间轮后轮聚合项的展开态要跟随轮迁移必须显式回查
-            //（回调收到的键已经过 delegate 解盐，即 itemBuilder 产出的原键）。
-            findChildIndexCallback: _findRoundChildIndex,
-            itemBuilder: (context, index) {
-              if (index < state.messages.length) {
-                return _buildPersistedItem(state, index);
-              }
-              var tailIndex = index - state.messages.length;
-              if (hasPending) {
-                if (tailIndex == 0) return _pendingUserRow(state);
-                tailIndex--;
-              }
-              // 重试等待状态条（折叠组上方单行）
-              if (hasRetryRow) {
-                if (tailIndex == 0) {
-                  return AgentRetryWaitRow(
-                    key: const ValueKey('agent-retry-wait-row'),
-                    wait: state.agentRetryWait!,
-                  );
-                }
-                tailIndex--;
-              }
-              if (hasLiveGroup) {
-                if (tailIndex == 0) {
-                  // live 跟随工作态——取消/失败后残留的
-                  // 过程行不再以「正在 X…」的 shimmer 形态挂在 idle 界面
-                  //（历史态渲染为已收起的 idle 汇总行）
-                  return DirectorWorkGroup(
-                    timeline: liveTimeline,
-                    live: _isWorking,
-                    // 正文流式接管焦点后，末段思考行自动收起（同旧直播行为）
-                    textStreaming: _isWorking &&
-                        blocks.isNotEmpty &&
-                        blocks.last.kind == AgentLiveBlockKind.text,
-                    // 预算进度快照（live 标题「第 N/M 步 · 已用 X:XX」）
-                    progress: state.agentRoundProgress,
-                  );
-                }
-                tailIndex--;
-              }
-              if (hasTailBody) {
-                // 稿件卡：升格正文块（直播流式 / 失败轮半截中性收尾）
-                if (manuscriptBlock != null) {
-                  return Center(
-                    // 阅读行宽钳制（与历史稿件行同款）
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        maxWidth: IntermediateSpacing.readingWidth,
-                      ),
-                      child: _ManuscriptCard(
-                        key: const ValueKey('live-manuscript'),
-                        text: manuscriptBlock.text,
-                        streaming: _isWorking,
-                        fontScale: widget.fontScale,
-                        // 失败轮的半截稿件未定稿也不会入库，不得挂
-                        //「落幕线」定稿视觉（重试即蒸发），留中性收尾
-                        failed: state.phase == IntermediatePhase.failed,
-                      ),
-                    ),
-                  );
-                }
-                // 刚发送、尚无任何增量时的呼吸标签（有步骤/时间线时由折叠组报告）
-                return const _PendingNarrative(showLabel: true);
-              }
-              return const SizedBox.shrink();
-            },
           ),
         ),
+        // 工作态指令浮条：指令气泡被直播尾区挤出视口时置顶提示
+        //（点击回看；滚动/内容增长经 _syncInstructionStrip 对账）。
+        if (_instructionStripVisible && state.pendingUserMessage != null)
+          Positioned(
+            top: IntermediateSpacing.sSm,
+            left: IntermediateSpacing.sMd,
+            right: IntermediateSpacing.sMd,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: _ActiveInstructionStrip(
+                label: t.advanced.activeInstructionLabel,
+                text: state.pendingUserMessage!.content ?? '',
+                onTap: _jumpToPendingRow,
+              ),
+            ),
+          ),
         // 生成中：醒目的「回到最新」胶囊；收工后：与故事模式同款的
         // 四键导航条（回顶 / 上、下一条用户消息 / 回底）。二者互斥。
         if (showPill)
@@ -734,7 +833,9 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
           Positioned(
             right: IntermediateSpacing.sSm,
             bottom: IntermediateSpacing.sMd,
-            child: IntermediateMessageNavigation(
+            child: context.lmUi.messageNavigation(
+              context,
+              narrative: true,
               visible: _isScrollActive,
               onJumpToTop: _jumpToTop,
               onJumpToBottom: _jumpToBottom,
@@ -789,6 +890,7 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
   /// live 尾项（每 delta 重建、finalize 即消散）返回 null，沿用按位匹配
   /// ——与旧急构建的删除行为同口径，不扩大本批语义。
   int? _findRoundChildIndex(Key key) {
+    if (key == const ValueKey('story-opening')) return 0;
     if (key is! ValueKey<String>) return null;
     final value = key.value;
     if (!value.startsWith('director-round-')) return null;
@@ -939,7 +1041,8 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
     return Padding(
       key: _rowKeyFor(message.messageId),
       padding: const EdgeInsets.only(bottom: IntermediateSpacing.sSm),
-      child: IntermediateMessageBubble(
+      child: context.lmUi.narrativeBubble(
+        context,
         content: message.content ?? '',
         isUser: true,
         fontScale: widget.fontScale,
@@ -964,7 +1067,8 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
   Widget _summaryRow(ChatMessage message) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: IntermediateSpacing.sSm),
-      child: IntermediateCompactionSummaryCard(
+      child: context.lmUi.compactionSummaryCard(
+        context,
         content: message.content ?? '',
         // U2（2026-09-04 撤销压缩）：与故事模式同构，仅 idle 且非压缩中可撤销
         onUndo: widget.onUndoCompaction,
@@ -1045,9 +1149,8 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
       // 不再拉满（移动端视口窄于上限，不受影响）
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            maxWidth: IntermediateSpacing.readingWidth,
-          ),
+          constraints:
+              BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1067,7 +1170,8 @@ class _DirectorChatBodyState extends State<DirectorChatBody>
               // 「重生成窗口等操作入口随之隐藏（切回正常模式操作）」，此前
               // 操作行与切换器不受 pureReading 门控照常渲染。
               if (!widget.state.isManualCompacting && !widget.pureReading)
-                IntermediateMessageActions(
+                context.lmUi.messageActions(
+                  context,
                   isUser: false,
                   // DP-2：按 Fork 窗口门控（此前恒 true，窗口外重生成/删除
                   // 畅通无阻，windowRounds 沦为纯装饰）
@@ -1126,60 +1230,61 @@ class _ManuscriptCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.lm.palette;
     return Padding(
       padding: const EdgeInsets.only(bottom: IntermediateSpacing.sSm),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(IntermediateSpacing.sLg),
-        decoration: BoxDecoration(
-          color: colors.surfaceElevated,
-          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-          border: Border.all(color: colors.divider, width: 0.5),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            //  批3：直播稿件卡正文接冻结前缀分块渲染——
-            // 直播态每 delta 的全文重解析是导演流式卡顿主源之一；定稿后
-            // 回整文渲染（一次终解析）。
-            // 纯文本单块尾段走 Text 快速路径（样式与
-            // IntermediateMarkdownBody 的 styleSheet.p 同源）——叙事散文
-            // 无空行流式时免全文重解析。稿件卡恒 isUser:false、中级配色
-            // 恒夜航；fontScale 变化时冻结缓存经 cacheKey 整体失效。
-            if (streaming)
-              StreamingMarkdownBody(
-                data: text,
-                blockGap: IntermediateSpacing.s2xs,
-                // 平滑揭示配速（消除批量上屏的蹦字感）。
-                revealPacing: true,
-                cacheKey: fontScale,
-                plainTextStyle: IntermediateMarkdownBody.paragraphStyle(
-                  colors: colors,
-                  isUser: false,
+      child: context.lmUi.messageBubble(
+        context,
+        isUser: false,
+        standardLayout: false,
+        narrative: true,
+        child: SizedBox(
+          width: double.infinity,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              //  批3：直播稿件卡正文接冻结前缀分块渲染——
+              // 直播态每 delta 的全文重解析是导演流式卡顿主源之一；定稿后
+              // 回整文渲染（一次终解析）。
+              // 纯文本单块尾段走 Text 快速路径（样式与
+              // IntermediateMarkdownBody 的 styleSheet.p 同源）——叙事散文
+              // 无空行流式时免全文重解析。稿件卡恒 isUser:false、中级配色
+              // 恒夜航；fontScale 变化时冻结缓存经 cacheKey 整体失效。
+              if (streaming)
+                StreamingMarkdownBody(
+                  data: text,
+                  blockGap: IntermediateSpacing.s2xs,
+                  // 平滑揭示配速（消除批量上屏的蹦字感）。
+                  revealPacing: true,
+                  cacheKey: fontScale,
+                  plainTextStyle: context.lmUi.markdownParagraphStyle(
+                    context,
+                    isUser: false,
+                    fontScale: fontScale,
+                  ),
+                  blockBuilder: (segment) => context.lmUi.markdownBody(
+                    context,
+                    narrative: true,
+                    data: segment,
+                    fontScale: fontScale,
+                  ),
+                )
+              else
+                context.lmUi.markdownBody(
+                  context,
+                  narrative: true,
+                  data: text,
                   fontScale: fontScale,
                 ),
-                blockBuilder: (segment) => IntermediateMarkdownBody(
-                  data: segment,
-                  isUser: false,
-                  fontScale: fontScale,
-                ),
-              )
-            else
-              IntermediateMarkdownBody(
-                data: text,
-                isUser: false,
-                fontScale: fontScale,
-              ),
-            if (streaming)
-              const _StreamingCursor()
-            else if (!failed)
-              const _CurtainLine()
-            else
-              // 失败轮半截稿件挂「未定稿」
-              // 徽标（中性收尾的补充说明——未入库、重试即替换）
-              const _DraftBadge(),
-          ],
+              if (streaming)
+                const _StreamingCursor()
+              else if (!failed)
+                const _CurtainLine()
+              else
+                // 失败轮半截稿件挂「未定稿」
+                // 徽标（中性收尾的补充说明——未入库、重试即替换）
+                const _DraftBadge(),
+            ],
+          ),
         ),
       ),
     );
@@ -1439,69 +1544,92 @@ class _PendingNarrative extends StatelessWidget {
     if (!showLabel) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: IntermediateSpacing.sMd),
-      child: _BreathingLabel(
-        text: t.advanced.heartbeat.composing,
-        color: colors.muted,
-      ),
-    );
-  }
-}
-
-/// 心跳文字（800ms 呼吸，与流式光标同节拍；reduced-motion 静态）
-class _BreathingLabel extends StatefulWidget {
-  const _BreathingLabel({required this.text, required this.color});
-
-  final String text;
-  final Color color;
-
-  @override
-  State<_BreathingLabel> createState() => _BreathingLabelState();
-}
-
-class _BreathingLabelState extends State<_BreathingLabel>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: LmMotion.pulse,
-      vsync: this,
-    );
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (LmMotion.reducedMotion(context)) {
-      _controller.value = 0.6;
-    } else if (!_controller.isAnimating) {
-      _controller.repeat(reverse: true, min: 0.35, max: 1);
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return RepaintBoundary(
-      child: FadeTransition(
-        opacity: _controller,
-        child: Text(
-          widget.text,
-          style: IntermediateTextStyles.caption.copyWith(color: widget.color),
+      child: LmArrival(
+        child: _BreathingLabel(
+          text: t.advanced.heartbeat.composing,
+          color: colors.muted,
         ),
       ),
     );
   }
 }
 
-/// 回到最新浮标（生成中上滚脱离底部时浮现的右下角胶囊）。
+/// Waiting feedback with stable text and a separately painted activity cue.
+class _BreathingLabel extends StatelessWidget {
+  const _BreathingLabel({required this.text, required this.color});
+
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          LmActivityDots(color: color),
+          const SizedBox(width: IntermediateSpacing.sSm),
+          Expanded(
+            child: Text(
+              text,
+              style: IntermediateTextStyles.caption.copyWith(color: color),
+            ),
+          ),
+        ],
+      );
+}
+
+/// 回到最新浮标：生成中上滚脱离底部时浮现的右下角胶囊。
+/// 工作态指令浮条：列表顶部居中的轻量胶囊——「正在执行的指示 · 内容预览」，
+/// 点击滚回指令气泡。指示本身仍在数据层（pendingUserMessage），本浮条只
+/// 解决「直播尾区把气泡挤出视口后用户失去指令锚点」的可见性问题。
+class _ActiveInstructionStrip extends StatelessWidget {
+  const _ActiveInstructionStrip({
+    required this.label,
+    required this.text,
+    required this.onTap,
+  });
+
+  final String label;
+  final String text;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.lm.palette;
+    return Material(
+      color: colors.surfaceElevated,
+      shape: StadiumBorder(
+        side: BorderSide(color: colors.divider, width: 0.5),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const StadiumBorder(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: IntermediateSpacing.sMd,
+            vertical: 8,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.arrow_upward, size: 13, color: colors.muted),
+              const SizedBox(width: IntermediateSpacing.s2xs),
+              Flexible(
+                child: Text(
+                  '$label · $text',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: IntermediateTextStyles.caption.copyWith(
+                    color: colors.muted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _JumpToLatestPill extends StatelessWidget {
   const _JumpToLatestPill({required this.onTap});
 
@@ -1644,9 +1772,8 @@ class _HistoryLoadingSkeleton extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: IntermediateSpacing.sMd),
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: IntermediateSpacing.readingWidth,
-              ),
+              constraints:
+                  BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
               child: Container(
                 width: double.infinity,
                 height: height,

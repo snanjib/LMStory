@@ -1,8 +1,6 @@
-import 'dart:math';
-
 // RetryConfig 仍由 intermediate_config 提供（getMaxRetries 的配额来源）。
 import 'package:lmstory/core/config/intermediate_config.dart';
-import 'package:lmstory/core/network/retry_after.dart';
+import 'package:lmstory/core/network/retry_policy.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/story_phase_models.dart';
 
 /// 重试调度器（Phase 5 Step 5.3 提取）
@@ -86,36 +84,45 @@ class RetryScheduler {
     }
   }
 
-  /// 计算重试延迟（DOC-09A-2 §6.2；：限流尊重 Retry-After + 非零延迟 jitter）
+  /// 计算重试延迟（2026-10-15 批 E 改读共享 [RetryPolicy]）
   ///
-  /// 格式错误（E013/E017）立即重试；限流且带服务端冷却指示
-  /// （[retryAfter]，来自 Retry-After 头解析）时按指示冷却；其余延迟 1 秒。
+  /// 故事错误码 → 共享语义码映射后走统一退避：格式类（E013/E017/
+  /// EMPTY/FORMAT）立即重试零退避；流中断（E016）与服务端/未知类指数
+  /// 退避（500ms 起封顶 15s + ±25% jitter）；限流带服务端冷却指示
+  /// （[retryAfter]）精确遵守（封顶 60s 不加 jitter，重发不早于指示值）。
   ///
-  /// 服务端指示**精确遵守**——指示值直接用（封顶
-  /// [maxRetryAfterDelay]），不加 jitter，重发不早于指示值（对齐导演侧
-  /// agent_runner.retryDelayFor 的口径）；±25% jitter（[roll] ∈ [0,1)
-  /// 可注入，测试确定性）仅用于无指示的本地退避。
+  /// [roll] ∈ [0,1) 可注入（测试确定性），缺省随机。
   Duration retryDelay(
     String errorCode, {
     Duration? retryAfter,
     double Function()? roll,
+    RetryPolicy policy = const RetryPolicy(),
   }) {
-    switch (errorCode) {
-      case 'E013':
-      case 'E017':
-        return Duration.zero;
-      default:
-        if (retryAfter != null) {
-          return retryAfter > maxRetryAfterDelay
-              ? maxRetryAfterDelay
-              : retryAfter;
-        }
-        return jitteredDelay(
-          const Duration(seconds: 1),
-          (roll ?? _delayJitterRandom.nextDouble)(),
-        );
-    }
+    return policy.delayFor(
+      semantic: semanticCodeOf(errorCode),
+      attempt: 1,
+      retryAfter: retryAfter,
+      roll: roll?.call(),
+    );
   }
 
-  static final Random _delayJitterRandom = Random();
+  /// 故事 E0xx 错误码 → 共享语义码（退避口径映射；判定仍由
+  /// [getMaxRetries] 的阶段键控制次数，两轴分离）
+  static String semanticCodeOf(String errorCode) {
+    switch (errorCode) {
+      case 'E013': // 关键词提取格式错误
+      case 'E017': // 事件摘要格式错误
+        return 'FORMAT_ERROR';
+      case 'E016': // 流中断
+        return 'STREAM_ERROR';
+      case 'E010': // 生成失败（服务端/网络混合，按通用指数退避）
+      case 'E012': // 检索失败
+      case 'E014': // 审查失败
+        return 'SERVER';
+      case 'E104': // embedding 失败（限流子场景由 retryAfter 承载）
+        return 'SERVER';
+      default:
+        return 'unknown';
+    }
+  }
 }

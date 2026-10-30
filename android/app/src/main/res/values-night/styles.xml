@@ -13,16 +13,14 @@
 
          This Theme is only used starting with V2 of Flutter's Android embedding. -->
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
-        <!-- Window background aligned with the default appearance's dark
-             variant darkBg = #0E1018. Single source in
-             lib/core/theme/system/palettes/classic/classic_palette.dart,
-             kept in sync by test/core/theme/t10_android_window_bg_guard_test.dart.
+        <!-- T10-4：窗口背景对齐**默认外观**（classic 结构 + classic 配色）的夜间档
+             darkBg = #0E1018。单源在
+             lib/core/theme/system/palettes/classic/classic_palette.dart，
+             由 test/core/theme/t10_android_window_bg_guard_test.dart 锁死同源。
 
-             Previously ?android:colorBackground was used — a system-derived
-             value that varies with the system/vendor theme, leaving the
-             dark-mode cold-start background to external decisions. Pinning
-             the default appearance's dark value makes the behavior
-             deterministic and consistent with the in-app first screen. -->
+             此前用 ?android:colorBackground —— 那是**系统派生**的（随系统主题/
+             厂商主题变化，不可预测），会把「深色模式冷启动底色」交给外部决定。
+             钉成默认外观的夜间值后，行为确定且与应用内首屏一致。 -->
         <item name="android:windowBackground">#0E1018</item>
     </style>
 </resources>

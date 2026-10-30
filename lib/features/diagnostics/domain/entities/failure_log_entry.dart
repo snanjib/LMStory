@@ -21,6 +21,7 @@ class FailureLogEntry {
     this.httpStatus,
     this.errorMessage,
     this.rawError,
+    this.outcome,
   });
 
   /// 自增主键（诊断页定位/删除单条用）
@@ -41,6 +42,13 @@ class FailureLogEntry {
 
   /// 错误分类（ErrorCategory.name）
   final String errorCategory;
+
+  /// 终局标记：'failed' | 'recovered' | null（旧数据/未终局）——
+  /// recovered = 引发这条日志的失败被自动重试救回（批 F / P8）
+  final String? outcome;
+
+  /// 是否已被自动重试救回
+  bool get isRecovered => outcome == 'recovered';
 
   /// HTTP 状态码（非 HTTP 错误为 null）
   final int? httpStatus;

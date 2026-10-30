@@ -9,8 +9,10 @@ import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/core/widgets/numeric_input_dialog.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/entities/director_session_extension.dart';
@@ -34,6 +36,7 @@ import 'package:lmstory/features/story_runtime/presentation/widgets/seed_resourc
 import 'package:lmstory/features/story_runtime/presentation/widgets/session_settings_fields.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
 import 'package:lmstory/features/templates/domain/repositories/template_repository.dart';
+import 'package:lmstory/features/templates/presentation/support/template_l10n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 导演模式会话设置面板（导演设置 /15 折叠骨架，DOC-14 §3.4 同款）。
@@ -160,12 +163,20 @@ class _DirectorSessionSettingsSheetState
   /// 松手才提交——此前裸 Slider 逐 tick 真实写库+弹 SnackBar）。
   int? _draggingMaxDuration;
 
+  /// 规则输入框当前回填初值（配置回显纪律：输入框恒显生效值——
+  /// 会话覆盖为 null 时回填全局 system_prompt；跟踪初值用于装载
+  /// 晚到时补填，且不覆盖用户已编辑的内容）。
+  late String _rulesInitialText;
+
   @override
   void initState() {
     super.initState();
-    _rulesController = TextEditingController(
-      text: widget.session.systemPromptOverride ?? '',
-    );
+    // 会话覆盖 null = 跟随全局：输入框回显全局当前值（空串=内置编辑部
+    // 规则兜底，无可回显内容）。会话覆盖为空串是快照语义的真实空，不回退。
+    final globalRules =
+        ref.read(advancedConfigProvider).valueOrNull?.systemPrompt ?? '';
+    _rulesInitialText = widget.session.systemPromptOverride ?? globalRules;
+    _rulesController = TextEditingController(text: _rulesInitialText);
     _maxTokensController = TextEditingController(
       text: widget.session.maxTokens?.toString() ?? '',
     );
@@ -275,6 +286,20 @@ class _DirectorSessionSettingsSheetState
     );
     // advanced 全局值（会话列 NULL 时的展示回退与「跟随全局」语义源）
     final advanced = ref.watch(advancedConfigProvider).valueOrNull;
+    // 装载晚到补填：弹层开在 advancedConfig 加载完成前时，全局规则就绪
+    // 后回填（仅会话无覆盖且用户未动过输入框时，避免覆盖编辑）
+    ref.listen<AsyncValue<AdvancedConfig>>(advancedConfigProvider, (
+      previous,
+      next,
+    ) {
+      final global = next.valueOrNull?.systemPrompt;
+      if (global == null) return;
+      if (widget.session.systemPromptOverride != null) return;
+      if (_rulesController.text == _rulesInitialText) {
+        _rulesInitialText = global;
+        _rulesController.text = global;
+      }
+    });
     final level = ref.watch(configLevelProvider);
     // failed 态与 idle 同为「可改」——保存结果文案判定口径本就放行 failed。
     final isBusy = state.phase != IntermediatePhase.idle &&
@@ -308,15 +333,9 @@ class _DirectorSessionSettingsSheetState
               const SizedBox(height: IntermediateSpacing.sLg),
 
               // ── 标题栏：标题 + 一键折叠/一键展开 ──────────────────
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      t.advanced.settings.sheetTitle,
-                      style: IntermediateTextStyles.title
-                          .copyWith(color: colors.ink),
-                    ),
-                  ),
+              PanelHeading(
+                title: t.advanced.settings.sheetTitle,
+                actions: [
                   TextButton(
                     onPressed: _collapseAllSections,
                     child: Text(
@@ -522,6 +541,10 @@ class _DirectorSessionSettingsSheetState
                   sessionId: state.session.sessionId,
                   enabled: !isBusy,
                 ),
+              ),
+
+              const AdvancedLevelHint(
+                surfaceId: ConfigVisibilitySurfaces.directorPanel,
               ),
             ],
           ),
@@ -738,7 +761,8 @@ class _DirectorSessionSettingsSheetState
       context,
       templates: _systemPromptTemplates,
       onTemplateSelected: (template) {
-        _rulesController.text = template.content;
+        _rulesController.text =
+            template.localizedContent(Translations.of(context));
         _saveRules(controller);
       },
     );

@@ -14,6 +14,7 @@ import 'package:meta/meta.dart';
 class DiagnosticsState {
   const DiagnosticsState({
     this.failures = const [],
+    this.failureTotal = 0,
     this.logLines = const [],
     this.logLevel = LogLevel.debug,
     this.debugLogOptions = const DebugLogOptions(),
@@ -22,6 +23,9 @@ class DiagnosticsState {
 
   /// 最近 50 条失败记录（按时间倒序）
   final List<FailureLogEntry> failures;
+
+  /// 失败记录总条数（概览显示用；列表截断 50 条时计数不失真）
+  final int failureTotal;
 
   /// 日志文件 tail 500 行
   final List<String> logLines;
@@ -37,6 +41,7 @@ class DiagnosticsState {
 
   DiagnosticsState copyWith({
     List<FailureLogEntry>? failures,
+    int? failureTotal,
     List<String>? logLines,
     LogLevel? logLevel,
     DebugLogOptions? debugLogOptions,
@@ -44,6 +49,7 @@ class DiagnosticsState {
   }) {
     return DiagnosticsState(
       failures: failures ?? this.failures,
+      failureTotal: failureTotal ?? this.failureTotal,
       logLines: logLines ?? this.logLines,
       logLevel: logLevel ?? this.logLevel,
       debugLogOptions: debugLogOptions ?? this.debugLogOptions,
@@ -77,6 +83,8 @@ class DiagnosticsController extends StateNotifier<DiagnosticsState> {
     state = state.copyWith(isLoading: true);
     try {
       final failures = await _failureLogRepository.getRecentLogs();
+      // 概览计数取表内真实总数（列表只截 50 条，表滚动保留 200 条）
+      final failureTotal = await _failureLogRepository.countAll();
       final logLines = await _readLogTail(maxLines: 500);
       final logLevel = await _loadLogLevel();
       final debugLogOptions = await _loadDebugLogOptions();
@@ -84,6 +92,7 @@ class DiagnosticsController extends StateNotifier<DiagnosticsState> {
       Logger.debugOptions = debugLogOptions;
       state = DiagnosticsState(
         failures: failures,
+        failureTotal: failureTotal,
         logLines: logLines,
         logLevel: logLevel,
         debugLogOptions: debugLogOptions,
@@ -109,6 +118,14 @@ class DiagnosticsController extends StateNotifier<DiagnosticsState> {
   Future<void> unlockDevGate() async {
     try {
       await _preferences.setBool(devGateKey, true);
+    } catch (_) {}
+  }
+
+  /// 重新上锁：解锁一次永久暴露两张开发者卡（其一真实调用 LLM），
+  /// 转手设备/演示机需要与解锁对称的收回路径（持久 false）。
+  Future<void> lockDevGate() async {
+    try {
+      await _preferences.setBool(devGateKey, false);
     } catch (_) {}
   }
 
@@ -155,10 +172,12 @@ class DiagnosticsController extends StateNotifier<DiagnosticsState> {
 
   Future<LogLevel> _loadLogLevel() async {
     final saved = await _preferences.getString('log_level');
-    if (saved == null) return LogLevel.debug;
+    // 缺省与启动装配同源 kDefaultLogLevel——release 无显式设置时
+    // 诊断页显示 info（此前兜底 debug，显示与实际生效相反）
+    if (saved == null) return kDefaultLogLevel;
     return LogLevel.values.firstWhere(
       (l) => l.name == saved,
-      orElse: () => LogLevel.debug,
+      orElse: () => kDefaultLogLevel,
     );
   }
 
@@ -219,6 +238,44 @@ class DiagnosticsController extends StateNotifier<DiagnosticsState> {
   /// Web 平台：no-op（无文件日志）。
   Future<void> _clearLogFiles() async {
     await clearLogFiles();
+  }
+}
+
+/// 版本行连点解锁计数（暗门手势）
+///
+/// 独立成类以便对时间窗逻辑做确定性单测——widget 测试的假时钟只推进
+/// Timer/动画，不作用于 DateTime.now()，跨窗慢点无法在 widget 层模拟。
+class DevGateTapCounter {
+  DevGateTapCounter({
+    this.target = 7,
+    this.window = const Duration(seconds: 2),
+  });
+
+  /// 解锁所需连续点击次数
+  final int target;
+
+  /// 连点窗口：相邻两次点击间隔超过此时长，计数作废重新累计
+  final Duration window;
+
+  int _taps = 0;
+  DateTime? _lastTapAt;
+
+  /// 记录一次点击；窗内累计达成 [target] 次返回 true 并复位。
+  bool registerTap(DateTime now) {
+    if (_lastTapAt != null && now.difference(_lastTapAt!) > window) {
+      _taps = 0;
+    }
+    _lastTapAt = now;
+    _taps++;
+    if (_taps < target) return false;
+    _taps = 0;
+    return true;
+  }
+
+  /// 手动复位（重新上锁时清残留计数）
+  void reset() {
+    _taps = 0;
+    _lastTapAt = null;
   }
 }
 

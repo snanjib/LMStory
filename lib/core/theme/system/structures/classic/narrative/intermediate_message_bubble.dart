@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
 import 'package:lmstory/core/theme/shared/components/streaming_fade_text.dart';
 import 'package:lmstory/core/theme/shared/components/streaming_markdown_body.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
@@ -16,9 +17,8 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///
 /// 与 Simple 模式差异：
 /// - 助手消息用衬线字体（叙事感）
-/// - 圆角 rMd（12px），偏离 Simple 的 rLg（16px）——收敛书页感
-/// - 用底色区分角色，不用 border-left 侧条（impeccable 禁令）
-/// - 最大宽度 92% 屏宽，减少移动端换行
+/// - Assistant prose uses the full reading column without a bubble face.
+/// - User input keeps a distinct surface and a 92% column-width limit.
 ///
 /// 入场动画（从下方上浮 + 淡入 250ms ease-out，DOC-06B §5.3）。
 /// 仅在 widget 首次构建时播放一次；reduced-motion 下瞬时显示。
@@ -48,7 +48,7 @@ class IntermediateMessageBubble extends StatefulWidget {
   /// 消息文本内容
   final String content;
 
-  /// 是否为用户消息（true=右对齐+primaryDim，false=左对齐+surface）
+  /// User input is right-aligned; assistant prose sits directly on the page.
   final bool isUser;
 
   /// LLM 思考/推理内容（仅助手消息，null = 无思考内容）
@@ -254,7 +254,7 @@ class _IntermediateMessageBubbleState extends State<IntermediateMessageBubble>
             // 按视口取宽既会让窗口变大直接拉长正文行（2560 窗口下 ~2355px），
             // 也会在正文列被限宽后反过来贴满整列（92% 形同虚设）。
             constraints: BoxConstraints(
-              maxWidth: constraints.maxWidth * 0.92,
+              maxWidth: constraints.maxWidth * (widget.isUser ? 0.92 : 1),
             ),
             child: context.lmUi.messageBubble(
               context,
@@ -348,7 +348,9 @@ class _IntermediateMessageBubbleState extends State<IntermediateMessageBubble>
         //   只重解析尾部未闭合窗口（O(尾块) 而非 O(全文)；此前
         //   IntermediateMarkdownBody 无 memo，全文重解析是长会话卡顿主源
         //   之一）；完成/中断后回整文渲染
-        if (widget.isStreaming)
+        if (widget.isStreaming && widget.content.isEmpty)
+          LmActivityDots(color: colors.primary)
+        else if (widget.isStreaming)
           StreamingMarkdownBody(
             data: widget.content,
             blockGap: LmSpacing.s2xs,

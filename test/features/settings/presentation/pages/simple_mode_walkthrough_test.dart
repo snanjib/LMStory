@@ -89,16 +89,14 @@ void main() {
       expect(find.text('模型提供商'), findsOneWidget);
     });
 
-    testWidgets('四类②：故事分步骤模型区+嵌入模型区可见（D-C13，故事模型子页）',
-        (tester) async {
+    testWidgets('四类②：故事分步骤模型区+嵌入模型区可见（D-C13，故事模型子页）', (tester) async {
       await pumpPage(tester, const IntermediateModelsSettingsPage());
 
       expect(find.text('分步骤模型配置'), findsOneWidget);
       expect(find.text('嵌入模型'), findsWidgets);
     });
 
-    testWidgets('四类②+④：导演 GM 模型/剧情节奏/思考档/嵌入模型入口可见（导演设置页）',
-        (tester) async {
+    testWidgets('四类②+④：导演 GM 模型/剧情节奏/思考档/嵌入模型入口可见（导演设置页）', (tester) async {
       await pumpPage(tester, const DirectorSettingsPage());
 
       expect(find.text('导演主模型'), findsOneWidget);

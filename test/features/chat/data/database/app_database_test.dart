@@ -903,7 +903,7 @@ void main() {
         0,
         reason: '存量会话未物化时必须允许 NULL（公式惰性回退）',
       );
-      expect(db.schemaVersion, 51);
+      expect(db.schemaVersion, 54);
     });
 
     test('旧会话行为 NULL，物化后读回计数器值', () async {
@@ -969,7 +969,7 @@ void main() {
         // 3. 重新打开：onUpgrade(48→49) → repairSchema 增量补表补列
         fileDb = AppDatabase.forTesting(native);
         await fileDb.customSelect('SELECT 1').get();
-        expect(fileDb.schemaVersion, 51);
+        expect(fileDb.schemaVersion, 54);
 
         final tables = await fileDb
             .customSelect(
@@ -1093,7 +1093,7 @@ void main() {
         // 版本号推进到当前 schemaVersion（v49 起为 49；升级完成后由 drift 写回）
         final version = await fileDb.customSelect('PRAGMA user_version').get();
         expect(version.first.read<int>('user_version'), fileDb.schemaVersion);
-        expect(fileDb.schemaVersion, 51);
+        expect(fileDb.schemaVersion, 54);
 
         await fileDb.close();
       } finally {

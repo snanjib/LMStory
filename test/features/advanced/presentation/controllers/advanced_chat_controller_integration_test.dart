@@ -15,9 +15,11 @@ import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/core/vector/vector_engine.dart';
 import 'package:lmstory/features/advanced/data/repositories/agent_event_log_repository.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_live_block.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_timeline_block.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/domain/entities/tool_permissions.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_session_stats.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/chat/data/datasources/llm_remote_datasource.dart';
@@ -34,6 +36,7 @@ import 'package:lmstory/features/memory/data/repositories/experience_repository_
 import 'package:lmstory/features/memory/data/repositories/factual_repository_impl.dart';
 import 'package:lmstory/features/memory/domain/services/embedding_service.dart';
 import 'package:lmstory/features/memory/domain/services/fact_applier.dart';
+import 'package:lmstory/features/resource_library/domain/services/resource_apply_service.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
@@ -125,6 +128,23 @@ class _GmMissingResolver extends _FakeResolver {
     ChatSession session,
   ) async =>
       null;
+}
+
+/// GM 配置可运行时切换的解析器变体——模拟用户失败后去设置补齐配置。
+class _ToggleGmResolver extends _FakeResolver {
+  bool gmConfigured = false;
+  @override
+  Future<NamingConfig?> resolveAdvancedGeneratingNamingConfig(
+    ChatSession session,
+  ) async =>
+      gmConfigured
+          ? const NamingConfig(
+              baseUrl: 'https://api.openai.com/v1',
+              apiKey: 'test-key',
+              modelId: 'test-model',
+              presetId: 'test-preset',
+            )
+          : null;
 }
 
 /// 先吐一条 delta 再挂门闸——delta 进入 32ms 合帧缓冲后压缩
@@ -246,6 +266,10 @@ class _RecordingFailureLogRepository implements FailureLogRepository {
   final modes = <String>[];
 
   @override
+  @override
+  Future<void> markRecovered(int logId) async {}
+
+  @override
   Future<FailureLogEntry> insertLog({
     required String sessionId,
     required String mode,
@@ -255,6 +279,7 @@ class _RecordingFailureLogRepository implements FailureLogRepository {
     int? httpStatus,
     String? errorMessage,
     String? rawError,
+    String? outcome,
   }) async {
     modes.add(mode);
     return FailureLogEntry(
@@ -281,6 +306,9 @@ class _RecordingFailureLogRepository implements FailureLogRepository {
   }
 
   @override
+  Future<int> countAll() async => 0;
+
+  @override
   Future<void> clearAll() async {}
 
   @override
@@ -294,6 +322,7 @@ class _SseHttpClient implements HttpClient {
     this.responses, {
     this.bodyLog,
     this.partialStreamErrorAt,
+    this.hangAt,
   });
 
   final List<String> responses;
@@ -305,6 +334,17 @@ class _SseHttpClient implements HttpClient {
   /// 契约 §7.1 的 step 重试直播块污染场景）。中断次不消费 responses 列表
   /// （重试从列表头读起）
   final int? partialStreamErrorAt;
+
+  /// 第 [hangAt] 次调用吐一条文本增量后挂住，[hangReleased] 置位后以
+  /// 流错误收尾——模拟「正文直播到一半用户点停止」。挂住次一次性
+  /// （不消费 responses 列表、不推进计数）。
+  final int? hangAt;
+  static const _hangChunk = '夜色沉下来，苏明远推开荒庙的门。';
+  bool hangReleased = false;
+  var _hangFired = false;
+
+  /// 挂闸已吐首帧的确定性信号（测试 await 它替代轮询直播块）。
+  final hangFired = Completer<void>();
   int callCount = 0;
   var _partialFired = false;
 
@@ -319,6 +359,40 @@ class _SseHttpClient implements HttpClient {
     Duration? readTimeout,
   }) {
     bodyLog?.add(body ?? '');
+    if (hangAt != null &&
+        callCount == hangAt &&
+        !_hangFired &&
+        !_partialFired) {
+      _hangFired = true;
+      late final StreamController<String> controller;
+      Timer? poller;
+      controller = StreamController<String>(
+        onListen: () {
+          final chunkJson = jsonEncode({
+            'choices': [
+              {
+                'delta': {'content': _hangChunk},
+              },
+            ],
+          });
+          controller.add('data: $chunkJson\n\n');
+          if (!hangFired.isCompleted) hangFired.complete();
+          final deadline = DateTime.now().add(const Duration(seconds: 12));
+          poller = Timer.periodic(const Duration(milliseconds: 10), (_) {
+            if (hangReleased ||
+                (cancelToken?.isCancelled ?? false) ||
+                DateTime.now().isAfter(deadline)) {
+              poller?.cancel();
+              controller
+                ..addError(Exception('cancelled mid-stream'))
+                ..close();
+            }
+          });
+        },
+        onCancel: () => poller?.cancel(),
+      );
+      return controller.stream;
+    }
     if (partialStreamErrorAt != null &&
         callCount == partialStreamErrorAt &&
         !_partialFired) {
@@ -342,6 +416,7 @@ class _SseHttpClient implements HttpClient {
 
 void main() {
   late AppDatabase db;
+  late _SseHttpClient hangClient;
 
   setUp(() {
     db = AppDatabase.forTesting(NativeDatabase.memory());
@@ -382,6 +457,20 @@ void main() {
 
   // ── 配置 stub ───────────────────────────────────────────────────────
 
+  /// 轮询等待条件成立（超时返回 false 交由断言报错）。
+  Future<bool> until(
+    bool Function() cond, {
+    // 并发全量下事件循环粒度放大，5s 窗会假超时——15s 保负载边界
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final sw = Stopwatch()..start();
+    while (!cond()) {
+      if (sw.elapsed > timeout) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    return true;
+  }
+
   AdvancedChatController buildController(
     List<String> sseResponses, {
     int? maxSteps,
@@ -395,8 +484,19 @@ void main() {
     AdvancedConfig? config,
     ConfigurationResolver? resolver,
     StoryCompactionService? compactionService,
+    String sessionId = 'dir-test-1',
+    int? hangAt,
+    String? characterInitPrompt,
+    String? characterInitCardId,
+    ResourceApplyService? resourceApplyService,
   }) {
     final chatRepo = ChatRepositoryImpl(database: db);
+    hangClient = _SseHttpClient(
+      sseResponses,
+      bodyLog: bodyLog,
+      partialStreamErrorAt: partialStreamErrorAt,
+      hangAt: hangAt,
+    );
     final experienceRepo = ExperienceRepositoryImpl(
       database: db,
       vectorEngine: const VectorEngine(),
@@ -407,11 +507,7 @@ void main() {
       chatRepository: chatRepo,
       configurationResolver: resolver ?? _FakeResolver(),
       llmService: LlmRemoteDataSource(
-        httpClient: _SseHttpClient(
-          sseResponses,
-          bodyLog: bodyLog,
-          partialStreamErrorAt: partialStreamErrorAt,
-        ),
+        httpClient: hangClient,
         adapterFactory: LlmAdapterFactory(),
       ),
       experienceRepository: experienceRepo,
@@ -430,7 +526,7 @@ void main() {
           : () async => config ?? const AdvancedConfig(),
       logger: const Logger('test'),
       session: ChatSession(
-        sessionId: 'dir-test-1',
+        sessionId: sessionId,
         title: '测试导演',
         mode: 'advanced',
         createdAt: DateTime.now(),
@@ -444,11 +540,15 @@ void main() {
         toolPermissions: watchMode
             ? ToolPermissions.toJson(ToolPermissions.supervised)
             : null,
+        // 向导「初始化你的角色」产物（草稿带至物化）
+        characterInitPrompt: characterInitPrompt,
+        characterInitCardId: characterInitCardId,
       ),
       factualRepository: factualRepo,
       agentEventLogRepository:
           withEventLog ? AgentEventLogRepository(database: db) : null,
       compactionService: compactionService,
+      resourceApplyService: resourceApplyService,
     );
   }
 
@@ -653,11 +753,13 @@ void main() {
         finish('tool_calls'),
         '[DONE]',
       ]),
-      // 步骤 2：空响应（弃疗）→ runner 注入续跑提示
-      sse([finish('stop'), '[DONE]']),
-      // 步骤 3：仍空响应 → 轮结束（completed 但无正文）
-      sse([finish('stop'), '[DONE]']),
     ];
+    // 步骤 2 起：空响应（弃疗）。批 D 归一后 EMPTY_RESPONSE 会先自动
+    // 重试（P5 默认 5 次）——脚本补足重试消耗的空响应条目，全部空后
+    // 耗尽进 failed（终态语义不变：failed 可重试）
+    for (var i = 0; i < 7; i++) {
+      script.add(sse([finish('stop'), '[DONE]']));
+    }
     final controller = buildController(script);
 
     await controller.sendMessage('推进剧情');
@@ -666,7 +768,9 @@ void main() {
     expect(controller.state.phase, IntermediatePhase.failed);
     expect(controller.state.failureContext?.errorCode, 'EAGENT');
     expect(controller.state.failureContext?.retryable, isTrue);
-    expect(controller.state.failureContext?.errorMessage, contains('没有产出正文'));
+    // 批 D/E：空响应已被 EMPTY_RESPONSE 语义归一——先自动重试 5 次（P5）
+    // 耗尽后进 failed；终态语义不变（failed 可重试），消息含空响应原因
+    expect(controller.state.failureContext?.errorMessage, contains('空响应'));
     // 临时用户消息保留（重试入口的数据基础）
     expect(controller.state.pendingUserMessage, isNotNull);
     // DD2：先失败后弃疗 → 肇事步骤转红（只有中断本轮才用红色；
@@ -739,6 +843,64 @@ void main() {
     expect(ctx.errorCategory, ErrorCategory.config);
     // 报点级建议覆盖指向导演设置具体入口
     expect(ctx.suggestionOverride, t.advanced.failure.gmMissing);
+  });
+
+  test('草稿会话 GM 未配置 → E010 保留输入（气泡可重放，不蒸发）', () async {
+    // 预检发生在落 userInput/pendingUserMessage 之前，而输入框在
+    // onSend 前已被清空——若预检失败不回填 state，新用户首条消息
+    // 直接蒸发（导演默认开启后这是全新用户的第一条路径）。
+    final script = <String>[];
+    final gm = _ToggleGmResolver();
+    final controller = buildController(
+      script,
+      resolver: gm,
+      sessionId: '${AdvancedChatController.draftSessionIdPrefix}new-user',
+    );
+
+    await controller.sendMessage('开启我的故事');
+
+    expect(controller.state.phase, IntermediatePhase.failed);
+    expect(controller.state.failureContext?.errorCode, 'E010');
+    // 输入保留：气泡与失败栏「整轮重试」的数据基础
+    expect(controller.state.userInput, '开启我的故事');
+    expect(controller.state.pendingUserMessage?.content, '开启我的故事');
+
+    // 补齐配置后从失败栏重试：同一份输入可重放（走正常轮链）
+    gm.gmConfigured = true;
+    script.addAll([
+      finishRoundStep('call_d1', '雨夜，城门开了。'),
+      finishRoundExemption('call_d1b', '雨夜，城门开了。'),
+    ]);
+    await controller.retryPendingUserMessage();
+    expect(controller.state.phase, IntermediatePhase.idle);
+    expect(controller.state.pendingUserMessage, isNull);
+  });
+
+  test('草稿物化：初始化角色两列随草稿落库；卡路径物化时应用一次', () async {
+    // 向导「初始化你的角色」产物随草稿带到首条消息物化：
+    // 描述列留档（供第 1 轮尾部一次性注入读取），卡在拿到真实
+    // sessionId 后走资料通道应用。
+    final appliedCards = <String>[];
+    final controller = buildController(
+      [
+        finishRoundStep('call_ci1', '林九推开酒馆的门。'),
+        finishRoundExemption('call_ci1b', '林九推开酒馆的门。'),
+      ],
+      sessionId: '${AdvancedChatController.draftSessionIdPrefix}ci-user',
+      characterInitPrompt: '林九，男，落魄刀客',
+      characterInitCardId: 'card-1',
+      resourceApplyService: _RecordingApplyService(appliedCards),
+    );
+
+    await controller.sendMessage('开始');
+
+    expect(controller.state.phase, IntermediatePhase.idle);
+    expect(appliedCards, ['card-1'], reason: '卡应用恰一次（物化后）');
+    // 两列随草稿快照落库，重读仍在
+    final persisted = await ChatRepositoryImpl(database: db)
+        .getSession(controller.state.session.sessionId);
+    expect(persisted.characterInitPrompt, '林九，男，落魄刀客');
+    expect(persisted.characterInitCardId, 'card-1');
   });
 
   test('mode=advanced：推理烧完输出预算（length 截断空正文）→ failed 带诊断', () async {
@@ -843,10 +1005,11 @@ void main() {
     expect(messages.last.read<String>('content'), contains('夜色沉下来'));
   });
 
-  // 失败重试/续跑也要清理上一尝试的
-  // 同 turn 事件——此前仅重生成清理，失败→continueFromFailed 会在 durable
-  // 日志追加第二组 bootstrap+turn 对（轨迹页步数与 token 双计）。
-  test('mode=advanced：失败续跑清理上一尝试的同 turn 事件（轨迹无双计）', () async {
+  // 失败续跑（真续跑）：上次尝试的事件是唯一真实历史，不再删除重写——
+  // 双计防线=不重发已完成请求 + 不重写 bootstrap + 步号续起（旧「删除
+  // 上一尝试」契约服务于重放式重跑，真续跑不重放，保留才准确）。
+  test('mode=advanced：失败真续跑——不重发已完成请求，事件不双计', () async {
+    final bodies = <String>[];
     final controller = buildController(
       [
         // 首轮步骤 1：检索工具正常执行
@@ -861,27 +1024,211 @@ void main() {
           finish('tool_calls'),
           '[DONE]',
         ]),
-        // 续跑成功步
+        // 续跑成功步（finish_round 首被事件记忆闸门拒 → 豁免重提）
         finishRoundStep('call_f1', '夜色沉下来，苏明远推开荒庙的门。'),
         finishRoundExemption('call_f1b', '夜色沉下来，苏明远推开荒庙的门。'),
       ],
       maxSteps: 1,
       withEventLog: true,
+      bodyLog: bodies,
     );
 
     await controller.sendMessage('苏明远进入荒庙');
     expect(controller.state.phase, IntermediatePhase.failed);
 
+    // 步数预算含前序尝试（种子 2 步已烧）：调大上限后续跑
+    await controller.updateSession(
+      controller.state.session.copyWith(maxSteps: 8),
+    );
     await controller.continueFromFailed();
     expect(controller.state.phase, IntermediatePhase.idle);
 
-    // 同 turn 仅保留最新一组：turn/begin 恰一次
+    // 不重发证明：全程恰 4 次 LLM 请求（上次 2 + 续跑 2），已完成的
+    // 检索步不重烧；续跑首请求体含上次尝试的 search_story 调用
+    // （surface 投影回放，非重新装配）
+    expect(hangClient.callCount, 4);
+    expect(bodies, hasLength(4));
+    expect(bodies[2], contains('search_story'));
+    expect(bodies[2], contains('古碑'));
+
     final events = await AgentEventLogRepository(
       database: db,
     ).readEvents('dir-test-1');
+
+    // 事件不双计：两段各一次 turn/begin（续跑段带 resumed 标记）
     final turnBegins =
         events.where((e) => e.type == AgentEventTypes.turnBegin).toList();
-    expect(turnBegins, hasLength(1), reason: '续跑前清理了上一尝试的 turn 对');
+    expect(turnBegins, hasLength(2));
+    expect(turnBegins.last.data['resumed'], isTrue);
+    // bootstrap 单份：真实用户消息只落一次（续跑不重写补账）
+    final userMessages = events.where(
+      (e) =>
+          e.type == AgentEventTypes.userMessage && e.data['source'] == 'user',
+    );
+    expect(userMessages, hasLength(1));
+    // 步号跨尝试连续无重叠：1,2（上次）→ 3,4（续跑；stepEnd 为后置
+    // 递增的 1 基序号，续跑种子 2 使其从 3 续起）
+    final stepEnds = events
+        .where((e) => e.type == AgentEventTypes.stepEnd)
+        .map((e) => e.data['stepIndex'])
+        .toList();
+    expect(stepEnds, [1, 2, 3, 4]);
+    // 聚合口径：统计=两段真实消耗之和（4 步），无重复计数
+    final stats = agentSessionStatsFrom(events);
+    expect(stats.stepsByTurn[1], 4);
+  });
+
+  test('mode=advanced：E104 临时降级 → 真续跑不重烧已完成的检索步', () async {
+    final bodies = <String>[];
+    final controller = buildController(
+      [
+        sse([
+          toolCallStart(0, 'call_s1', 'search_story', '{"query":"古碑"}'),
+          finish('tool_calls'),
+          '[DONE]',
+        ]),
+        finishRoundStep('call_f1', '夜色沉下来，苏明远推开荒庙的门。'),
+        finishRoundExemption('call_f1b', '夜色沉下来，苏明远推开荒庙的门。'),
+      ],
+      resolver: _EmbeddingFailResolver(),
+      withEventLog: true,
+      bodyLog: bodies,
+    );
+
+    await controller.sendMessage('推进剧情');
+    expect(controller.state.phase, IntermediatePhase.failed);
+    expect(controller.state.failureContext?.errorCode, 'E104');
+    final callsAtFailure = hangClient.callCount;
+
+    await controller.continueWithFts5Only();
+    expect(controller.state.phase, IntermediatePhase.idle);
+
+    // 真续跑：续跑段只发 2 个请求（finish_round + 豁免重提），上次已完成的
+    // 检索步不重烧；致命步骤由占位结果配对后模型直接执笔
+    expect(callsAtFailure, 1);
+    expect(hangClient.callCount, callsAtFailure + 2);
+    expect(bodies.last, contains('search_story'), reason: '续跑请求体复用上次已完成的检索步骤');
+    final events = await AgentEventLogRepository(
+      database: db,
+    ).readEvents('dir-test-1');
+    expect(
+      events
+          .where((e) => e.type == AgentEventTypes.turnBegin)
+          .last
+          .data['resumed'],
+      isTrue,
+    );
+  });
+
+  test('mode=advanced：user_stopped 半截正文 → 续跑合成进 surface 可见断句', () async {
+    final bodies = <String>[];
+    final controller = buildController(
+      [
+        finishRoundStep('call_f1', '夜色沉下来，苏明远推开荒庙的门。雾里有人影。'),
+        finishRoundExemption('call_f1b', '夜色沉下来，苏明远推开荒庙的门。雾里有人影。'),
+      ],
+      hangAt: 0,
+      withEventLog: true,
+      bodyLog: bodies,
+    );
+
+    unawaited(controller.sendMessage('苏明远进入荒庙'));
+    await hangClient.hangFired.future.timeout(const Duration(seconds: 20));
+    expect(
+      await until(
+        () => controller.state.liveBlocks.any(
+          (b) => b.kind == AgentLiveBlockKind.text && !b.isEmpty,
+        ),
+      ),
+      isTrue,
+    );
+    await controller.cancel();
+    expect(
+      await until(
+        () =>
+            controller.state.phase == IntermediatePhase.failed &&
+            !controller.state.isStopping,
+      ),
+      isTrue,
+    );
+    expect(controller.state.failureContext?.errorCode, 'user_stopped');
+
+    // 等上一尝试的取消 unwind 完全落库（turn/end{cancelled} 与半截分片
+    // 冲刷入账）再续跑——与真机时序等价（unwind 毫秒级完成，用户点击
+    // 在秒级之后；不等会让续跑读到处置中的事件流）
+    final unwindRepo = AgentEventLogRepository(database: db);
+    var unwound = false;
+    for (var i = 0; i < 500 && !unwound; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 4));
+      final evs = await unwindRepo.readEvents('dir-test-1');
+      unwound = evs.any(
+        (e) => e.type == AgentEventTypes.turnEnd && e.data['turn'] == 1,
+      );
+    }
+    expect(unwound, isTrue, reason: '等待取消轮完全退场（turn/end 落账）');
+    // 取消终态稳定：user_stopped failed 不被防御性 idle 覆写
+    expect(controller.state.phase, IntermediatePhase.failed);
+
+    await controller.continueFromFailed();
+    expect(controller.state.phase, IntermediatePhase.idle);
+
+    // 半截正文合成 assistant/message（interrupted 标记）落日志
+    final events = await unwindRepo.readEvents('dir-test-1');
+    final synthesized = events.where(
+      (e) =>
+          e.type == AgentEventTypes.assistantMessage &&
+          e.data['interrupted'] == true,
+    );
+    expect(synthesized, hasLength(1));
+    // 续跑请求体含半截正文（模型从自己写过的断句处继续）
+    expect(bodies.last, contains('夜色沉下来'));
+    // 轮成功收口：消息对落库
+    final messages = await db.customSelect(
+      'SELECT role, content FROM chat_messages WHERE session_id = ? '
+      'ORDER BY created_at ASC',
+      variables: [Variable.withString('dir-test-1')],
+    ).get();
+    expect(messages, hasLength(2));
+    expect(messages.last.read<String>('content'), contains('雾里有人影'));
+  });
+
+  test('mode=advanced：无事件日志仓库 → 续跑回退整轮重跑（现状行为等价）', () async {
+    // withEventLog=false：无仓库可投影，回退旧路径（清理无门、重新装配、
+    // 整轮重进 agent loop）——回退面保证与既有行为等价
+    final bodies = <String>[];
+    final controller = buildController(
+      [
+        sse([
+          toolCallStart(0, 'call_x1', 'search_story', '{"query":"古碑"}'),
+          finish('tool_calls'),
+          '[DONE]',
+        ]),
+        sse([
+          toolCallStart(0, 'call_x2', 'search_story', '{"query":"月光"}'),
+          finish('tool_calls'),
+          '[DONE]',
+        ]),
+        finishRoundStep('call_f1', '夜色沉下来，苏明远推开荒庙的门。'),
+        finishRoundExemption('call_f1b', '夜色沉下来，苏明远推开荒庙的门。'),
+      ],
+      maxSteps: 1,
+      bodyLog: bodies,
+    );
+
+    await controller.sendMessage('苏明远进入荒庙');
+    expect(controller.state.phase, IntermediatePhase.failed);
+
+    await controller.updateSession(
+      controller.state.session.copyWith(maxSteps: 8),
+    );
+    await controller.continueFromFailed();
+    expect(controller.state.phase, IntermediatePhase.idle);
+
+    // 回退=重新装配整轮重跑：续跑首请求不含上次尝试的检索调用
+    // （fresh surface 只含 bootstrap 面与历史；「古碑」只存在于上次
+    // 尝试的 assistant 工具调用参数里，tool 定义里没有）
+    expect(bodies, hasLength(4));
+    expect(bodies[2], isNot(contains('古碑')));
   });
 
   test('step 请求中断重试：半截直播块清空，不与重试全文拼接（契约 §7.1）', () async {
@@ -1704,4 +2051,121 @@ void main() {
     ).getSingle();
     expect(rows.read<int>('c'), 1, reason: '重生成覆盖同 turnNumber，不留旧行');
   });
+
+  // ── 停止保留半截正文 + failed 态直发 ─────────────────────────────
+
+  test('mode=advanced：直播正文流出后手动停止 → 保留为未完成稿件（不再蒸发）', () async {
+    final controller = buildController(
+      const [],
+      hangAt: 0,
+    );
+
+    unawaited(controller.sendMessage('苏明远进入荒庙'));
+    await hangClient.hangFired.future.timeout(const Duration(seconds: 20));
+    // HTTP 层吐帧 ≠ 模型层建块：等 liveBlocks 出现非空文本块再停止
+    // （太早停止会走「无稿清场」分支）。
+    expect(
+      await until(
+        () => controller.state.liveBlocks.any(
+          (b) => b.kind == AgentLiveBlockKind.text && !b.isEmpty,
+        ),
+      ),
+      isTrue,
+      reason: '等待直播正文块到达',
+    );
+
+    await controller.cancel();
+    expect(
+      await until(
+        () =>
+            controller.state.phase == IntermediatePhase.failed &&
+            !controller.state.isStopping,
+      ),
+      isTrue,
+      reason: '等待停止落定',
+    );
+
+    // 停止≠丢弃：进「已停止」failed 态，直播块与 pending 气泡保留
+    expect(controller.state.failureContext?.errorCode, 'user_stopped');
+    expect(
+      controller.state.failureContext?.failedPhase,
+      IntermediatePhase.generating,
+    );
+    expect(
+      controller.state.liveBlocks.any(
+        (b) => b.kind == AgentLiveBlockKind.text && !b.isEmpty,
+      ),
+      isTrue,
+      reason: '半截直播正文保留为未完成稿件',
+    );
+    expect(controller.state.pendingUserMessage, isNotNull);
+  });
+
+  test('mode=advanced：停止后的 failed 态直发新消息 → 事务性清残留无幽灵轮', () async {
+    final controller = buildController(
+      [
+        finishRoundStep('call_f1', '完整的第二轮正文。'),
+        finishRoundExemption('call_f1b', '完整的第二轮正文。'),
+      ],
+      hangAt: 0,
+    );
+
+    unawaited(controller.sendMessage('第一条'));
+    await hangClient.hangFired.future.timeout(const Duration(seconds: 20));
+    expect(
+      await until(
+        () => controller.state.liveBlocks.any(
+          (b) => b.kind == AgentLiveBlockKind.text && !b.isEmpty,
+        ),
+      ),
+      isTrue,
+    );
+    await controller.cancel();
+    expect(
+      await until(
+        () =>
+            controller.state.phase == IntermediatePhase.failed &&
+            !controller.state.isStopping,
+      ),
+      isTrue,
+    );
+
+    // failed 态直发：不再要求先清空本轮
+    await controller.sendMessage('第二条');
+
+    expect(controller.state.phase, IntermediatePhase.idle);
+    expect(controller.state.failureContext, isNull);
+    expect(controller.state.liveBlocks, isEmpty, reason: '旧直播块随新轮清理，不残留');
+    // 幽灵轮检查：第一轮从未持久化，库里只有第二轮一对消息
+    final messages = await db.customSelect(
+      'SELECT role, content FROM chat_messages WHERE session_id = ? '
+      'ORDER BY created_at ASC',
+      variables: [Variable.withString('dir-test-1')],
+    ).get();
+    expect(messages, hasLength(2));
+    expect(messages.last.read<String>('content'), contains('完整的第二轮正文'));
+  });
+}
+
+/// 只记录 applyCharacterCard 调用（其余接口 noSuchMethod 兜底）。
+class _RecordingApplyService implements ResourceApplyService {
+  _RecordingApplyService(this.calls);
+
+  final List<String> calls;
+
+  @override
+  Future<int> applyCharacterCard({
+    required String sessionId,
+    required String cardId,
+    required String defaultCharacterName,
+    required String duplicateErrorMessage,
+    String? defaultSettingName,
+  }) async {
+    calls.add(cardId);
+    return 3;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
 }

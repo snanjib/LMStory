@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +10,7 @@ import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/storage/preferences.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/appearance_controller.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/theme_controller.dart';
 import 'package:lmstory/core/utils/file_log_sink.dart';
 import 'package:lmstory/core/utils/logger.dart';
@@ -17,6 +18,7 @@ import 'package:lmstory/features/advanced/presentation/advanced_mode_flag.dart';
 import 'package:lmstory/features/chat/presentation/pages/main_layout.dart';
 import 'package:lmstory/features/diagnostics/presentation/controllers/diagnostics_controller.dart';
 import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
+import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/i18n/i18n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:path_provider/path_provider.dart';
@@ -46,7 +48,7 @@ void main() async {
       };
 
       final prefs = Preferences();
-      final savedLocaleTag = await prefs.getString('app_locale');
+      final savedLocaleTag = await prefs.getString(localePrefKey);
       await initI18n(savedLocaleTag: savedLocaleTag);
 
       // 主题/导演开关/故事开关/配置显示模式启动预读（对齐 locale 预读范式）
@@ -136,19 +138,17 @@ void main() async {
 /// **Web 平台跳过文件日志**：浏览器无文件系统访问权限，仅保留控制台输出。
 /// 日志级别仍从 Preferences 加载（Preferences 在 web 上使用 localStorage）。
 Future<void> _initFileLogging(Preferences prefs) async {
-  // release 默认级别收敛到 info（安全评测）：debug 级为开发日志，
-  // release 持续落盘只增隐私面与磁盘占用；诊断五开关的详细日志均为
-  // info 级，不受影响。debug 构建保持 debug 不减损开发体验。
-  const defaultLevel = kReleaseMode ? LogLevel.info : LogLevel.debug;
-  Logger.globalMinLevel = defaultLevel;
+  // 缺省级别单源 kDefaultLogLevel（release 收敛 info——安全评测），
+  // 与诊断页显示共用，防止两端缺省漂移
+  Logger.globalMinLevel = kDefaultLogLevel;
 
-  // 加载保存的日志级别（诊断页  可调）—— 所有平台共用；用户显式
+  // 加载保存的日志级别（诊断页可调）——所有平台共用；用户显式
   // 设置过则尊重用户值（含无效值回退，回退也按模式取默认）
   final savedLevel = await prefs.getString('log_level');
   if (savedLevel != null) {
     Logger.globalMinLevel = LogLevel.values.firstWhere(
       (l) => l.name == savedLevel,
-      orElse: () => defaultLevel,
+      orElse: () => kDefaultLogLevel,
     );
   }
 
@@ -182,6 +182,9 @@ class MyApp extends ConsumerWidget {
     final locale = ref.watch(flutterLocaleProvider);
     final themeMode = ref.watch(themeModeProvider);
     final themes = ref.watch(appearanceThemesProvider);
+    final contentWidthMode = ref.watch(
+      settingsNotifierProvider.select((s) => s.contentWidthMode),
+    );
 
     return TranslationProvider(
       child: MaterialApp(
@@ -193,7 +196,12 @@ class MyApp extends ConsumerWidget {
         // 全局场地：琉璃结构下所有路由共享的根渐变幕布——经根导航推入的
         // 页面（设置树/供应商页等）scaffoldBgOf 取透明底，无此地时透出
         // 黑底（日间尤其不可读）。首页/壳层的内层 venue 与此同色叠加无观感差。
-        builder: (context, child) => _GlassVenueShell(child: child),
+        // 内容宽度模式经作用域下发全树（版心消费面 context 读取，
+        // 切换即时生效）
+        builder: (context, child) => LmContentWidthScope(
+          mode: contentWidthMode,
+          child: _GlassVenueShell(child: child),
+        ),
         supportedLocales: AppLocale.values.map((e) => e.flutterLocale),
         localizationsDelegates: const [
           GlobalMaterialLocalizations.delegate,

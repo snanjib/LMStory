@@ -148,7 +148,8 @@ void main() {
       expect(find.textContaining('上下文压缩阈值'), findsOneWidget);
       // 缓存命中率：标签左、数值右的键值行
       expect(find.text('最近一轮'), findsOneWidget);
-      expect(find.text('86.8%'), findsOneWidget);
+      // 口径统一：最近一轮与平均同为 C/(C+P)（132k/(132k+152k)≈46.5%）
+      expect(find.text('46.5%'), findsOneWidget);
       expect(find.text('会话平均'), findsOneWidget);
       expect(find.text('91.2%'), findsOneWidget);
       // 最近一轮请求：三个键值行
@@ -255,6 +256,75 @@ void main() {
       expect(compacted, isTrue);
     });
 
+    testWidgets('估算兜底：hero/输入/输出行加「≈」，缓存行仍 —，脚注说明口径', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 600,
+            child: SingleChildScrollView(
+              child: ContextUsageDetailSheet(
+                contextWindowTokens: 96000,
+                compactionTriggerTokens: 48000,
+                lastPromptTokens: 40000,
+                lastCompletionTokens: 800,
+                // 缓存分项本地不可估算：恒为端点数据或 null
+                lastCacheReadTokens: null,
+                averageCacheHit: null,
+                sessionRounds: 5,
+                isManualCompacting: false,
+                manualCompactionDelta: '',
+                manualCompactionError: null,
+                isRoundActive: false,
+                onManualCompact: () {},
+                isEstimated: true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // hero 分数与占比都带「≈」前缀
+      expect(find.text('≈ 40k / 96k tokens'), findsOneWidget);
+      expect(find.text('≈41.7%'), findsOneWidget);
+      // 输入/输出行带「≈」，缓存读取行保持「—」
+      expect(find.text('≈ 40k tokens'), findsOneWidget);
+      expect(find.text('≈ 800 tokens'), findsOneWidget);
+      // 三个「—」：缓存读取行 + 命中率最近一轮 + 会话平均
+      expect(find.text('—'), findsNWidgets(3));
+      // 口径脚注：消除「面板坏了/模型不支持」的误读
+      expect(find.textContaining('「≈」为本地估算值'), findsOneWidget);
+    });
+
+    testWidgets('端点真实数据齐全：不显示口径脚注', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 600,
+            child: SingleChildScrollView(
+              child: ContextUsageDetailSheet(
+                contextWindowTokens: 1000000,
+                compactionTriggerTokens: 500000,
+                lastPromptTokens: 152000,
+                lastCompletionTokens: 1800,
+                lastCacheReadTokens: 132000,
+                averageCacheHit: 0.912,
+                sessionRounds: 130,
+                isManualCompacting: false,
+                manualCompactionDelta: '',
+                manualCompactionError: null,
+                isRoundActive: false,
+                onManualCompact: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.textContaining('「≈」为本地估算值'), findsNothing);
+    });
+
     testWidgets('压缩中：按钮置灰，流式文本带「正在生成前情摘要」标注', (tester) async {
       await tester.pumpWidget(
         wrap(
@@ -348,6 +418,10 @@ void main() {
         ),
       );
 
+      // 口径脚注占据额外高度，按钮可能被推出 600px 视口（tap 出视口
+      // 静默落空）——先滚动到可见再点
+      await tester.ensureVisible(find.text('重试'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('重试'));
       expect(retried, isTrue);
     });

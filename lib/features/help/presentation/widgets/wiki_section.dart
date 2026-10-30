@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/theme/shared/components/section_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -9,7 +10,7 @@ import 'package:lmstory/core/theme/system/lm_tokens.dart';
 /// 设计原则：
 /// - 不用嵌套卡片（避免「卡片里套卡片」的 AI slop）
 /// - 章节之间靠 spacing 节奏区分，不靠 border 或 background
-/// - 标题用 title2（18px），正文用 body（15px / 行高 1.7 提升可读性）
+/// - 使用公共章节标题，正文用 body（15px / 行高 1.7 提升可读性）
 class WikiSection extends StatelessWidget {
   const WikiSection({
     required this.title,
@@ -27,15 +28,7 @@ class WikiSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: SimpleTextStyles.title2.copyWith(
-            color: colors.ink,
-            fontWeight: FontWeight.w600,
-          ),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
+        SectionHeading(title: title),
         const SizedBox(height: SimpleSpacing.sSm),
         Text(
           body,

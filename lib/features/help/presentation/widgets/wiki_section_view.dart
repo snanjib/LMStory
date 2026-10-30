@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/theme/shared/components/section_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
-import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
-import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_data.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_entry_view.dart';
 
 /// Wiki 章节视图：章节标题 + 副标题 + 条目列表。
 ///
-/// 设计：拒绝嵌套卡片，章节标题用 title1 + caption 的层级组合，
+/// 设计：拒绝嵌套卡片，章节标题与副标题使用公共层级，
 /// 条目之间用 sSm 间距呼吸；章节间用 sLg 间距区分。
 class WikiSectionView extends StatelessWidget {
   const WikiSectionView({
@@ -21,8 +20,6 @@ class WikiSectionView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.lm.palette;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -32,22 +29,10 @@ class WikiSectionView extends StatelessWidget {
             top: SimpleSpacing.sMd,
             bottom: SimpleSpacing.s2xs,
           ),
-          child: Text(
-            section.title,
-            style: SimpleTextStyles.title1.copyWith(
-              color: colors.ink,
-              fontWeight: FontWeight.w700,
-            ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+          child: SectionHeading(
+            title: section.title,
+            subtitle: section.subtitle,
           ),
-        ),
-        // 章节副标题
-        Text(
-          section.subtitle,
-          style: SimpleTextStyles.caption.copyWith(color: colors.muted),
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: SimpleSpacing.sMd),
         // 条目列表

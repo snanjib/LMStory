@@ -171,14 +171,14 @@ class AdvancedBudgetConfig {
   const AdvancedBudgetConfig({
     this.maxDurationMinutes = 5,
     this.tokenBudgetRatio = 0.6,
-    this.maxRequestRetries = 1,
+    this.maxRequestRetries = 5,
   });
   factory AdvancedBudgetConfig.fromJson(Map<String, dynamic> json) =>
       AdvancedBudgetConfig(
         maxDurationMinutes: json['max_duration_minutes'] as int? ?? 5,
         tokenBudgetRatio:
             (json['token_budget_ratio'] as num?)?.toDouble() ?? 0.6,
-        maxRequestRetries: json['max_request_retries'] as int? ?? 1,
+        maxRequestRetries: json['max_request_retries'] as int? ?? 5,
       );
   final int maxDurationMinutes;
   final double tokenBudgetRatio;
@@ -200,14 +200,42 @@ class AdvancedHitlConfig {
   const AdvancedHitlConfig({
     this.askUserTimeoutMinutes = 3,
     this.approvalTimeoutMinutes = 5,
+    this.approvalTimeoutEnabled = true,
   });
   factory AdvancedHitlConfig.fromJson(Map<String, dynamic> json) =>
       AdvancedHitlConfig(
         askUserTimeoutMinutes: json['ask_user_timeout_minutes'] as int? ?? 3,
         approvalTimeoutMinutes: json['approval_timeout_minutes'] as int? ?? 5,
+        approvalTimeoutEnabled:
+            json['approval_timeout_enabled'] as bool? ?? true,
       );
   final int askUserTimeoutMinutes;
   final int approvalTimeoutMinutes;
+
+  /// 确认超时自动拒绝开关（2026-10-15 P2 ，默认 true=现状 fail-closed；
+  /// 关闭 = 审批横幅与 ask_user 提问横幅永不超时一直等待——推翻 2026-08
+  /// 「审批不开放永等档」旧安全语义；停止按钮/重启中断/无人值守三道
+  /// 兜底不变）。**同盖两类 HITL 横幅**（§5-1 默认同盖）。
+  final bool approvalTimeoutEnabled;
+
+  /// 审批超时（页面倒计时与 runner completer.timeout 共用真源，修 ：
+  /// 此前页面直用原始配置值、runner 侧 0→5 钳制，两侧口径漂移）。
+  ///
+  /// - 开关关 → null（永不超时）
+  /// - minutes <= 0 → 钳回默认 5（Duration.zero 会让 completer 立即秒拒）
+  Duration? get effectiveApprovalTimeout => !approvalTimeoutEnabled
+      ? null
+      : Duration(
+          minutes: approvalTimeoutMinutes <= 0 ? 5 : approvalTimeoutMinutes,
+        );
+
+  /// ask_user 提问超时（0=一直等待为既有语义；P2 开关同盖：关闭时同样
+  /// 永不超时）
+  Duration? get effectiveAskUserTimeout => !approvalTimeoutEnabled
+      ? null
+      : (askUserTimeoutMinutes <= 0
+          ? null
+          : Duration(minutes: askUserTimeoutMinutes));
 }
 
 /// 子代理预算（原 agent_subagent.dart 硬编码 6 步 / 2 分钟）

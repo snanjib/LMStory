@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -26,14 +27,16 @@ class ChatRoundDoneHint extends StatelessWidget {
           padding: const EdgeInsets.symmetric(
             horizontal: SimpleSpacing.sLg,
           ),
-          child: ActionChip(
-            avatar: Icon(
-              Icons.check_circle_outline,
-              size: 16,
-              color: colors.primary,
+          child: LmArrival(
+            child: ActionChip(
+              avatar: Icon(
+                Icons.check_circle_outline,
+                size: 16,
+                color: colors.primary,
+              ),
+              label: Text(t.chat.roundDoneHint),
+              onPressed: onTap,
             ),
-            label: Text(t.chat.roundDoneHint),
-            onPressed: onTap,
           ),
         ),
       ),

@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
+import 'package:lmstory/core/theme/shared/components/labeled_value.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/agent_round_trace_controller.dart';
+import 'package:lmstory/features/advanced/presentation/widgets/director_tool_card.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 导演轮轨迹页
@@ -39,45 +43,50 @@ class AgentRoundTracePage extends ConsumerWidget {
 
     return Scaffold(
       backgroundColor: context.scaffoldBgOf(context.lm.palette.bg),
-      appBar: SimpleAppBar(
+      appBar: context.lmUi.appBar(
+        context,
         title: t.settings.diagnostics.roundTrace.title(turnNumber: turnNumber),
       ),
-      body: state.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : state.error != null
-              ? _ErrorView(error: state.error!)
-              : ListView(
-                  padding: const EdgeInsets.all(SimpleSpacing.sLg),
-                  children: [
-                    // 日志起点晚于轮 1 = 早期轮已被保留策略裁掉，
-                    // 重建请求序列对早期 kept 轮会短于真实请求，必须明示
-                    if ((state.firstAvailableTurn ?? 1) > 1)
-                      Padding(
-                        padding:
-                            const EdgeInsets.only(bottom: SimpleSpacing.sMd),
-                        child: _TrimNotice(
-                          firstTurn: state.firstAvailableTurn!,
+      body: LmMeasure(
+        child: state.isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : state.error != null
+                ? _ErrorView(error: state.error!)
+                : ListView(
+                    padding: const EdgeInsets.all(SimpleSpacing.sLg),
+                    children: [
+                      // 日志起点晚于轮 1 = 早期轮已被保留策略裁掉，
+                      // 重建请求序列对早期 kept 轮会短于真实请求，必须明示
+                      if ((state.firstAvailableTurn ?? 1) > 1)
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            bottom: SimpleSpacing.sMd,
+                          ),
+                          child: _TrimNotice(
+                            firstTurn: state.firstAvailableTurn!,
+                          ),
                         ),
-                      ),
-                    if (state.summary != null)
-                      _SummaryCard(summary: state.summary!)
-                    else
-                      const _EmptyView(),
-                    const SizedBox(height: SimpleSpacing.sMd),
-                    for (final step in state.steps)
-                      Padding(
-                        padding:
-                            const EdgeInsets.only(bottom: SimpleSpacing.sSm),
-                        child: _StepCard(
-                          step: step,
-                          state: state,
-                          sessionId: sessionId,
-                          turnNumber: turnNumber,
+                      if (state.summary != null)
+                        _SummaryCard(summary: state.summary!)
+                      else
+                        const _EmptyView(),
+                      const SizedBox(height: SimpleSpacing.sMd),
+                      for (final step in state.steps)
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            bottom: SimpleSpacing.sSm,
+                          ),
+                          child: _StepCard(
+                            step: step,
+                            state: state,
+                            sessionId: sessionId,
+                            turnNumber: turnNumber,
+                          ),
                         ),
-                      ),
-                    const SizedBox(height: SimpleSpacing.sXl),
-                  ],
-                ),
+                      const SizedBox(height: SimpleSpacing.sXl),
+                    ],
+                  ),
+      ),
     );
   }
 }
@@ -91,7 +100,9 @@ class _TrimNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
-    return Card(
+    return context.lmUi.card(
+      context,
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(SimpleSpacing.sMd),
         child: Row(
@@ -105,7 +116,7 @@ class _TrimNotice extends StatelessWidget {
                     .advanced
                     .roundTrace
                     .trimmedNotice(count: firstTurn),
-                style: TextStyle(fontSize: 12, color: colors.muted),
+                style: TextStyle(fontSize: 14, color: colors.muted),
               ),
             ),
           ],
@@ -120,7 +131,9 @@ class _EmptyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    return context.lmUi.card(
+      context,
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(SimpleSpacing.sLg),
         child: Text(
@@ -138,7 +151,9 @@ class _ErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    return context.lmUi.card(
+      context,
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(SimpleSpacing.sLg),
         child: Text(
@@ -162,22 +177,15 @@ class _SummaryCard extends StatelessWidget {
     final t = Translations.of(context);
     final colors = context.lm.palette;
     final duration = summary.durationMs;
-    return Card(
+    return context.lmUi.card(
+      context,
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(SimpleSpacing.sLg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.insights_outlined, size: 18, color: colors.muted),
-                const SizedBox(width: SimpleSpacing.sSm),
-                Text(
-                  t.settings.diagnostics.roundTrace.turnSummary,
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-              ],
-            ),
+            PanelHeading(title: t.settings.diagnostics.roundTrace.turnSummary),
             const SizedBox(height: SimpleSpacing.sSm),
             _kv('reason', summary.reason ?? 'unknown'),
             _kv('steps', '${summary.steps}'),
@@ -194,7 +202,7 @@ class _SummaryCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: SimpleSpacing.sSm),
                 child: Text(
                   summary.errorMessage!,
-                  style: TextStyle(color: colors.error, fontSize: 12),
+                  style: TextStyle(color: colors.error, fontSize: 14),
                 ),
               ),
           ],
@@ -204,31 +212,9 @@ class _SummaryCard extends StatelessWidget {
   }
 
   Widget _kv(String key, String value) {
-    return Builder(
-      builder: (context) {
-        final colors = context.lm.palette;
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text: '$key: ',
-                  style: TextStyle(
-                    color: colors.muted,
-                    fontSize: 12,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-                TextSpan(
-                  text: value,
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: SimpleSpacing.sXs),
+      child: LabeledValue(label: key, value: value),
     );
   }
 }
@@ -249,12 +235,14 @@ class _StepCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = Translations.of(context);
     final colors = context.lm.palette;
     final detail = state.stepDetails[step.stepIndex];
     final elapsed = step.endMs != null ? step.endMs! - step.beginMs : null;
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
+    return context.lmUi.card(
+      context,
+      padding: EdgeInsets.zero,
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
@@ -271,7 +259,7 @@ class _StepCard extends ConsumerWidget {
                 'Step ${step.stepIndex + 1}'
                     '${step.stopKind != null ? ' · ${step.stopKind}' : ''}'
                     '${elapsed != null ? ' · ${elapsed}ms' : ''}',
-            style: const TextStyle(fontSize: 13),
+            style: LmNarrativeTextStyles.bodyUi,
           ),
           subtitle: (step.tools.isEmpty && step.toolCalls.isEmpty)
               ? null
@@ -282,7 +270,7 @@ class _StepCard extends ConsumerWidget {
                       '${tool.isError ? 'x' : 'ok'} ${tool.toolName}'
                           '${tool.durationMs != null ? ' ${tool.durationMs}ms' : ''}',
                   ].join('  '),
-                  style: TextStyle(fontSize: 11, color: colors.muted),
+                  style: TextStyle(fontSize: 13, color: colors.muted),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -325,7 +313,7 @@ class _StepCard extends ConsumerWidget {
                   detail.responseText.trim().isEmpty
                       ? '(empty)'
                       : detail.responseText.trim(),
-                  style: const TextStyle(fontSize: 11),
+                  style: LmNarrativeTextStyles.bodyUi,
                 ),
               ),
               for (final tool in detail.toolResults) ...[
@@ -334,9 +322,11 @@ class _StepCard extends ConsumerWidget {
                   title:
                       'Tool result · ${tool.toolName}${tool.isError ? ' (error)' : ''}',
                   child: SelectableText(
-                    tool.output.isEmpty ? '(empty)' : tool.output,
+                    tool.output.isEmpty
+                        ? '(empty)'
+                        : DirectorToolCard.localizedOutput(tool.output, t),
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 13,
                       color: tool.isError ? colors.error : null,
                     ),
                   ),
@@ -357,15 +347,17 @@ class _MessageLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = Translations.of(context);
     final colors = context.lm.palette;
-    final preview = (message.content ?? '').replaceAll('\n', ' ').trim();
-    final shown = preview.length > 120
-        ? '${preview.substring(0, 120)}…'
-        : (preview.isEmpty
+    final raw = (message.content ?? '').replaceAll('\n', ' ').trim();
+    final localized = DirectorToolCard.localizedOutput(raw, t);
+    final shown = localized.length > 120
+        ? '${localized.substring(0, 120)}…'
+        : (localized.isEmpty
             ? message.hasToolCalls
                 ? '[${message.toolCalls!.length} tool calls]'
                 : '(no text)'
-            : preview);
+            : localized);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Text.rich(
@@ -375,13 +367,13 @@ class _MessageLine extends StatelessWidget {
               text: '[${message.role}] ',
               style: TextStyle(
                 color: colors.muted,
-                fontSize: 10,
+                fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),
             ),
             TextSpan(
               text: shown,
-              style: const TextStyle(fontSize: 10),
+              style: LmNarrativeTextStyles.bodyUi,
             ),
           ],
         ),
@@ -403,10 +395,8 @@ class _DetailSection extends StatelessWidget {
       children: [
         Text(
           title,
-          style: Theme.of(context)
-              .textTheme
-              .labelSmall
-              ?.copyWith(fontWeight: FontWeight.w600),
+          style: LmNarrativeTextStyles.label
+              .copyWith(color: context.lm.palette.muted),
         ),
         const SizedBox(height: SimpleSpacing.sXs),
         child,

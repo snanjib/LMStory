@@ -483,7 +483,7 @@ class GlassCard extends StatelessWidget {
 // ── 4. readingCard 阅读卡（surface 不透明；零 blur 零 glow）────────
 
 /// 阅读卡：稿件卡/Recap。surface 不透明填充（流式重绘不透底、对比度稳定），
-/// 流式宿主；readingWidth 720 限宽由消费面用 [LmReadingConstraints] 施加。
+/// 流式宿主；readingWidth 限宽由消费面用 [LmReadingConstraints] 施加。
 class GlassReadingCard extends StatelessWidget {
   const GlassReadingCard({
     required this.child,

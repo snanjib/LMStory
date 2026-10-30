@@ -14,10 +14,11 @@ import 'package:lmstory/core/config/config_visibility.dart';
 /// 编号清单即其 §二/§四 快照；改表先改这里，再改载体）。
 void main() {
   // ── 分类表快照（2026-09-20 D-C11/D-C12 补录后终态）──────────────
-  /// 账本全集：C-01..C-122（C-18 经核为组件态默认，已从账本剔除；
-  /// C-121/C-122 为 WS1 外观两键入账，账本 119→121）。
+  /// 账本全集：C-01..C-123（C-18 经核为组件态默认，已从账本剔除；
+  /// C-121/C-122 为 WS1 外观两键入账，账本 119→121；C-123 为内容
+  /// 宽度模式键入账，账本 121→122）。
   final universe = <String>{
-    for (var i = 1; i <= 122; i++)
+    for (var i = 1; i <= 123; i++)
       if (i != 18) 'C-${i.toString().padLeft(2, '0')}',
   };
 
@@ -46,7 +47,7 @@ void main() {
     'C-92', 'C-93', 'C-99',
     'C-100', 'C-101', 'C-108', 'C-109',
     'C-110', 'C-112', 'C-113', 'C-119', 'C-120',
-    'C-121', 'C-122',
+    'C-121', 'C-122', 'C-123',
   };
 
   // ── 15 面声明键集合快照（定稿 §一）────────────────────────────
@@ -58,6 +59,7 @@ void main() {
       ConfigVisibilityKeys.appearanceFontSize,
       ConfigVisibilityKeys.appearanceStructure,
       ConfigVisibilityKeys.appearancePalette,
+      ConfigVisibilityKeys.appearanceContentWidth,
     ],
     'settings.languageInput': [
       ConfigVisibilityKeys.languageUiLanguage,
@@ -66,6 +68,7 @@ void main() {
     'settings.general.advanced': [
       ConfigVisibilityKeys.generalAdvancedReasoningEffort,
       ConfigVisibilityKeys.generalAdvancedTimeout,
+      ConfigVisibilityKeys.generalAdvancedAutoRetry,
       ConfigVisibilityKeys.generalAdvancedTitleModel,
     ],
     'settings.chat': [

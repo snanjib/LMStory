@@ -315,6 +315,9 @@ class _EmbeddingModelTile extends ConsumerWidget {
         title: t.settings.director.memory.embeddingModel,
         modelType: ModelType.embedding,
         clearLabel: t.settings.director.models.clear,
+        // 与故事侧嵌入切换同语义：当前已有完整配置时，切换会让已有
+        // 向量失效——先确认再落库，避免静默失效。
+        onBeforeSelect: (p, m) => _confirmSwitchIfNeeded(context, t),
         onModelSelected: (p, m) async {
           final clear = p == null || m == null;
           await writeDirectorOverride(
@@ -330,5 +333,47 @@ class _EmbeddingModelTile extends ConsumerWidget {
         },
       ),
     );
+  }
+
+  /// 已有完整向量化配置（presetId + modelId 均非空）时弹切换确认。
+  Future<bool> _confirmSwitchIfNeeded(
+    BuildContext context,
+    Translations t,
+  ) async {
+    if (presetId.isEmpty || modelId.isEmpty) return true;
+    final confirmed = await showLmDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          t.settings.director.memory.embeddingSwitchConfirmTitle,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        content: Text(
+          t.settings.director.memory.embeddingSwitchConfirmContent,
+          maxLines: 5,
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              t.common.cancel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              t.settings.director.memory.embeddingSwitchConfirmAction,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
   }
 }

@@ -72,8 +72,7 @@ void main() {
   }
 
   group('IntermediateModelsSettingsPage 配置显示模式过滤', () {
-    testWidgets('1. 简单模式：分步骤模型区+嵌入模型区保留（D-C13），提示卡隐藏',
-        (tester) async {
+    testWidgets('1. 简单模式：分步骤模型区+嵌入模型区保留（D-C13），提示卡隐藏', (tester) async {
       await pumpPage(tester, level: ConfigLevel.simple);
 
       expect(find.text('分步骤模型配置'), findsOneWidget);

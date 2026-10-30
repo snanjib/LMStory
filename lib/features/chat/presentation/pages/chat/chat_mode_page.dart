@@ -6,17 +6,18 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_chat_input.dart';
-import 'package:lmstory/core/theme/simple/components/simple_message_bubble.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
+import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_shortcuts.dart';
 import 'package:lmstory/core/theme/system/lm_structure.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_message_bubble.dart';
 import 'package:lmstory/core/utils/follow_scroll_executor.dart';
 import 'package:lmstory/core/utils/smooth_follow_scroller.dart'
     show streamingFollowCushionPx;
+import 'package:lmstory/core/widgets/model_config_banner.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/fork_anchor.dart';
@@ -31,10 +32,12 @@ import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_messa
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_mode_app_bar.dart';
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_round_done_hint.dart';
 import 'package:lmstory/features/chat/presentation/utils/scroll_position_cache.dart';
+import 'package:lmstory/features/chat/presentation/widgets/chat_mode_input_area.dart';
 import 'package:lmstory/features/chat/presentation/widgets/in_session_search_bar.dart';
 import 'package:lmstory/features/chat/presentation/widgets/message_edit_dialog.dart';
 import 'package:lmstory/features/chat/presentation/widgets/session_settings_sheet.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/pages/provider_list_page.dart';
 import 'package:lmstory/features/settings/presentation/widgets/default_model_picker_sheet.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/font_size_selector_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/session_export_helper.dart';
@@ -65,6 +68,7 @@ class ChatModePage extends ConsumerStatefulWidget {
     this.onHamburgerPressed,
     this.onSessionDeleted,
     this.showHamburgerMenu = false,
+    this.onBackToHome,
     this.scaffoldKey,
     this.drawer,
     this.initialFocusMessageId,
@@ -75,6 +79,7 @@ class ChatModePage extends ConsumerStatefulWidget {
 
   /// Whether to show the hamburger menu button in the AppBar.
   final bool showHamburgerMenu;
+  final VoidCallback? onBackToHome;
 
   /// Callback when the hamburger menu button is pressed.
   final VoidCallback? onHamburgerPressed;
@@ -151,6 +156,41 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
   /// 会残留在 B 会话输入框（串台）。切走暂存、切入恢复。
   final Map<String, String> _inputDrafts = {};
 
+  /// 输入防抖落库计时器（500ms 静默后写窄列；dispose 只取消不写——
+  /// Riverpod 生命周期禁止 dispose 内用 ref）。
+  Timer? _draftDebounce;
+
+  /// 未发送草稿窄列持久化（fire-and-forget；空串=清空，发送后调用）。
+  void _persistDraftColumn(String sessionId, String text) {
+    // 同步+异步双兜底：持久化失败静默降级（草稿非关键路径，不炸页面）
+    unawaited(
+      () async {
+        try {
+          await ref
+              .read<ChatRepository>(chatRepositoryProvider)
+              .setSessionDraft(sessionId, text.isEmpty ? null : text);
+        } catch (_) {}
+      }(),
+    );
+  }
+
+  /// 跨重启恢复：页面级 Map 未命中时读库（输入框仍空才落，不覆盖新输入）。
+  Future<void> _restoreDraftFromDb(String sessionId) async {
+    final String? draft;
+    try {
+      draft = await ref
+          .read<ChatRepository>(chatRepositoryProvider)
+          .getSessionDraft(sessionId);
+    } catch (_) {
+      return; // 读库失败静默降级（不炸页面）
+    }
+    if (!mounted || draft == null || draft.isEmpty) return;
+    if (widget.session.sessionId != sessionId) return;
+    if (_inputController.text.isEmpty) {
+      _inputController.text = draft;
+    }
+  }
+
   // ── 批 K：会话内搜索 ────────────────────────────
   bool _inSessionSearchVisible = false;
   int _searchFocusTick = 0; // 已可见时 Ctrl+F 的重聚焦信号
@@ -191,7 +231,14 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
       } else {
         _inputDrafts.remove(oldWidget.session.sessionId);
       }
-      _inputController.text = _inputDrafts[widget.session.sessionId] ?? '';
+      _draftDebounce?.cancel();
+      _persistDraftColumn(oldWidget.session.sessionId, oldText);
+      final stashed = _inputDrafts[widget.session.sessionId] ?? '';
+      _inputController.text = stashed;
+      // 跨重启恢复：同 State 会话内暂存未命中时读库
+      if (stashed.isEmpty) {
+        unawaited(_restoreDraftFromDb(widget.session.sessionId));
+      }
       // 同型页面原地复用（桌面 replace/同型
       // 连推），State 不随会话重建——搜索态/闪示/焦点哨兵/挂起防抖一并复位。
       _resetSearchState();
@@ -233,6 +280,10 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
       vsync: this,
     );
     _inputController.addListener(_onInputChanged);
+    // 跨重启恢复：首次进入会话读回未发送草稿（Map 冷启动恒空）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_restoreDraftFromDb(widget.session.sessionId));
+    });
     _scrollController.addListener(_onScroll);
     // fresh-mount 半边——HomePage↔ChatModePage 是
     // 不同 runtimeType 的同位替换，State 全新；控制器缓存（非
@@ -261,6 +312,7 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
           );
     }
     _tokenDebounce?.cancel();
+    _draftDebounce?.cancel();
     _scrollIdleTimer?.cancel();
     _flashTimer?.cancel();
     _roundDoneHintTimer?.cancel();
@@ -272,6 +324,23 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
     _inputController.dispose();
     _inputFocusNode.dispose();
     super.dispose();
+  }
+
+  /// 草稿模型未配置横幅「去配置」：直达供应商列表页。
+  ///
+  /// 折返后失效判定 provider 重估——配置完成横幅即消失（与首页
+  /// 黄条折返不消失的修复同构）。
+  Future<void> _goToProviderConfig() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const ProviderListPage()),
+    );
+    if (mounted) {
+      ref.invalidate(
+        chatDraftModelReadyProvider(
+          ref.read(chatModeControllerProvider(widget.session)).session,
+        ),
+      );
+    }
   }
 
   @override
@@ -290,6 +359,15 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
     // 测量输入区域高度，用于 SnackBar 上移避免遮挡输入框
     _scheduleInputAreaMeasure();
 
+    // 草稿会话模型未配置引导（判定链与 precheckDraftSend 同源）。
+    // 解析期间（loading）不显示，避免配置完成折返时闪横幅。
+    final isDraft = ref
+        .read(chatModeControllerProvider(widget.session).notifier)
+        .isDraftSession;
+    final draftModelReady = isDraft
+        ? ref.watch(chatDraftModelReadyProvider(state.session))
+        : const AsyncValue<bool>.data(true);
+
     // Theme override：SnackBar insetPadding 上移至输入框上方，避免遮挡输入框
     final theme = Theme.of(context);
     return Theme(
@@ -306,6 +384,7 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
         appBar: ChatModeAppBar(
           sessionTitle: state.session.title,
           showHamburgerMenu: widget.showHamburgerMenu,
+          onBackToHome: widget.onBackToHome,
           onHamburgerPressed: widget.onHamburgerPressed,
           onMenuPressed: () => _showChatMenu(context),
         ),
@@ -320,6 +399,15 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
           },
           child: Column(
             children: [
+              // 草稿未配置模型：空态顶部引导横幅（配置完成后自动消失）
+              if (isDraft && draftModelReady.value == false)
+                ModelConfigBanner(
+                  title: t.chat.modelConfigBanner.title,
+                  message: t.chat.modelConfigBanner.message,
+                  actionLabel: t.chat.modelConfigBanner.configure,
+                  dismissTooltip: t.chat.modelConfigBanner.dismiss,
+                  onConfigure: _goToProviderConfig,
+                ),
               // 批 K：会话内搜索条（非模态内联，AppBar 之下滑入）
               InSessionSearchBar(
                 visible: _inSessionSearchVisible,
@@ -381,3 +469,17 @@ final chatModeControllerProvider = StateNotifierProvider.family<
     );
   },
 );
+
+/// 草稿会话默认模型可解析性（页首配置引导横幅显隐判定）。
+///
+/// 判定链与 precheckDraftSend 同源：preset/model 均非空且该 preset
+/// 的 API Key 非空。key 为当前会话对象——会话面板改模型后 state.session
+/// 变更即重估。
+final chatDraftModelReadyProvider =
+    FutureProvider.autoDispose.family<bool, ChatSession>((ref, session) async {
+  final resolver = ref.read(configurationResolverProvider);
+  final result = await resolver.resolveSettings(session);
+  return result.settings.presetId.isNotEmpty &&
+      result.settings.modelId.isNotEmpty &&
+      (result.apiKey?.isNotEmpty ?? false);
+});

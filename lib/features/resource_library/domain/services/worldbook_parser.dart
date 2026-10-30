@@ -1,8 +1,8 @@
 import 'dart:convert';
-
 import 'package:lmstory/core/text/injection_guard.dart';
 import 'package:lmstory/features/resource_library/domain/entities/normalized_world_entry.dart';
 import 'package:lmstory/features/resource_library/domain/services/type_coercion.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 
 /// 世界书 JSON 解析器（DOC-15 §5.2）
 ///
@@ -28,10 +28,16 @@ class WorldbookParser {
     try {
       root = jsonDecode(json);
     } on FormatException catch (e) {
-      throw FormatException('世界书 JSON 解析失败：${e.message}');
+      throw FormatException(
+        t.settings.resourceLibrary.importErrors.bookJsonInvalid(
+          detail: e.message,
+        ),
+      );
     }
     if (root is! Map) {
-      throw const FormatException('世界书 JSON 顶层不是对象');
+      throw FormatException(
+        t.settings.resourceLibrary.importErrors.bookNotObject,
+      );
     }
 
     final name = _readBookName(root);

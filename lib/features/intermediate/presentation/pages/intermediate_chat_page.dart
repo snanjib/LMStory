@@ -6,17 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/embedding_missing_banner.dart';
-import 'package:lmstory/core/theme/intermediate/components/entry_transition.dart';
-import 'package:lmstory/core/theme/intermediate/components/input_toolbar.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_confirm_dialog.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_edit_dialog.dart';
-import 'package:lmstory/core/theme/intermediate/components/suggest_reply_overlay.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_shortcuts.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/widgets/model_config_banner.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
@@ -56,6 +51,7 @@ class IntermediateChatPage extends ConsumerStatefulWidget {
     this.scaffoldKey,
     this.drawer,
     this.showHamburgerMenu = false,
+    this.onBackToHome,
     this.onHamburgerPressed,
     this.onSessionDeleted,
     this.initialFocusMessageId,
@@ -66,6 +62,7 @@ class IntermediateChatPage extends ConsumerStatefulWidget {
 
   /// 是否显示汉堡菜单（移动端）
   final bool showHamburgerMenu;
+  final VoidCallback? onBackToHome;
 
   /// 汉堡菜单回调
   final VoidCallback? onHamburgerPressed;
@@ -100,6 +97,52 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
   // 工具栏的"添加引号/括号/推荐回复"通过此 key 在光标位置插入文本。
   /// 按会话隔离的输入草稿（与对话模式 ChatModePage._inputDrafts 同款）
   final Map<String, String> _inputDrafts = {};
+
+  /// 输入防抖落库计时器（500ms 静默后写窄列；dispose 只取消不写）。
+  Timer? _draftDebounce;
+
+  /// 未发送草稿窄列持久化（fire-and-forget；空串=清空，发送后调用）。
+
+  /// 输入文本变化 → 防抖 500ms 落库（退出兜底主力；dispose 只取消）。
+  void _onDraftTextChanged(String text) {
+    _draftDebounce?.cancel();
+    final sessionId = widget.session.sessionId;
+    // lm-motion-exempt: 草稿落库去抖（交互节流，非过渡动效）
+    _draftDebounce = Timer(const Duration(milliseconds: 500), () {
+      _persistDraftColumn(sessionId, text);
+    });
+  }
+
+  void _persistDraftColumn(String sessionId, String text) {
+    // 同步+异步双兜底：持久化失败静默降级（草稿非关键路径，不炸页面）
+    unawaited(
+      () async {
+        try {
+          await ref
+              .read<ChatRepository>(chatRepositoryProvider)
+              .setSessionDraft(sessionId, text.isEmpty ? null : text);
+        } catch (_) {}
+      }(),
+    );
+  }
+
+  /// 跨重启恢复：页面级 Map 未命中时读库（输入框仍空才落，不覆盖新输入）。
+  Future<void> _restoreDraftFromDb(String sessionId) async {
+    final String? draft;
+    try {
+      draft = await ref
+          .read<ChatRepository>(chatRepositoryProvider)
+          .getSessionDraft(sessionId);
+    } catch (_) {
+      return; // 读库失败静默降级（不炸页面）
+    }
+    if (!mounted || draft == null || draft.isEmpty) return;
+    if (widget.session.sessionId != sessionId) return;
+    final current = _inputKey.currentState?.currentText ?? '';
+    if (current.isEmpty) {
+      _inputKey.currentState?.setText(draft);
+    }
+  }
 
   final GlobalKey<IntermediateChatInputState> _inputKey =
       GlobalKey<IntermediateChatInputState>();
@@ -137,6 +180,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
     // 页面首次创建时检查是否需要回写草稿（如异常中断后重新进入）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _tryRestoreDraft();
+      // 跨重启恢复：控制器 userInput 无待恢复时读库（Map 冷启动恒空）
+      if (mounted) unawaited(_restoreDraftFromDb(widget.session.sessionId));
     });
   }
 
@@ -165,6 +210,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
       } else {
         _inputDrafts.remove(oldWidget.session.sessionId);
       }
+      _draftDebounce?.cancel();
+      _persistDraftColumn(oldWidget.session.sessionId, oldText);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final state =
@@ -183,6 +230,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
             _inputKey.currentState?.setText(stashed);
           } else {
             _inputKey.currentState?.setText('');
+            // 跨重启恢复：同 State 会话内暂存未命中时读库
+            unawaited(_restoreDraftFromDb(widget.session.sessionId));
           }
         }
       });
@@ -191,6 +240,7 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
 
   @override
   void dispose() {
+    _draftDebounce?.cancel();
     _searchDebounce?.cancel();
     super.dispose();
   }
@@ -378,7 +428,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                 insetPadding: EdgeInsets.fromLTRB(16, 0, 16, _bottomAreaHeight),
               ),
         ),
-        child: EntryTransition(child: _buildScaffold(context, state)),
+        child: context.lmUi
+            .entryTransition(context, child: _buildScaffold(context, state)),
       ),
     );
   }
@@ -399,6 +450,10 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
       intermediateChatControllerProvider(widget.session).notifier,
     );
     final t = Translations.of(context);
+
+    // 空态模型未配置引导（判定链与 _precheckAndMaterializeDraft 同源：
+    // generating 不可用且 extracting 亦不可用）。解析期间不显示。
+    final modelsReady = ref.watch(storyModelsReadyProvider(state.session));
 
     // 字体大小 → 缩放比例（与 ChatModePage 共享 kFontSizeBaseSize）
     // 故事模式基准字号（助手 16px / 用户 15px）保持不变，fontScale 应用到基准上，
@@ -433,15 +488,22 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
         // 琉璃结构：透明底透出场地渐变；阅读/流式区零 blur（红线）。
         backgroundColor: context.scaffoldBgOf(colors.bg),
         appBar: AppBar(
-          leading: widget.showHamburgerMenu
+          leading: widget.onBackToHome != null
               ? IconButton(
                   //  语义缺口：复用框架本地化文案（不新增 i18n key）。
-                  tooltip:
-                      MaterialLocalizations.of(context).openAppDrawerTooltip,
-                  icon: const Icon(Icons.menu),
-                  onPressed: widget.onHamburgerPressed,
+                  tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: widget.onBackToHome,
                 )
-              : null,
+              : widget.showHamburgerMenu
+                  ? IconButton(
+                      //  语义缺口：复用框架本地化文案（不新增 i18n key）。
+                      tooltip: MaterialLocalizations.of(context)
+                          .openAppDrawerTooltip,
+                      icon: const Icon(Icons.menu),
+                      onPressed: widget.onHamburgerPressed,
+                    )
+                  : null,
           title: Text(
             state.session.title,
             style: IntermediateTextStyles.title.copyWith(color: colors.ink),
@@ -544,12 +606,24 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                 // 折叠可关；会话有叙事时间或已检索事实才显示）
                 if (!_worldBarDismissed && _hasWorldStatus(state))
                   _buildWorldStatusBar(colors, state),
+                // 空态模型未配置引导（更根本的断崖，置于嵌入横幅之上）
+                if (state.messages.isEmpty && modelsReady.value == false)
+                  ModelConfigBanner(
+                    title: t.intermediate.chat.modelConfigBanner.title,
+                    message: t.intermediate.chat.modelConfigBanner.message,
+                    actionLabel:
+                        t.intermediate.chat.modelConfigBanner.configure,
+                    dismissTooltip:
+                        t.intermediate.chat.modelConfigBanner.dismiss,
+                    onConfigure: _goToModelsConfig,
+                  ),
                 // 2026-07-21：未配置 embedding 模型时常驻提示 Banner
                 if (intermediateConfig != null &&
                     !_embeddingBannerDismissed &&
                     (intermediateConfig.embeddingPresetId.isEmpty ||
                         intermediateConfig.embeddingModelId.isEmpty))
-                  EmbeddingMissingBanner(
+                  context.lmUi.embeddingMissingBanner(
+                    context,
                     onConfigure: _goToEmbeddingSettings,
                     onDismiss: () =>
                         setState(() => _embeddingBannerDismissed = true),
@@ -621,7 +695,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                           padding: const EdgeInsets.only(
                             bottom: IntermediateSpacing.sMd,
                           ),
-                          child: SuggestReplyOverlay(
+                          child: context.lmUi.suggestReplyOverlay(
+                            context,
                             replies: state.suggestReplies,
                             isGenerating: state.isGeneratingSuggest,
                             isExpanded: state.suggestExpanded,
@@ -641,7 +716,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              InputToolbar(
+                              context.lmUi.inputToolbar(
+                                context,
                                 onAddQuote: () => _handleInsertText('""', 1),
                                 onAddParen: () => _handleInsertText('()', 1),
                                 onSuggest: controller.generateSuggestReplies,
@@ -663,6 +739,7 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                                 // no-op，UI 必须同口径禁用）
                                 isManualCompacting: state.isManualCompacting,
                                 onSend: _handleSend,
+                                onTextChanged: _onDraftTextChanged,
                                 onCancel: controller.cancel,
                                 sendKey: sendKey,
                                 newlineKey: newlineKey,
@@ -721,7 +798,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                                     padding: const EdgeInsets.only(
                                       bottom: IntermediateSpacing.sMd,
                                     ),
-                                    child: SuggestReplyOverlay(
+                                    child: context.lmUi.suggestReplyOverlay(
+                                      context,
                                       replies: state.suggestReplies,
                                       isGenerating: state.isGeneratingSuggest,
                                       isExpanded: state.suggestExpanded,
@@ -748,7 +826,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                InputToolbar(
+                                context.lmUi.inputToolbar(
+                                  context,
                                   onAddQuote: () => _handleInsertText('""', 1),
                                   onAddParen: () => _handleInsertText('()', 1),
                                   onSuggest: controller.generateSuggestReplies,
@@ -769,6 +848,7 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                                   // 手动压缩中禁用发送（失败态分支同款）
                                   isManualCompacting: state.isManualCompacting,
                                   onSend: _handleSend,
+                                  onTextChanged: _onDraftTextChanged,
                                   onCancel: controller.cancel,
                                   sendKey: sendKey,
                                   newlineKey: newlineKey,
@@ -926,6 +1006,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
               lastPromptTokens: state.lastPromptTokens,
               lastCompletionTokens: state.lastCompletionTokens,
               lastCacheReadTokens: state.lastCacheReadTokens,
+              // 端点未回 usage 的轮次为本地估算值，面板加「≈」+ 脚注
+              isEstimated: state.lastUsageIsEstimated,
               averageCacheHit: state.averageCacheHit,
               sessionRounds: completedTurnCount(
                 compactedTurnBase: state.compactedTurnBase,
@@ -1002,6 +1084,24 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
     );
   }
 
+  /// 空态「故事模型未配置」横幅「去配置」：直达故事模式设置→模型。
+  ///
+  /// 折返后失效判定 provider 重估（配置完成横幅即消失）。
+  Future<void> _goToModelsConfig() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const IntermediateModelsSettingsPage(),
+      ),
+    );
+    if (mounted) {
+      ref.invalidate(
+        storyModelsReadyProvider(
+          ref.read(intermediateChatControllerProvider(widget.session)).session,
+        ),
+      );
+    }
+  }
+
   // ──  Fork 动作回调处理 ──────────────────────────────────────────
 
   /// 2026-07-29 推荐回复：判断是否显示气泡浮层
@@ -1046,10 +1146,11 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
     final currentState = ref.read(
       intermediateChatControllerProvider(widget.session),
     );
-    if (currentState.pendingUserMessage != null) {
+    if (currentState.pendingUserMessage != null &&
+        currentState.phase != IntermediatePhase.failed) {
       final t = Translations.of(context);
-      final confirmed = await IntermediateConfirmDialog.show(
-        context: context,
+      final confirmed = await context.lmUi.confirmDialog(
+        context,
         title: t.intermediate.chat.messageActions.overwritePendingTitle,
         content: t.intermediate.chat.messageActions.overwritePendingConfirm,
         confirmLabel: t.common.confirm,
@@ -1059,6 +1160,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
     await ref
         .read(intermediateChatControllerProvider(widget.session).notifier)
         .sendMessage(userInput);
+    // 已发送即不再是草稿（清窄列；Map 由切走分支维护）
+    _persistDraftColumn(widget.session.sessionId, '');
   }
 
   /// 复制消息内容到剪贴板，并显示 SnackBar 反馈
@@ -1113,7 +1216,7 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
 
     final allowResend = isPending || message.role == 'user';
 
-    final result = await IntermediateEditDialog.show(
+    final result = await context.lmUi.editDialog(
       context,
       initialContent: message.content ?? '',
       allowResend: allowResend,
@@ -1166,8 +1269,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
         currentState.pendingUserMessage?.messageId == message.messageId;
 
     final t = Translations.of(context);
-    final confirmed = await IntermediateConfirmDialog.show(
-      context: context,
+    final confirmed = await context.lmUi.confirmDialog(
+      context,
       title: isPending
           ? t.intermediate.chat.messageActions.deletePendingTitle
           : t.intermediate.chat.messageActions.deleteTitle,
@@ -1228,6 +1331,25 @@ bool canAcceptPartialReply(
 /// advancedChatControllerProvider 注入。
 /// ConfigurationResolver 内联构造（与 ChatModeController 不同，中级模式无
 /// presetRepository/settingsRepository 直接依赖，通过 ConfigurationResolver 封装）。
+/// 故事模式模型可解析性（空态配置引导横幅显隐判定）。
+///
+/// 判定链与 _precheckAndMaterializeDraft 同源：generating 不可用且
+/// extracting 亦不可用。key 为当前会话对象——面板改模型后即重估。
+final storyModelsReadyProvider =
+    FutureProvider.autoDispose.family<bool, ChatSession>((ref, session) async {
+  final resolver = ref.read(configurationResolverProvider);
+  final generating = await resolver.resolveIntermediatePhaseNamingConfig(
+    session,
+    'generating',
+  );
+  final extracting = generating ??
+      await resolver.resolveIntermediatePhaseNamingConfig(
+        session,
+        'extracting',
+      );
+  return extracting != null;
+});
+
 final intermediateChatControllerProvider = StateNotifierProvider.family<
     IntermediateChatController, IntermediateChatState, ChatSession>(
   (ref, session) {

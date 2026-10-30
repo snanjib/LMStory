@@ -23,6 +23,7 @@ void main() {
     test('工作法含软阶段句式', () {
       final p = ResourceAiPrompts.build(kind: DraftKind.characterCard);
       expect(p, contains('概念定位'));
+      expect(p, contains('先定名'), reason: '工作法第二条：名字是字段锚，先定名防返工');
       expect(p, contains('字段骨架'));
       expect(p, contains('开场'));
       expect(p, contains('缺口'));

@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_markdown_body.dart';
+import 'package:lmstory/core/network/retry_policy.dart';
+import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
+import 'package:lmstory/core/theme/shared/components/lm_state_transition.dart';
 import 'package:lmstory/core/theme/shared/components/streaming_fade_text.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -154,10 +157,22 @@ class _DirectorWorkGroupState extends State<DirectorWorkGroup> {
             constraints: const BoxConstraints(minHeight: 40),
             child: Row(
               children: [
-                Icon(
-                  _expanded ? Icons.tungsten : Icons.tungsten_outlined,
-                  size: 14,
-                  color: iconColor,
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: LmStateTransition(
+                    stateKey: (widget.live, hasError, hasWarning),
+                    alignment: Alignment.center,
+                    child: widget.live
+                        ? LmActivityDots(color: iconColor, dotSize: 2)
+                        : Icon(
+                            _expanded
+                                ? Icons.tungsten
+                                : Icons.tungsten_outlined,
+                            size: 14,
+                            color: iconColor,
+                          ),
+                  ),
                 ),
                 const SizedBox(width: IntermediateSpacing.sSm),
                 Expanded(
@@ -171,10 +186,15 @@ class _DirectorWorkGroupState extends State<DirectorWorkGroup> {
                     ),
                   ),
                 ),
-                Icon(
-                  _expanded ? Icons.expand_less : Icons.expand_more,
-                  size: 16,
-                  color: colors.faint,
+                AnimatedRotation(
+                  turns: _expanded ? 0.5 : 0,
+                  duration: LmMotion.durationFor(context, LmMotion.fold),
+                  curve: LmMotion.easeSnap,
+                  child: Icon(
+                    Icons.expand_more,
+                    size: 16,
+                    color: colors.faint,
+                  ),
                 ),
               ],
             ),
@@ -646,9 +666,10 @@ class _NarrationLine extends StatelessWidget {
               ),
               const SizedBox(width: IntermediateSpacing.sXs),
               Expanded(
-                child: IntermediateMarkdownBody(
+                child: context.lmUi.markdownBody(
+                  context,
+                  narrative: true,
                   data: text,
-                  isUser: false,
                   fontScale: 0.875,
                 ),
               ),
@@ -713,6 +734,24 @@ class _AgentRetryWaitRowState extends State<AgentRetryWaitRow> {
   int _remainingMs() => widget.wait
       .remainingMs(widget.wait.scheduledAtMs + _anchorLagMs + _ticks * 1000);
 
+  /// 语义码 → 人话原因词（批 F；映射源 RetryWaitReason）
+  static String _reasonText(String? cause, Translations t) {
+    switch (RetryWaitReason.of(cause)) {
+      case RetryWaitReason.rateLimited:
+        return t.advanced.retryReasonRateLimited;
+      case RetryWaitReason.serverError:
+        return t.advanced.retryReasonServer;
+      case RetryWaitReason.timeout:
+        return t.advanced.retryReasonTimeout;
+      case RetryWaitReason.streamInterrupted:
+        return t.advanced.retryReasonStream;
+      case RetryWaitReason.badResponse:
+        return t.advanced.retryReasonBadResponse;
+      case RetryWaitReason.unknown:
+        return t.advanced.retryWaitingBadge;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
@@ -721,21 +760,27 @@ class _AgentRetryWaitRowState extends State<AgentRetryWaitRow> {
     final caption = IntermediateTextStyles.caption.copyWith(
       color: colors.muted,
     );
+    final max = widget.wait.maxAttempts;
+    // 批 F：「原因 · Xs 后第 k/N 次」——maxAttempts 未知时退回旧两段式
+    final progress = max != null
+        ? t.advanced.retryWaitingProgress(
+            reason: _reasonText(widget.wait.cause, t),
+            attempt: widget.wait.attempt,
+            max: max,
+            seconds: remainingSeconds,
+          )
+        : t.advanced.retryWaitingCountdown(
+            seconds: remainingSeconds,
+            attempt: widget.wait.attempt,
+          );
     return Semantics(
       liveRegion: true,
       child: Row(
         children: [
           Icon(Icons.hourglass_top, size: 14, color: colors.muted),
           const SizedBox(width: IntermediateSpacing.sXs),
-          Text('${t.advanced.retryWaitingBadge} · ', style: caption),
           Expanded(
-            child: ShimmerText(
-              t.advanced.retryWaitingCountdown(
-                seconds: remainingSeconds,
-                attempt: widget.wait.attempt,
-              ),
-              style: caption,
-            ),
+            child: ShimmerText(progress, style: caption),
           ),
         ],
       ),

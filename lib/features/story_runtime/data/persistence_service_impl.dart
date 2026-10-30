@@ -628,6 +628,30 @@ class StoryPersistenceServiceImpl implements StoryPersistenceService {
   }
 
   @override
+  Future<bool> updateAssistantContentAndCurrentVariant({
+    required String sessionId,
+    required int turnNumber,
+    required String assistantMessageId,
+    required String newContent,
+  }) {
+    return _database.transaction(() async {
+      await _database.customStatement(
+        'UPDATE chat_messages SET content = ? WHERE message_id = ?',
+        [newContent, assistantMessageId],
+      );
+      // 当前指针所指变体行同步（无 artifacts 行或无变体行时影响 0 行）
+      await _database.customStatement(
+        'UPDATE message_variants SET content = ? '
+        'WHERE session_id = ? AND turn_number = ? AND variant_index = '
+        '(SELECT current_variant_index FROM intermediate_round_artifacts '
+        'WHERE session_id = ? AND turn_number = ?)',
+        [newContent, sessionId, turnNumber, sessionId, turnNumber],
+      );
+      return true;
+    });
+  }
+
+  @override
   Future<bool> switchMessageVariant({
     required String sessionId,
     required int turnNumber,

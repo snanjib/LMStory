@@ -50,7 +50,7 @@ String pacingDirectiveFor(NarrativePacing tier) => switch (tier) {
     };
 
 /// 轮 surface 尾部指令消息（设计文档 §5.5 + 长会话退化治理）：
-/// turn1 能力提示在前，工作契约/文风铁律每轮注入，节奏指令收尾
+/// turn1 开篇角色/能力提示在前，工作契约/文风铁律每轮注入，节奏指令收尾
 /// （recency 最优位）。节奏指令每轮注入且只放尾部——档位可中途换，
 /// 冻结前缀必须保持档位无关以保前缀缓存（设计文档 §4.2/§6.1）。
 ///
@@ -58,6 +58,9 @@ String pacingDirectiveFor(NarrativePacing tier) => switch (tier) {
 /// 标记包裹（见 [wrapWorkbenchReminder]）——绕开 Anthropic 适配器把
 /// system 上提到顶层字段架空 recency 位的问题（R6），适配器不改。
 ///
+/// [characterInitHint] = turn1 开篇角色一次性提示（向导「初始化你的角色」
+/// 自由描述路径，runner 用 firstTurnCharacterInitHint 预构建；
+/// null = 未启用，整条省略）。
 /// [foreshadowSweepLine] = 伏笔定期清点提醒（清点轮由 runner 用
 /// foreshadowSweepReminderText 预构建；null = 非清点轮或无未兑现伏笔，
 /// 整条省略）。
@@ -66,10 +69,14 @@ List<AgentMessage> surfaceTailMessages({
   required bool isFirstTurn,
   required Set<String> toolNames,
   bool importedDataPresent = false,
+  String? characterInitHint,
   String? foreshadowSweepLine,
 }) {
   final hint = firstTurnCapabilityHint(toolNames);
   return [
+    // 开篇角色一次性提示（turn1 且启用才有；内容性指令置首）
+    if (isFirstTurn && characterInitHint != null)
+      AgentMessage.user(wrapWorkbenchReminder(characterInitHint)),
     //  deny 感知：spawn 未注册时能力提示整条省略（不空许诺）
     if (isFirstTurn && hint != null)
       AgentMessage.user(wrapWorkbenchReminder(hint)),

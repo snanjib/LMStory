@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
+import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -136,48 +140,78 @@ class _MessageEditDialogState extends State<MessageEditDialog> {
           Navigator.of(context).pop();
         }
       },
-      child: AlertDialog(
-        title: Text(
-          t.chat.editMessage,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+      child: Dialog(
+        insetPadding: const EdgeInsets.symmetric(
+          horizontal: LmSpacing.sLg,
+          vertical: LmSpacing.sLg,
         ),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: TextField(
-            controller: _controller,
-            maxLines: null,
-            autofocus: true,
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(),
-              focusedBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: colors.primary),
+        child: SizedBox(
+          width: LmLayout.dialogMaxWidth,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxHeight: LmLayout.messageEditorMaxHeight,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(LmSpacing.sLg),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PanelHeading(title: t.chat.editMessage),
+                  const SizedBox(height: LmSpacing.sMd),
+                  Flexible(
+                    child: TextField(
+                      controller: _controller,
+                      minLines: 5,
+                      maxLines: 16,
+                      autofocus: true,
+                      style: LmNarrativeTextStyles.narrativeBody.copyWith(
+                        color: colors.ink,
+                      ),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: colors.surfaceVariant,
+                        border: const OutlineInputBorder(),
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: colors.primary),
+                        ),
+                        contentPadding: const EdgeInsets.all(LmSpacing.sMd),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: LmSpacing.sMd),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: LmSpacing.sXs,
+                    runSpacing: LmSpacing.sXs,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: Text(t.common.cancel),
+                      ),
+                      TextButton(
+                        onPressed: _canSave
+                            ? () =>
+                                Navigator.of(context).pop(_buildResult(false))
+                            : null,
+                        child: Text(t.common.save),
+                      ),
+                      FilledButton(
+                        onPressed: _canSave
+                            ? () =>
+                                Navigator.of(context).pop(_buildResult(true))
+                            : null,
+                        child: Text(
+                          t.chat.saveAndResend,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(t.common.cancel),
-          ),
-          TextButton(
-            onPressed: _canSave
-                ? () => Navigator.of(context).pop(_buildResult(false))
-                : null,
-            child: Text(t.common.save),
-          ),
-          FilledButton(
-            onPressed: _canSave
-                ? () => Navigator.of(context).pop(_buildResult(true))
-                : null,
-            child: Text(
-              t.chat.saveAndResend,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
       ),
     );
   }

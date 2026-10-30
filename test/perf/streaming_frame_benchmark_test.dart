@@ -10,9 +10,9 @@ import 'package:lmstory/core/di/providers.dart' as di
     show templateRepositoryProvider;
 import 'package:lmstory/core/theme/shared/components/streaming_markdown_body.dart';
 import 'package:lmstory/core/theme/shared/streaming_markdown_blocks.dart';
-import 'package:lmstory/core/theme/simple/components/simple_markdown_body.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_markdown_body.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
@@ -189,6 +189,41 @@ void main() {
         lessThan(_warmMedian(baseline) * 0.75),
         reason: '快速路径单帧墙钟须显著低于全文重解析基线'
             '（含淡入占位盒的有界开销）',
+      );
+    });
+  });
+
+  group('超长单段冻结窗口（SM10-N9，2026-10-05 建档）', () {
+    testWidgets('16k/32k/64k 恒定到达率追加：单帧成本与长度脱敏', (tester) async {
+      final doc16 = _plainProseDoc(16000);
+      final doc32 = _plainProseDoc(32000);
+      final doc64 = _plainProseDoc(64000);
+      // sanity：全部命中快速路径 + 冻结前置（无空行一整块 + 判纯 + 多行）
+      for (final doc in [doc16, doc32, doc64]) {
+        expect(looksLikePlainText(doc), isTrue);
+        expect(markdownBlockStarts(doc), hasLength(1));
+      }
+
+      // 口径：**固定步长**（160 码元/32ms，≈真实到达率量级）。活窗内容
+      // = 淡入留存窗 × 到达率——与全文长度无关；若按比例步长（100 步
+      // 吃完全文），活窗随总长线性膨胀，量的是到达率不是长度。
+      final t16 = await _measurePlainProseFixedStep(tester, doc16, 160);
+      final t32 = await _measurePlainProseFixedStep(tester, doc32, 160);
+      final t64 = await _measurePlainProseFixedStep(tester, doc64, 160);
+      _report('plainProse frozen-fixedstep[16k]', t16);
+      _report('plainProse frozen-fixedstep[32k]', t32);
+      _report('plainProse frozen-fixedstep[64k]', t64);
+
+      // 冻结窗口的长度脱敏断言：64k 单帧中位 < 16k 的 2 倍。冻结在位时
+      // 两者同量级（活窗排版 O(留存窗×到达率) + O(n) 残余仅为若干次
+      // memcmp/trim 常数遍扫描）；冻结失效（回归）时 O(n) 全文排版令
+      // 64k ≈ 4×16k（比例步长基线口径 16k≈12.6ms → 64k≈50ms），必红。
+      // 同 testWidgets 内先后测量，机器抖动 ±10-20% 不影响判定。
+      expect(
+        _warmMedian(t64),
+        lessThan(_warmMedian(t16) * 2),
+        reason: '冻结窗口下超长单段单帧成本须与全文长度脱敏'
+            '（16k/64k 同量级；4× 线性放大 = 冻结失效）',
       );
     });
   });
@@ -421,6 +456,45 @@ Future<List<double>> _measurePlainProse(
           .state<_GrowingMarkdownHostState>(find.byType(_GrowingMarkdownHost))
           .grow(doc.substring(0, next));
     }
+    pos = next;
+    final sw = Stopwatch()..start();
+    await tester.pump(const Duration(milliseconds: 32));
+    times.add(sw.elapsedMicroseconds / 1000);
+  }
+  return times;
+}
+
+/// 冻结窗口脱敏口径：从 500 字起按**固定步长**（恒定到达率）追加到
+/// doc.length，测每步 pump（32ms 合帧）墙钟。与 [_measurePlainProse] 的
+/// 「100 步吃完全文」比例步长不同——后者步长随总长放大，活窗（淡入
+/// 留存窗 × 到达率）随之线性膨胀，无法隔离「长度」变量。
+Future<List<double>> _measurePlainProseFixedStep(
+  WidgetTester tester,
+  String doc,
+  int stepChars,
+) async {
+  await tester.pumpWidget(
+    TranslationProvider(
+      child: MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            height: 600,
+            child: _GrowingPlainTextHost(initial: doc.substring(0, 500)),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pump(const Duration(milliseconds: 100));
+
+  final times = <double>[];
+  var pos = 500;
+  while (pos < doc.length) {
+    final next = (pos + stepChars).clamp(0, doc.length);
+    tester
+        .state<_GrowingPlainTextHostState>(find.byType(_GrowingPlainTextHost))
+        .grow(doc.substring(0, next));
     pos = next;
     final sw = Stopwatch()..start();
     await tester.pump(const Duration(milliseconds: 32));

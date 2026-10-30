@@ -23,6 +23,7 @@ class ConfigVisibilityKeys {
   static const generalAdvancedReasoningEffort =
       'settings.general.advanced.reasoningEffort';
   static const generalAdvancedTimeout = 'settings.general.advanced.timeout';
+  static const generalAdvancedAutoRetry = 'settings.general.advanced.autoRetry';
   static const generalAdvancedTitleModel =
       'settings.general.advanced.titleModel';
 
@@ -118,6 +119,7 @@ class ConfigVisibilityKeys {
   //（门在双模式下恒过，守卫快照与表↔代码对账需要键存在）──
   static const appearanceThemeMode = 'settings.appearance.themeMode';
   static const appearanceFontSize = 'settings.appearance.fontSize';
+  static const appearanceContentWidth = 'settings.appearance.contentWidth';
   static const appearanceStructure = 'settings.appearance.structure';
   static const appearancePalette = 'settings.appearance.palette';
   static const languageUiLanguage = 'settings.language.uiLanguage';
@@ -183,6 +185,10 @@ abstract final class ConfigVisibility {
     ConfigVisibilityKeys.generalAdvancedTimeout: ConfigVisibilityEntry(
       ConfigLevel.advanced,
       ['C-06', 'C-07'],
+    ),
+    ConfigVisibilityKeys.generalAdvancedAutoRetry: ConfigVisibilityEntry(
+      ConfigLevel.advanced,
+      ['C-119', 'C-120'],
     ),
     ConfigVisibilityKeys.generalAdvancedTitleModel:
         ConfigVisibilityEntry(ConfigLevel.advanced, ['C-08']),
@@ -356,6 +362,8 @@ abstract final class ConfigVisibility {
         ConfigVisibilityEntry(ConfigLevel.simple, ['C-121']),
     ConfigVisibilityKeys.appearancePalette:
         ConfigVisibilityEntry(ConfigLevel.simple, ['C-122']),
+    ConfigVisibilityKeys.appearanceContentWidth:
+        ConfigVisibilityEntry(ConfigLevel.simple, ['C-123']),
     ConfigVisibilityKeys.languageUiLanguage:
         ConfigVisibilityEntry(ConfigLevel.simple, ['C-02']),
     ConfigVisibilityKeys.languageSendKey:
@@ -371,6 +379,16 @@ abstract final class ConfigVisibility {
 
   /// [key] 的标注 entry；未登记返回 null（守卫测试与对账用）。
   static ConfigVisibilityEntry? entryOf(String key) => _entries[key];
+
+  /// [surfaceId] 过滤面的声明键中是否含进阶专属条目。
+  ///
+  /// 简单模式页尾进阶引导行的显隐单源：面存在声明且含 advanced 级
+  /// 键即为「本页有被收起的配置」。面未声明恒 false（无过滤面不引导）。
+  static bool surfaceHasAdvancedEntries(String surfaceId) {
+    final keys = ConfigVisibilitySurfaces.declarations[surfaceId];
+    if (keys == null || keys.isEmpty) return false;
+    return keys.any((k) => _entries[k]?.level == ConfigLevel.advanced);
+  }
 
   /// [key] 是否在 [current] 级别下渲染。
   ///
@@ -395,32 +413,51 @@ abstract final class ConfigVisibility {
 /// 键集合快照由守卫测试对账（防实施漂移）；结构无变化面（设置主页/
 /// 通用设置页）声明为空键集——入口层不裁剪，页面内容见各页声明门。
 abstract final class ConfigVisibilitySurfaces {
+  /// 过滤面 id 常量（接线方引用，避免裸字符串漂移）。
+  static const home = 'settings.home';
+  static const general = 'settings.general';
+  static const appearance = 'settings.appearance';
+  static const languageInput = 'settings.languageInput';
+  static const generalAdvanced = 'settings.general.advanced';
+  static const chatSettings = 'settings.chat';
+  static const storyHub = 'settings.story.hub';
+  static const storyModels = 'settings.story.models';
+  static const storySystemPrompt = 'settings.story.systemPrompt';
+  static const storyGeneration = 'settings.story.generation';
+  static const director = 'settings.director';
+  static const data = 'settings.data';
+  static const chatPanel = 'panel.chat';
+  static const storyPanel = 'panel.story';
+  static const directorPanel = 'panel.director';
+
   static const Map<String, List<String>> declarations = {
     // 设置侧 12 页
-    'settings.home': [],
-    'settings.general': [],
-    'settings.appearance': [
+    home: [],
+    general: [],
+    appearance: [
       ConfigVisibilityKeys.appearanceThemeMode,
       ConfigVisibilityKeys.appearanceFontSize,
       ConfigVisibilityKeys.appearanceStructure,
       ConfigVisibilityKeys.appearancePalette,
+      ConfigVisibilityKeys.appearanceContentWidth,
     ],
-    'settings.languageInput': [
+    languageInput: [
       ConfigVisibilityKeys.languageUiLanguage,
       ConfigVisibilityKeys.languageSendKey,
     ],
-    'settings.general.advanced': [
+    generalAdvanced: [
       ConfigVisibilityKeys.generalAdvancedReasoningEffort,
       ConfigVisibilityKeys.generalAdvancedTimeout,
+      ConfigVisibilityKeys.generalAdvancedAutoRetry,
       ConfigVisibilityKeys.generalAdvancedTitleModel,
     ],
-    'settings.chat': [
+    chatSettings: [
       ConfigVisibilityKeys.chatDefaultModel,
       ConfigVisibilityKeys.chatGenerationDefaults,
       ConfigVisibilityKeys.chatAutoCompaction,
       ConfigVisibilityKeys.chatDisplayPreferences,
     ],
-    'settings.story.hub': [
+    storyHub: [
       ConfigVisibilityKeys.storyHubModels,
       ConfigVisibilityKeys.storyHubSystemPrompt,
       ConfigVisibilityKeys.storyHubToolsMemory,
@@ -428,14 +465,14 @@ abstract final class ConfigVisibilitySurfaces {
       ConfigVisibilityKeys.storyHubPrompts,
       ConfigVisibilityKeys.storyHubSuggestReply,
     ],
-    'settings.story.models': [
+    storyModels: [
       ConfigVisibilityKeys.storyModelsPhaseModels,
       ConfigVisibilityKeys.storyModelsEmbedding,
     ],
-    'settings.story.systemPrompt': [
+    storySystemPrompt: [
       ConfigVisibilityKeys.storySystemPromptSection,
     ],
-    'settings.story.generation': [
+    storyGeneration: [
       ConfigVisibilityKeys.storyGlobalGenerationTemperature,
       ConfigVisibilityKeys.storyGlobalGenerationTopP,
       ConfigVisibilityKeys.storyGlobalGenerationMaxTokens,
@@ -443,7 +480,7 @@ abstract final class ConfigVisibilitySurfaces {
       ConfigVisibilityKeys.storyGlobalGenerationFrequencyPenalty,
       ConfigVisibilityKeys.storyGlobalGenerationReasoningEffort,
     ],
-    'settings.director': [
+    director: [
       ConfigVisibilityKeys.directorRules,
       ConfigVisibilityKeys.directorGmModel,
       ConfigVisibilityKeys.directorGenerationTemperature,
@@ -462,11 +499,11 @@ abstract final class ConfigVisibilitySurfaces {
       ConfigVisibilityKeys.directorMemoryConsolidation,
       ConfigVisibilityKeys.directorMemoryAdvanced,
     ],
-    'settings.data': [
+    data: [
       ConfigVisibilityKeys.dataAutoBackup,
     ],
     // 会话内 3 面板
-    'panel.chat': [
+    chatPanel: [
       ConfigVisibilityKeys.chatPanelModel,
       ConfigVisibilityKeys.chatPanelSystemPrompt,
       ConfigVisibilityKeys.chatPanelTemperature,
@@ -476,7 +513,7 @@ abstract final class ConfigVisibilitySurfaces {
       ConfigVisibilityKeys.chatPanelStreamEnabled,
       ConfigVisibilityKeys.chatPanelReasoningEffort,
     ],
-    'panel.story': [
+    storyPanel: [
       ConfigVisibilityKeys.storyMemoryManagement,
       ConfigVisibilityKeys.storyResource,
       ConfigVisibilityKeys.storyPhaseModels,
@@ -492,7 +529,7 @@ abstract final class ConfigVisibilitySurfaces {
       ConfigVisibilityKeys.storyToolCalling,
       ConfigVisibilityKeys.storySuggestReply,
     ],
-    'panel.director': [
+    directorPanel: [
       ConfigVisibilityKeys.directorPanelMemoryManagement,
       ConfigVisibilityKeys.directorPanelRules,
       ConfigVisibilityKeys.directorPanelGmModel,

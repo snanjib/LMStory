@@ -7,6 +7,7 @@ import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/secret_redactor.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_log_recovery.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 导演模式 L2 审计步骤卡（体验重构 §4.3.3：剧场语言为表、CLI 为里）
@@ -20,6 +21,22 @@ class DirectorToolCard extends StatefulWidget {
   const DirectorToolCard({required this.step, super.key});
 
   final AgentWorkStep step;
+
+  /// 崩溃恢复占位标题本地化映射（兼容存量与各语言环境下持久化事件）
+  static String localizedTitle(String title, Translations t) {
+    if (AgentLogRecoveryService.isPlaceholderTitle(title)) {
+      return t.advanced.process.interruptedToolPlaceholder;
+    }
+    return title;
+  }
+
+  /// 崩溃恢复占位输出本地化映射（协议持久化事件保持原样，渲染层映射）
+  static String localizedOutput(String output, Translations t) {
+    if (AgentLogRecoveryService.isInterruptedOutput(output)) {
+      return t.advanced.process.interruptedToolOutput;
+    }
+    return output;
+  }
 
   @override
   State<DirectorToolCard> createState() => _DirectorToolCardState();
@@ -203,7 +220,7 @@ class _DirectorToolCardState extends State<DirectorToolCard> {
                           top: IntermediateSpacing.s2xs,
                         ),
                         child: SelectableText(
-                          step.output,
+                          DirectorToolCard.localizedOutput(step.output, t),
                           style: TextStyle(
                             fontFamily: 'monospace',
                             fontSize: 12,
@@ -225,7 +242,7 @@ class _DirectorToolCardState extends State<DirectorToolCard> {
   String _heading(AgentWorkStep step, Translations t) {
     final verb = stageVerbOf(step.toolName, t);
     if (step.title.isEmpty) return verb;
-    return '$verb · ${step.title}';
+    return '$verb · ${DirectorToolCard.localizedTitle(step.title, t)}';
   }
 }
 
@@ -248,7 +265,9 @@ class _CopyStepButton extends StatelessWidget {
           buffer.write('\n${step.argsPreview}');
         }
         if (step.output.isNotEmpty) {
-          buffer.write('\n${step.output}');
+          buffer.write(
+            '\n${DirectorToolCard.localizedOutput(step.output, t)}',
+          );
         }
         // 脱敏后再入剪贴板（工具输出理论上不应含凭据，防御性处理）
         Clipboard.setData(

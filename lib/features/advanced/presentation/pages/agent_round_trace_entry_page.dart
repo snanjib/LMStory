@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/advanced/presentation/pages/agent_round_trace_page.dart';
@@ -60,46 +61,66 @@ class _AgentRoundTraceEntryPageState
 
     return Scaffold(
       backgroundColor: context.scaffoldBgOf(context.lm.palette.bg),
-      appBar: SimpleAppBar(
+      appBar: context.lmUi.appBar(
+        context,
         title: t.settings.diagnostics.roundTrace.entryTitle,
       ),
-      body: sessions == null
-          ? const Center(child: CircularProgressIndicator())
-          : sessions.isEmpty
-              ? Center(
-                  child: Text(t.settings.diagnostics.roundTrace.noSessions),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.all(SimpleSpacing.sMd),
-                  itemCount: sessions.length,
-                  separatorBuilder: (_, __) =>
-                      const SizedBox(height: SimpleSpacing.sSm),
-                  itemBuilder: (context, index) {
-                    final session = sessions[index];
-                    return Card(
-                      child: ListTile(
-                        title: Text(
-                          session.title.isEmpty
-                              ? _shortId(session.sessionId)
-                              : session.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                        subtitle: Text(
-                          'id: ${_shortId(session.sessionId, 12)}…'
-                          '\nupdated: ${session.lastActiveAt.toIso8601String().substring(0, 16)}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: colors.muted,
-                          ),
-                        ),
-                        isThreeLine: true,
+      body: LmMeasure(
+        child: sessions == null
+            ? const Center(child: CircularProgressIndicator())
+            : sessions.isEmpty
+                ? Center(
+                    child: Text(t.settings.diagnostics.roundTrace.noSessions),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.all(SimpleSpacing.sMd),
+                    itemCount: sessions.length,
+                    separatorBuilder: (_, __) =>
+                        const SizedBox(height: SimpleSpacing.sSm),
+                    itemBuilder: (context, index) {
+                      final session = sessions[index];
+                      return context.lmUi.card(
+                        context,
                         onTap: () => _promptTurn(context, session),
-                      ),
-                    );
-                  },
-                ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    session.title.isEmpty
+                                        ? _shortId(session.sessionId)
+                                        : session.title,
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: LmNarrativeTextStyles
+                                        .narrativeDisplay
+                                        .copyWith(color: colors.ink),
+                                  ),
+                                ),
+                                const SizedBox(width: SimpleSpacing.sSm),
+                                Icon(
+                                  Icons.arrow_forward,
+                                  color: colors.muted,
+                                  size: 20,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: SimpleSpacing.sSm),
+                            Text(
+                              'id: ${_shortId(session.sessionId, 12)}…'
+                              '\nupdated: ${session.lastActiveAt.toIso8601String().substring(0, 16)}',
+                              style: LmNarrativeTextStyles.caption
+                                  .copyWith(color: colors.muted),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+      ),
     );
   }
 

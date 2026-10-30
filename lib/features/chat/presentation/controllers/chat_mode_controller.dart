@@ -4,6 +4,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/network/http_client.dart'
     show CancellationToken, CancelledException;
+import 'package:lmstory/core/network/retry_policy.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
@@ -19,6 +20,7 @@ import 'package:lmstory/features/chat/domain/services/continue_context.dart';
 import 'package:lmstory/features/chat/domain/services/fork_manager.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 import 'package:lmstory/features/chat/domain/services/message_manager.dart';
+import 'package:lmstory/features/chat/domain/services/simple_auto_retry.dart';
 import 'package:lmstory/features/chat/domain/services/simple_failure_classifier.dart';
 import 'package:lmstory/features/chat/domain/services/stream_handler.dart';
 import 'package:lmstory/features/diagnostics/domain/repositories/failure_log_repository.dart';
@@ -73,8 +75,15 @@ class ChatModeState {
     this.currentProviderName,
     this.contextWindowTokens,
     this.compactionTriggerTokens,
+    // 最近一轮请求的输出/缓存读分项（上下文用量详情面板展示）。
+    // 聊天链路此前只落库 usage.totalTokens（消息 tokensUsed），分解到
+    // 不了面板——此处仅内存留存，重进会话后至下一轮完成前为 null
+    //（面板「—」+ 口径脚注）。
+    this.lastCompletionTokens,
+    this.lastCacheReadTokens,
     // 加载期标志，防止首次打开会话闪现空态
     this.isLoading = true,
+    this.autoRetryNotice,
   });
 
   final ChatSession session;
@@ -135,8 +144,19 @@ class ChatModeState {
   /// （圆环画空轨道）。
   final int? compactionTriggerTokens;
 
+  /// 最近一轮请求的输出 token（端点真实 usage；null = 端点未回/未生成）
+  final int? lastCompletionTokens;
+
+  /// 最近一轮请求的缓存读 token（null = 端点未返回缓存分项）
+  final int? lastCacheReadTokens;
+
   /// 历史消息是否仍在加载
   final bool isLoading;
+
+  /// 自动重试占位状态行（2026-10-15 批 F / P8：UI-only 不入消息库）——
+  /// 「网络波动 · 第 k/5 次自动重试」，重试等待期显示；成功随正文出现
+  /// 消失，失败落现有 error（过程信息由诊断页 failure_logs 承担）。
+  final String? autoRetryNotice;
 
   /// Sentinel object to distinguish "not provided" from "explicitly null"
   /// in copyWith for nullable fields.
@@ -160,7 +180,10 @@ class ChatModeState {
     Object? currentProviderName = _sentinel,
     Object? contextWindowTokens = _sentinel,
     Object? compactionTriggerTokens = _sentinel,
+    Object? lastCompletionTokens = _sentinel,
+    Object? lastCacheReadTokens = _sentinel,
     bool? isLoading,
+    Object? autoRetryNotice = _sentinel,
   }) {
     return ChatModeState(
       session: session ?? this.session,
@@ -198,7 +221,16 @@ class ChatModeState {
       compactionTriggerTokens: identical(compactionTriggerTokens, _sentinel)
           ? this.compactionTriggerTokens
           : compactionTriggerTokens as int?,
+      lastCompletionTokens: identical(lastCompletionTokens, _sentinel)
+          ? this.lastCompletionTokens
+          : lastCompletionTokens as int?,
+      lastCacheReadTokens: identical(lastCacheReadTokens, _sentinel)
+          ? this.lastCacheReadTokens
+          : lastCacheReadTokens as int?,
       isLoading: isLoading ?? this.isLoading,
+    autoRetryNotice: autoRetryNotice == _sentinel
+        ? this.autoRetryNotice
+        : autoRetryNotice as String?,
     );
   }
 }
@@ -278,6 +310,16 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   //  诊断包：失败日志仓储 + Simple 模式失败分类器
   final FailureLogRepository _failureLogRepository;
   final SimpleFailureClassifier _classifier;
+
+  /// 自动重试薄壳状态（2026-10-15 批 E / P5、P8）：零首字节失败时按
+  /// 共享 RetryPolicy 自动重发；重试期间维持生成态（UI 状态行批 F 接入）
+  final SimpleAutoRetry _autoRetry = SimpleAutoRetry();
+
+  /// 最近一条失败日志 id（批 F / P8：自动重试最终成功时回写 recovered）
+  int _lastFailureLogId = -1;
+  LlmRequest? _lastStreamRequest;
+  ChatMessage? _lastStreamUserMessage;
+  int _lastStreamBranchIndex = 0;
 
   // ==================== 服务类 ====================
   late final ConfigurationResolver _configurationResolver;
@@ -360,6 +402,15 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     LlmUsage? usage,
     ChatMessage? finalMessage,
   }) async {
+    // 最近一轮请求的输出/缓存分项留 state（详情面板「最近一轮请求」
+    // 行展示；端点未回 usage 为 null → 面板「—」+ 口径脚注）。此前
+    // 聊天链路只落库 totalTokens（消息 tokensUsed），分解到不了面板。
+    if (usage != null) {
+      state = state.copyWith(
+        lastCompletionTokens: usage.completionTokens,
+        lastCacheReadTokens: usage.cacheReadTokens,
+      );
+    }
     // （接写合并）：续写完成——新内容追加进被续写消息
     // （单气泡 + 「已中断·续写」徽标），流式占位气泡不入库不入列表。
     // CH-5：后台分支完成的续写同样走接写合并——被续写的
@@ -1000,6 +1051,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         cancelToken: _currentCancelToken,
       );
 
+      // 自动重试快照（零首字节失败时整轮重发同一请求；新发送重置计数）
+      _autoRetry.reset();
+      _lastStreamRequest = request;
+      _lastStreamUserMessage = userMessage;
+      _lastStreamBranchIndex = branchIndex;
       _currentSubscription = _llmService.streamChat(request).listen(
         (event) {
           _handleLlmStreamEvent(event, userMessage);
@@ -1080,6 +1136,12 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         error: streamError,
         overrideRawError: '${event.code}: ${event.message}',
       );
+      // 自动重试薄壳（批 E / P5）：零首字节 + 可重试类别 → 重发同一请求
+      final retryDelay = await _planStreamAutoRetry(context.errorCategory);
+      if (retryDelay != null) {
+        await _resendLastStream(retryDelay);
+        return;
+      }
       final display = _classifier.formatPersisted(
         context.errorCategory,
         context.errorCode,
@@ -1111,6 +1173,12 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     _streamHandler.state.backgroundAssistantMessage = null;
     _streamHandler.state.currentUserMessage = null;
     _streamHandler.state.generatingAnchorUserMsgId = null;
+    // 批 F / P8：流正常收口时占位行还在 = 自动重试最终成功——
+    // 回写 recovered（这条失败被自动重试救回了）
+    if (state.autoRetryNotice != null && _lastFailureLogId > 0) {
+      unawaited(_failureLogRepository.markRecovered(_lastFailureLogId));
+      _lastFailureLogId = -1;
+    }
     state = state.copyWith(
       isStreaming: false,
       isThinking: false,
@@ -1118,6 +1186,8 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       generatingAnchorUserMsgId: null,
       isGeneratingInBackground: false,
       error: clearError ? null : state.error,
+      // 流收口清占位状态行（P8：成功随正文消失；失败由 error 承担）
+      autoRetryNotice: null,
     );
   }
 
@@ -1162,6 +1232,12 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       // 续写失败回落旧的独立气泡形态（错误信息随占位消息落库）
       _continuationTarget = null;
       final context = await _recordError(error: error);
+      // 自动重试薄壳（批 E / P5）：零首字节 + 可重试类别 → 重发同一请求
+      final retryDelay = await _planStreamAutoRetry(context.errorCategory);
+      if (retryDelay != null) {
+        await _resendLastStream(retryDelay);
+        return;
+      }
       final display = _classifier.formatPersisted(
         context.errorCategory,
         context.errorCode,
@@ -1170,6 +1246,71 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       _forkManager.clearPendingRollback();
       _finalizeStream();
     }
+  }
+
+  /// 自动重试规划（P5/P8，批 E）：可重试且零首字节 → 等待延迟；否则 null。
+  ///
+  /// **零首字节约束**：半截正文已进消息列表，整轮重发需清消息（复杂且
+  /// 易错）——有内容的流中断落现状 error 由用户处置；免费站典型病
+  /// （429/5xx/空响应/格式坏/早期断流）恰都发生在首字节之前。
+  Future<Duration?> _planStreamAutoRetry(String errorCategory) async {
+    if (_streamHandler.state.firstTokenLatency != null) return null;
+    final request = _lastStreamRequest;
+    if (request == null || _lastStreamUserMessage == null) return null;
+    final network = (await _settingsRepository.getResolvedConfig()).network;
+    final policy = RetryPolicy(
+      maxAttempts: network.autoRetryMaxAttempts,
+      totalWaitBudget: network.autoRetryWaitBudget,
+    );
+    return _autoRetry.planNextRetry(
+      errorCategory: errorCategory,
+      policy: policy,
+    );
+  }
+
+  /// 重发快照请求（等待期可被用户停止打断；重试期间维持生成态——
+  /// 等待行渲染批 F 接入，本方法只负责重发）
+  Future<void> _resendLastStream(Duration delay) async {
+    final request = _lastStreamRequest;
+    final userMessage = _lastStreamUserMessage;
+    if (request == null || userMessage == null) return;
+    if (delay > Duration.zero) {
+      final token = _currentCancelToken;
+      final interrupted = Completer<void>();
+      token?.bind(interrupted.complete);
+      await Future.any<void>([
+        Future<void>.delayed(delay),
+        interrupted.future,
+      ]);
+    }
+    if (_currentCancelToken?.isCancelled ?? false) return;
+    _logger.warn(
+      'Simple auto retry resending',
+      detail: 'attempt=${_autoRetry.used}, delay=${delay.inMilliseconds}ms',
+    );
+    // P8 占位状态行：UI-only 不入消息库，成功随正文消失（_finishStreaming
+    // 清）、失败落现有 error 时一并清除。存重试次数（UI 据此渲染第 k 次）。
+    state = state.copyWith(
+      autoRetryNotice: '${_autoRetry.used}',
+    );
+    // 新令牌重发（旧令牌已随旧流结束；复用会取消新流）
+    _currentCancelToken = CancellationToken();
+    _streamHandler.initStream(
+      userMessage: userMessage,
+      branchIndex: _lastStreamBranchIndex,
+      modelName: _streamHandler.state.currentModelName,
+    );
+    _currentSubscription = _llmService
+        .streamChat(request.copyWith(cancelToken: _currentCancelToken))
+        .listen(
+          (event) {
+            _handleLlmStreamEvent(event, userMessage);
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            _handleStreamError(error, stackTrace);
+          },
+          onDone: _finishStreaming,
+        );
   }
 
   // ==================== 错误处理（诊断包） ====================
@@ -1211,17 +1352,20 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       rawError: rawError,
     );
 
-    // 持久化到 failure_logs（unawaited 不阻塞主流程；Repository 静默降级）
+    // 持久化到 failure_logs（unawaited 不阻塞主流程；Repository 静默降级）；
+    // 记 id 供自动重试成功后回写 recovered（批 F / P8）
     unawaited(
-      _failureLogRepository.insertLog(
-        sessionId: state.session.sessionId,
-        mode: ChatMode.chat,
-        errorCategory: category,
-        errorCode: errorCode,
-        httpStatus: httpStatus,
-        errorMessage: _classifier.resolveMessage(category),
-        rawError: rawError,
-      ),
+      _failureLogRepository
+          .insertLog(
+            sessionId: state.session.sessionId,
+            mode: ChatMode.chat,
+            errorCategory: category,
+            errorCode: errorCode,
+            httpStatus: httpStatus,
+            errorMessage: _classifier.resolveMessage(category),
+            rawError: rawError,
+          )
+          .then((entry) => _lastFailureLogId = entry.id),
     );
 
     return context;

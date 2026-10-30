@@ -23,10 +23,13 @@ void main() {
     expect(scheduler.getMaxRetries('E015', null), 0);
   });
 
-  test('默认延迟 1s；带 Retry-After 时按指示冷却', () {
+  test('退避改读共享策略：E016 attempt 首发即 500ms；Retry-After 精确遵守',
+      () {
+    // 2026-10-15 批 E：故事退避改读共享 RetryPolicy（E016→STREAM_ERROR
+    // 指数退避，固定 1s 旧口径退役；roll=0.5 = 无 jitter 中心值）
     expect(
       scheduler.retryDelay('E016', roll: () => 0.5),
-      const Duration(seconds: 1),
+      const Duration(milliseconds: 500),
     );
     expect(
       scheduler.retryDelay(
@@ -38,11 +41,11 @@ void main() {
     );
   });
 
-  test('jitter：roll=0/1 收束到 ±25% 边界', () {
+  test('jitter：roll=0/1 收束到 ±25% 边界（E010 首发退避 500ms）', () {
     final low = scheduler.retryDelay('E010', roll: () => 0);
     final high = scheduler.retryDelay('E010', roll: () => 0.999999);
-    expect(low.inMilliseconds, closeTo(750, 1));
-    expect(high.inMilliseconds, closeTo(1250, 1));
+    expect(low.inMilliseconds, closeTo(375, 1));
+    expect(high.inMilliseconds, closeTo(625, 1));
   });
 
   group('D10：Retry-After 指示精确遵守（不早于指示值重发）', () {

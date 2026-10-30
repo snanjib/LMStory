@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:io' show File, Platform;
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,10 +11,12 @@ import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
+import 'package:lmstory/core/theme/shared/components/labeled_value.dart';
+import 'package:lmstory/core/theme/shared/components/section_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/db_storage_info.dart'
@@ -22,6 +25,7 @@ import 'package:lmstory/core/utils/file_reader.dart'
     if (dart.library.html) 'package:lmstory/core/utils/file_reader_web.dart';
 import 'package:lmstory/core/utils/file_share.dart'
     if (dart.library.html) 'package:lmstory/core/utils/file_share_web.dart';
+import 'package:lmstory/core/utils/json_depth_guard.dart';
 import 'package:lmstory/core/widgets/file_saved_dialog.dart';
 import 'package:lmstory/features/settings/data/auto_backup_manager.dart';
 import 'package:lmstory/features/settings/domain/entities/data_management_models.dart';
@@ -81,6 +85,10 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
   /// 撤除导入进度弹层的回调（弹层 builder 建立时登记）
   void Function()? _dismissImportProgress;
 
+  /// 迟到关闭标志：弹层 builder 晚于撤除调用执行时的兜底
+  /// （导入在首帧前同步失败/完成的窄窗口）。
+  bool _importProgressDismissed = false;
+
   @override
   void initState() {
     super.initState();
@@ -122,7 +130,7 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(title: t.settings.data.title),
+      appBar: context.lmUi.appBar(context, title: t.settings.data.title),
       body: LmMeasure(
         child: ListView(
           padding: const EdgeInsets.all(SimpleSpacing.sLg),
@@ -185,6 +193,8 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
   // ==================== 导出 ====================
 
   Future<void> _exportData(BuildContext context) async {
+    // 分享锚点需在首个 await 前取（iPad/iPhone 分享浮层必需）
+    final shareOrigin = shareOriginFrom(context);
     final options = await ExportOptionsSheet.show(context);
     if (options == null || !context.mounted) return;
 
@@ -200,12 +210,20 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
         content: jsonStr,
         fileName: fileName,
         subject: 'LMStory Data Export',
+        sharePositionOrigin: shareOrigin,
       );
       if (savedPath != null && context.mounted) {
         await showFileSavedDialog(context, savedPath);
       }
     } catch (e) {
-      if (context.mounted) _showError(context, e.toString());
+      if (context.mounted) {
+        _showError(
+          context,
+          Translations.of(context).settings.data.exportFailed(
+                error: e.toString(),
+              ),
+        );
+      }
     }
   }
 
@@ -259,13 +277,27 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
     // 快照失败标志提到 try 外（catch 分支需要区分失败原因）
     var snapshotFailed = false;
     try {
+      // 深度粗检先于预检 jsonDecode（与导入主链同口径）：极深内容若先走
+      // 预检解码会栈溢出成晦涩的 Stack Overflow 文案，提前以主链同句拒绝。
+      final previewSource =
+          content.startsWith('\uFEFF') ? content.substring(1) : content;
+      if (exceedsMaxDepth(previewSource)) {
+        if (!context.mounted) return;
+        _showError(
+          context,
+          t.settings.data.importFailed(
+            error: DataManagementService.depthLimitMessage,
+          ),
+        );
+        return;
+      }
       //  修复：版本守卫 + 备份规模预检。
       // 此前只判 ==2，未来版本的备份会被当 v1 静默解析成空会话；
       // 单会话备份选覆盖会清空全库再灌 1 个会话，需二次确认。
       Map<String, dynamic>? previewMap;
       var backupSessionCount = 0;
       try {
-        final decoded = jsonDecode(content);
+        final decoded = jsonDecode(previewSource);
         if (decoded is Map<String, dynamic>) {
           previewMap = decoded;
           final sessions = decoded['sessions'];
@@ -379,6 +411,7 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
 
   /// 导入进度弹层：不可关闭（点遮罩/返回键均不退），导入期间挡住页面
   void _showImportProgress(String message) {
+    _importProgressDismissed = false;
     showLmDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -386,6 +419,14 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
         _dismissImportProgress = () {
           if (dialogContext.mounted) Navigator.of(dialogContext).pop();
         };
+        // 弹层 builder 在下一帧才执行；若导入在首帧前就同步失败/完成，
+        // _hideImportProgress 已先跑过（此时回调还是 null），补一道迟到
+        // 关闭——否则不可关闭弹层构建后永久滞留，只能重启应用。
+        if (_importProgressDismissed) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+          });
+        }
         return PopScope(
           canPop: false,
           child: AlertDialog(
@@ -407,6 +448,7 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
   }
 
   void _hideImportProgress() {
+    _importProgressDismissed = true;
     _dismissImportProgress?.call();
     _dismissImportProgress = null;
   }
@@ -628,7 +670,12 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
     try {
       groups = await service.scanOrphanMessages();
     } catch (e) {
-      if (context.mounted) _showError(context, e.toString());
+      if (context.mounted) {
+        _showError(
+          context,
+          t.settings.data.recovery.scanFailed(error: e.toString()),
+        );
+      }
       return;
     }
 
@@ -693,7 +740,12 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
       );
       setState(_reloadStats);
     } catch (e) {
-      if (context.mounted) _showError(context, e.toString());
+      if (context.mounted) {
+        _showError(
+          context,
+          t.settings.data.recovery.failed(error: e.toString()),
+        );
+      }
     }
   }
 
@@ -1227,7 +1279,17 @@ class _AutoBackupSectionState extends ConsumerState<_AutoBackupSection> {
           Padding(
             padding: const EdgeInsets.only(bottom: SimpleSpacing.sXs),
             child: Text(
-              t.settings.data.autoBackup.sandboxNotice,
+              // 桌面备份目录在「文档」根（可见），移动端在应用私有存储
+              //（不可见）——同一句提示在桌面与用户所见直接矛盾
+              switch (defaultTargetPlatform) {
+                // macOS 沙盒容器路径与「文档」目录不同，单独口径
+                TargetPlatform.macOS =>
+                  t.settings.data.autoBackup.sandboxNoticeMacos,
+                TargetPlatform.windows ||
+                TargetPlatform.linux =>
+                  t.settings.data.autoBackup.sandboxNoticeDesktop,
+                _ => t.settings.data.autoBackup.sandboxNotice,
+              },
               style: SimpleTextStyles.caption.copyWith(
                 color: colors.warning,
                 fontWeight: FontWeight.w600,
@@ -1321,71 +1383,61 @@ class _DataCard extends StatelessWidget {
     final colors = context.lm.palette;
     final effectiveTitleColor = titleColor ?? colors.primary;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surfaceVariant,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-          child: Padding(
-            padding: const EdgeInsets.all(SimpleSpacing.sLg),
-            child: Row(
+    return context.lmUi.card(
+      context,
+      onTap: onTap,
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: titleColor == null
+                  ? colors.surface
+                  : effectiveTitleColor.withValues(alpha: 0.12),
+              borderRadius:
+                  BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
+            ),
+            child: Icon(
+              icon,
+              color: effectiveTitleColor,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: SimpleSpacing.sMd),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: titleColor == null
-                        ? colors.surface
-                        : effectiveTitleColor.withValues(alpha: 0.12),
-                    borderRadius:
-                        BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
+                Text(
+                  title,
+                  style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+                    fontSize: 20,
+                    height: 1.35,
+                    color: titleColor ?? colors.ink,
+                    fontWeight: FontWeight.w500,
                   ),
-                  child: Icon(
-                    icon,
-                    color: effectiveTitleColor,
-                    size: 22,
-                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(width: SimpleSpacing.sMd),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: SimpleTextStyles.body.copyWith(
-                          color: titleColor ?? colors.ink,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: SimpleTextStyles.caption.copyWith(
-                          color: colors.muted,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: SimpleTextStyles.caption.copyWith(
+                    color: colors.muted,
                   ),
-                ),
-                Icon(
-                  Icons.chevron_right,
-                  color: colors.faint,
-                  size: 20,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
-        ),
+          Icon(
+            Icons.chevron_right,
+            color: colors.faint,
+            size: 20,
+          ),
+        ],
       ),
     );
   }
@@ -1401,26 +1453,13 @@ class _StorageInfoSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Translations.of(context);
-    final colors = context.lm.palette;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surfaceVariant,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
-      padding: const EdgeInsets.all(SimpleSpacing.sLg),
+    return context.lmUi.card(
+      context,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            t.settings.data.storageInfo.title,
-            style: SimpleTextStyles.title3.copyWith(
-              color: colors.ink,
-              fontWeight: FontWeight.w600,
-            ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
+          SectionHeading(title: t.settings.data.storageInfo.title),
           const SizedBox(height: SimpleSpacing.sMd),
           FutureBuilder<StorageStats>(
             future: statsFuture,
@@ -1449,6 +1488,7 @@ class _StorageInfoSection extends StatelessWidget {
                   _StorageInfoRow(
                     label: t.settings.data.storageInfo.dbSize,
                     value: stats.dbSizeFormatted,
+                    prominent: true,
                   ),
                   const SizedBox(height: SimpleSpacing.sSm),
                   _StorageInfoRow(
@@ -1491,7 +1531,7 @@ class _StorageInfoSection extends StatelessWidget {
                     label: t.settings.data.storageInfo.agentEvents,
                     value: stats.agentEventCount > 0
                         ? t.settings.data.storageInfo.agentEventsValue(
-                            count: '${stats.agentEventCount}',
+                            count: stats.agentEventCount,
                             size: stats.agentEventSizeFormatted,
                           )
                         : '--',
@@ -1507,39 +1547,16 @@ class _StorageInfoSection extends StatelessWidget {
 }
 
 class _StorageInfoRow extends StatelessWidget {
-  const _StorageInfoRow({required this.label, required this.value});
-
+  const _StorageInfoRow({
+    required this.label,
+    required this.value,
+    this.prominent = false,
+  });
   final String label;
   final String value;
+  final bool prominent;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.lm.palette;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Flexible(
-          child: Text(
-            label,
-            style: SimpleTextStyles.caption.copyWith(color: colors.muted),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        const SizedBox(width: SimpleSpacing.sSm),
-        Flexible(
-          child: Text(
-            value,
-            style: SimpleTextStyles.caption.copyWith(
-              color: colors.ink,
-              fontWeight: FontWeight.w500,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.end,
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) =>
+      LabeledValue(label: label, value: value, prominent: prominent);
 }

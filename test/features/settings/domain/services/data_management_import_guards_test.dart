@@ -88,6 +88,38 @@ void main() {
       expect(result.skippedPreferences, 0);
     });
   });
+
+  group('深度粗检：数据备份导入链', () {
+    test('超深 JSON → FormatException 带明确文案（不栈溢出）', () async {
+      final deep = '[' * 600 + ']' * 600;
+      await expectLater(
+        service.importBackup(
+          '{"version": 2, "exportedAt": "x", "deep": $deep}',
+          ImportMode.append,
+        ),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('嵌套过深'),
+          ),
+        ),
+      );
+      // 拒收发生在任何写库之前
+      expect(backupRepo.calls, isEmpty);
+    });
+
+    test('带 BOM 的超深 JSON 同样被前置拒绝', () async {
+      final deep = '[' * 600 + ']' * 600;
+      await expectLater(
+        service.importBackup(
+          '\uFEFF{"version": 2, "deep": $deep}',
+          ImportMode.append,
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    });
+  });
 }
 
 class _RecordingBackupRepository implements BackupRepository {

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_selection_option.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -37,14 +36,16 @@ class ConfigDisplayModeSection extends ConsumerWidget {
           ),
           child: Column(
             children: [
-              SimpleSelectionOption(
+              context.lmUi.selectionOption(
+                context,
                 label: t.settings.general.configDisplayMode.simple,
                 isSelected: level == ConfigLevel.simple,
                 onTap: () => ref
                     .read(configLevelProvider.notifier)
                     .setLevel(ConfigLevel.simple),
               ),
-              SimpleSelectionOption(
+              context.lmUi.selectionOption(
+                context,
                 label: t.settings.general.configDisplayMode.advanced,
                 isSelected: level == ConfigLevel.advanced,
                 onTap: () => ref

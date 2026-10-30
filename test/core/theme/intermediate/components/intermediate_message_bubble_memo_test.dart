@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart' show MarkdownBody;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_markdown_body.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_markdown_body.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// story 侧 memo 链单测（照抄 chat 侧

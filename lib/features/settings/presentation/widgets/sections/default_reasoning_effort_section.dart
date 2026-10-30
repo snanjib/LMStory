@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_selection_option.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -80,7 +79,8 @@ class DefaultReasoningEffortSection extends ConsumerWidget {
                 color: colors.divider,
                 indent: SimpleSpacing.sLg,
               ),
-            SimpleSelectionOption(
+            context.lmUi.selectionOption(
+              context,
               label: options[i].$1,
               isSelected: options[i].$3,
               onTap: () => ref

@@ -30,7 +30,7 @@ Future<Uint8List> readFileBytesNative(String path) async {
 
 /// 同步读取文件内容为字节数组（原生平台）
 ///
-/// 用于外部导入等一次性本地小文件（≤10MB 导入上限）；
+/// 用于外部导入等一次性本地缓存文件（原生侧已复制到应用缓存目录）；
 /// Web 平台 stub 见 file_reader_web.dart（不会被执行）。
 Uint8List readFileBytesSyncNative(String path) {
   return File(path).readAsBytesSync();

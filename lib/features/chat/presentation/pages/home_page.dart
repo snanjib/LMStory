@@ -5,13 +5,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/shared/components/brand_logo.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_button_metrics.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/advanced/presentation/advanced_mode_flag.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
+import 'package:lmstory/features/chat/presentation/widgets/continuing_story_card.dart';
 import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
 import 'package:lmstory/features/settings/presentation/pages/provider_list_page.dart';
 import 'package:lmstory/features/settings/presentation/pages/settings_page.dart';
@@ -35,6 +40,7 @@ class HomePage extends ConsumerStatefulWidget {
     required this.onNewStory,
     required this.onSessionSelected,
     this.onNewDirector,
+    this.onDirectorWizard,
     this.showHamburgerMenu = false,
     this.onHamburgerPressed,
     this.scaffoldKey,
@@ -51,6 +57,10 @@ class HomePage extends ConsumerStatefulWidget {
 
   /// 点击"新导演"（Advanced 模式，v0.3 实验入口；flag 关闭时为 null）
   final VoidCallback? onNewDirector;
+
+  /// 点击"导演模式向导"入口行（2026-10-17 需求；与「新导演」直进
+  /// 并存，flag 关闭时为 null；compact 布局下入口行隐藏）
+  final VoidCallback? onDirectorWizard;
 
   /// 点击某个最近会话
   final ValueChanged<ChatSession> onSessionSelected;
@@ -79,6 +89,7 @@ class HomePage extends ConsumerStatefulWidget {
 
 class _HomePageState extends ConsumerState<HomePage> {
   List<ChatSession> _recentSessions = [];
+  ChatSession? _continuingStory;
   bool _isLoading = true;
 
   /// 加载失败标志（错误态提示；主页有下拉刷新自救，无需按钮）
@@ -137,7 +148,16 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
     if (mounted) {
       setState(() {
-        // 只取最近 5 个会话
+        final stories = sessions
+            .where(
+              (session) =>
+                  session.mode == ChatMode.intermediate ||
+                  session.mode == ChatMode.advanced,
+            )
+            .toList()
+          ..sort((a, b) => b.lastActiveAt.compareTo(a.lastActiveAt));
+        _continuingStory = stories.isEmpty ? null : stories.first;
+        // Keep the recent list separate from the featured narrative session.
         _recentSessions = sessions.take(5).toList();
         _isLoading = false;
         _loadFailed = false;
@@ -205,6 +225,15 @@ class _HomePageState extends ConsumerState<HomePage> {
         top: false,
         child: LayoutBuilder(
           builder: (context, constraints) {
+            final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
+            final showStory = !_isLoading &&
+                !_loadFailed &&
+                _continuingStory != null &&
+                constraints.maxHeight >=
+                    (_hasAnyApiKey ? 480 : 610) * textScale;
+            final compactLayout = showStory ||
+                constraints.maxHeight < LmLayout.homeCompactHeight * textScale;
+            final featured = showStory ? _continuingStory : null;
             return RefreshIndicator(
               onRefresh: _loadRecentSessions,
               child: RepaintBoundary(
@@ -217,27 +246,60 @@ class _HomePageState extends ConsumerState<HomePage> {
                     SliverToBoxAdapter(
                       child: SizedBox(
                         height: constraints.maxHeight,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            // App 标题区域
-                            _buildHeader(t, colors),
-                            //  修复：首次启动无 API Key 引导卡片
-                            if (!_isLoading && !_hasAnyApiKey)
-                              _buildApiKeyMissingBanner(t, colors),
-                            // 双卡入口：新建对话 + 新建故事
-                            _buildEntryCards(t, colors),
-                            // 最近会话标题
-                            _buildSectionTitle(t, colors),
-                            // 最近会话：占满剩余空间并按高度整行裁切
-                            Flexible(
-                              child: _buildRecentSessionsArea(t, colors),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: LmLayout.readingWidthOf(context),
                             ),
-                            // 底部操作区（恒定在屏底）
-                            _buildFooter(t, colors),
-                            // 底部间距
-                            const SizedBox(height: SimpleSpacing.s2xl),
-                          ],
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // App 标题区域
+                                _buildHeader(t, colors, compact: compactLayout),
+                                //  修复：首次启动无 API Key 引导卡片
+                                if (!_isLoading && !_hasAnyApiKey)
+                                  _buildApiKeyMissingBanner(t, colors),
+                                // 双卡入口：新建对话 + 新建故事
+                                if (featured != null)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: SimpleSpacing.sLg,
+                                      vertical: SimpleSpacing.sSm,
+                                    ),
+                                    child: ContinuingStoryCard(
+                                      session: featured,
+                                      compact: constraints.maxHeight <
+                                          720 * textScale,
+                                      onTap: () => widget.onSessionSelected(
+                                        featured,
+                                      ),
+                                    ),
+                                  ),
+                                _buildEntryCards(
+                                  t,
+                                  colors,
+                                  compact: compactLayout,
+                                ),
+                                // 最近会话标题
+                                _buildSectionTitle(t, colors),
+                                // 最近会话：占满剩余空间并按高度整行裁切
+                                Expanded(
+                                  child: _buildRecentSessionsArea(
+                                    t,
+                                    colors,
+                                    featuredId: showStory
+                                        ? _continuingStory?.sessionId
+                                        : null,
+                                  ),
+                                ),
+                                // 底部操作区（恒定在屏底）
+                                _buildFooter(t, colors),
+                                // 底部间距
+                                if (!compactLayout)
+                                  const SizedBox(height: SimpleSpacing.s2xl),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -253,7 +315,21 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   // ── App 标题/Logo ─────────────────────────────────────────────────
 
-  Widget _buildHeader(Translations t, LmPalette colors) {
+  Widget _buildHeader(
+    Translations t,
+    LmPalette colors, {
+    bool compact = false,
+  }) {
+    return LmArrival(
+      child: _buildHeaderContent(t, colors, compact: compact),
+    );
+  }
+
+  Widget _buildHeaderContent(
+    Translations t,
+    LmPalette colors, {
+    bool compact = false,
+  }) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         SimpleSpacing.sLg,
@@ -264,16 +340,16 @@ class _HomePageState extends ConsumerState<HomePage> {
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: compact ? 36 : 48,
+            height: compact ? 36 : 48,
             decoration: BoxDecoration(
               color: colors.primaryDim,
               borderRadius:
                   BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
             ),
-            child: const Padding(
-              padding: EdgeInsets.all(4),
-              child: BrandLogo(size: 40),
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: BrandLogo(size: compact ? 28 : 40),
             ),
           ),
           const SizedBox(width: SimpleSpacing.sMd),
@@ -304,13 +380,94 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   // ── 模式入口卡：对话 + （故事 | 导演） ────────────────────────────
 
-  Widget _buildEntryCards(Translations t, LmPalette colors) {
+  Widget _buildEntryCards(
+    Translations t,
+    LmPalette colors, {
+    bool compact = false,
+  }) {
+    return LmArrival(
+      delay: LmMotion.base,
+      child: _buildEntryCardsContent(t, colors, compact: compact),
+    );
+  }
+
+  Widget _buildEntryCardsContent(
+    Translations t,
+    LmPalette colors, {
+    bool compact = false,
+  }) {
     // 导演入口可用性：flag 开启且接线方提供回调（未开启不出现在可选 UI）
     final directorAvailable =
         ref.watch(advancedModeFlagProvider) && widget.onNewDirector != null;
+    // 向导入口行：独立于「新导演」直进（双入口并存、用户自选）
+    final wizardAvailable =
+        ref.watch(advancedModeFlagProvider) && widget.onDirectorWizard != null;
     // 故事模式入口开关：默认隐藏，在故事模式设置页可恢复；
     // 恢复后回到「对话+故事双卡 + 导演横卡」的既有布局
     final storyVisible = ref.watch(intermediateModeFlagProvider);
+    if (compact) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: SimpleSpacing.sLg,
+              vertical: SimpleSpacing.sSm,
+            ),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: _compactEntry(
+                      t.chat.home.newChat,
+                      Icons.add,
+                      widget.onNewChat,
+                    ),
+                  ),
+                  if (storyVisible) ...[
+                    const SizedBox(width: SimpleSpacing.sSm),
+                    Expanded(
+                      child: _compactEntry(
+                        t.intermediate.home.newStory,
+                        Icons.auto_stories,
+                        widget.onNewStory,
+                      ),
+                    ),
+                  ],
+                  if (directorAvailable) ...[
+                    const SizedBox(width: SimpleSpacing.sSm),
+                    Expanded(
+                      child: _compactEntry(
+                        t.advanced.home.newDirector,
+                        Icons.theater_comedy,
+                        widget.onNewDirector!,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          // 向导引导卡：compact 形态同样渲染（小卡行之后），
+          // 短屏预算由最近会话区整行裁切机制兜底
+          if (wizardAvailable)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                SimpleSpacing.sLg,
+                0,
+                SimpleSpacing.sLg,
+                SimpleSpacing.sSm,
+              ),
+              child: _buildWizardGuideCard(
+                t,
+                colors,
+                onTap: widget.onDirectorWizard!,
+              ),
+            ),
+        ],
+      );
+    }
     // 第二卡分流：故事隐藏时导演升为并排主推卡；两者皆不可用时
     // 对话卡独占整行
     final secondCard = storyVisible
@@ -379,8 +536,8 @@ class _HomePageState extends ConsumerState<HomePage> {
               horizontal: SimpleSpacing.sLg,
             ),
             child: _buildEntryCard(
-              t: t,
               colors: colors,
+              t: t,
               icon: Icons.theater_comedy,
               iconColor: colors.surface,
               iconBg: colors.warning,
@@ -391,7 +548,127 @@ class _HomePageState extends ConsumerState<HomePage> {
               horizontal: true,
             ),
           ),
+        // 向导引导卡：创建区之后的独立单行强调入口（向导地位高于普通
+        // 创建按钮，与双卡视觉区分，标题+介绍留「这是个什么」的余地）
+        if (wizardAvailable)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              SimpleSpacing.sLg,
+              SimpleSpacing.sSm,
+              SimpleSpacing.sLg,
+              SimpleSpacing.sSm,
+            ),
+            child: _buildWizardGuideCard(
+              t,
+              colors,
+              onTap: widget.onDirectorWizard!,
+            ),
+          ),
       ],
+    );
+  }
+
+  /// 向导独立引导卡：primaryDim 底 + primary 描边的整行强调卡
+  /// （参照设置页 _TemplateCard 选中容器范式；徽章 primary 底白图标，
+  /// 标题 title3 + 介绍 caption 双行，尾部 chevron）
+  Widget _buildWizardGuideCard(
+    Translations t,
+    LmPalette colors, {
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.primaryDim,
+        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
+        border: Border.all(color: colors.primary, width: 1.5),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(
+            context.lmUi.radius(LmCorner.lg),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(SimpleSpacing.sMd),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: LmButtonMetrics.minInteractiveHeight,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: colors.primary,
+                      borderRadius: BorderRadius.circular(
+                        context.lmUi.radius(LmCorner.md),
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.auto_awesome,
+                      color: colors.surface,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: SimpleSpacing.sMd),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          t.directorWizard.entryTitle,
+                          style: SimpleTextStyles.title3.copyWith(
+                            color: colors.ink,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          t.directorWizard.entryDesc,
+                          style: SimpleTextStyles.caption.copyWith(
+                            color: colors.muted,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: colors.muted),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _compactEntry(String title, IconData icon, VoidCallback onTap) {
+    final colors = context.lm.palette;
+    return context.lmUi.entryCard(
+      context,
+      onTap: onTap,
+      fallbackColor: colors.surfaceVariant,
+      horizontal: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: colors.muted, size: 20),
+          const SizedBox(height: SimpleSpacing.sXs),
+          Text(
+            title,
+            style: SimpleTextStyles.bodySm.copyWith(color: colors.ink),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
     );
   }
 
@@ -515,7 +792,16 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   // ── 最近会话区域（剩余视口内整行裁切） ─────────────────────────────
 
-  Widget _buildRecentSessionsArea(Translations t, LmPalette colors) {
+  Widget _buildRecentSessionsArea(
+    Translations t,
+    LmPalette colors, {
+    String? featuredId,
+  }) {
+    final sessions = _recentSessions
+        .where(
+          (session) => session.sessionId != featuredId,
+        )
+        .toList();
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -555,16 +841,40 @@ class _HomePageState extends ConsumerState<HomePage> {
     if (_recentSessions.isEmpty) {
       return _buildEmptyState(t, colors);
     }
+    if (sessions.isEmpty) return const SizedBox.shrink();
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final visibleCount = math.min(
-          _recentSessions.length,
+          sessions.length,
           _fittingSessionCount(
             constraints.maxHeight,
             MediaQuery.textScalerOf(context),
           ),
         );
+        // 剩余高度一行也放不下（短屏/横屏把 5 条全裁掉）时不再留空白——
+        // 给一行指路提示（固定一屏形态不动，完整列表在侧边栏）。
+        if (visibleCount == 0) {
+          return Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.menu_open_outlined, size: 14, color: colors.muted),
+                const SizedBox(width: SimpleSpacing.sXs),
+                Flexible(
+                  child: Text(
+                    t.chat.home.recentAllInSidebar,
+                    style: SimpleTextStyles.caption.copyWith(
+                      color: colors.muted,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -578,7 +888,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   indent: SimpleSpacing.sLg,
                   endIndent: SimpleSpacing.sLg,
                 ),
-              _buildSessionItem(_recentSessions[i], colors),
+              _buildSessionItem(sessions[i], colors),
             ],
           ],
         );

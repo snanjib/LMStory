@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
+import 'package:lmstory/core/llm/llm_usage.dart';
 import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
 import 'package:lmstory/core/utils/logger.dart';
@@ -946,6 +947,74 @@ void main() {
       await controller.deleteRound(messages[2]);
 
       expect(controller.state.session.currentNarrativeTime, isNull);
+    });
+  });
+
+  group('IntermediateChatController - 上下文用量估算兜底（端点未回 usage）', () {
+    test('端点真实 usage：分项落 state、估算标记 false、命中率累计累加', () async {
+      final controller = _buildController(
+        session: _realSession(),
+        chatRepo: _FakeChatRepository(),
+      );
+      await controller.recordRequestUsageForTest(
+        const LlmUsage(
+          promptTokens: 100,
+          completionTokens: 20,
+          cacheReadTokens: 60,
+        ),
+      );
+
+      expect(controller.state.lastPromptTokens, 100);
+      expect(controller.state.lastCompletionTokens, 20);
+      expect(controller.state.lastCacheReadTokens, 60);
+      expect(controller.state.lastUsageIsEstimated, isFalse);
+      expect(controller.state.contextPromptTokensTotal, 100);
+      expect(controller.state.contextCacheReadTokensTotal, 60);
+    });
+
+    test('端点未回 usage：本地估算 prompt/completion，缓存清 null，命中率累计不动', () async {
+      final controller = _buildController(
+        session: _realSession(),
+        chatRepo: _FakeChatRepository(),
+      );
+      await controller.recordRequestUsageForTest(
+        null,
+        promptTexts: [
+          '系统提示词：你是一名叙事引擎。',
+          '用户：主角推门进入北境的暴风雪。',
+        ],
+        completionText: '门在风中呻吟着合上了，火把的光摇曳不定。',
+      );
+
+      expect(controller.state.lastPromptTokens, greaterThan(0));
+      expect(controller.state.lastCompletionTokens, greaterThan(0));
+      // 缓存分项本地不可估算：显式清 null（面板「—」）
+      expect(controller.state.lastCacheReadTokens, isNull);
+      expect(controller.state.lastUsageIsEstimated, isTrue);
+      // 命中率口径只吃端点真实数据
+      expect(controller.state.contextPromptTokensTotal, 0);
+      expect(controller.state.contextCacheReadTokensTotal, 0);
+    });
+
+    test('估算轮覆盖上一轮真实缓存分项（口径不混排）；无可估来源保持现状', () async {
+      final controller = _buildController(
+        session: _realSession(),
+        chatRepo: _FakeChatRepository(),
+      );
+      await controller.recordRequestUsageForTest(
+        const LlmUsage(promptTokens: 500, cacheReadTokens: 300),
+      );
+      // 下一轮端点没回 usage：估算值不得与上一轮真实缓存分项混排
+      await controller.recordRequestUsageForTest(null, completionText: '新的一轮输出');
+
+      expect(controller.state.lastUsageIsEstimated, isTrue);
+      expect(controller.state.lastPromptTokens, isNull);
+      expect(controller.state.lastCacheReadTokens, isNull);
+
+      // payload 与正文都缺失（流异常截断）：state 原样不动
+      final before = controller.state;
+      await controller.recordRequestUsageForTest(null);
+      expect(identical(before, controller.state), isTrue);
     });
   });
 }

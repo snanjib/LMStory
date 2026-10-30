@@ -419,8 +419,13 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
 
       if (_streamRunner.isCancelled) return;
 
-      // 主请求 usage 入 state（reviewing 启用时随后被其覆盖）
-      _recordRequestUsage(result.usage);
+      // 主请求 usage 入 state（reviewing 启用时随后被其覆盖）；
+      // 端点未回 usage 时回退本地估算（面板「≈」标注）
+      await _recordRequestUsage(
+        result.usage,
+        promptTexts: _promptTextsForEstimate(messages),
+        completionText: result.displayText,
+      );
 
       final generatedText = result.displayText;
       round
@@ -954,8 +959,13 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
 
       if (_streamRunner.isCancelled) return;
 
-      // 主请求 usage 入 state（reviewing 是上下文最全的请求，终值口径）
-      _recordRequestUsage(result.usage);
+      // 主请求 usage 入 state（reviewing 是上下文最全的请求，终值口径）；
+      // 端点未回 usage 时回退本地估算（面板「≈」标注）
+      await _recordRequestUsage(
+        result.usage,
+        promptTexts: _promptTextsForEstimate(messages),
+        completionText: result.displayText,
+      );
 
       final reply = result.displayText;
       round

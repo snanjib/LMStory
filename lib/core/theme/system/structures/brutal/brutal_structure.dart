@@ -196,7 +196,8 @@ class BrutalStructure implements LmStructure {
           borderRadius: BorderRadius.circular(BrutalRadii.cornerNone),
           side: BorderSide(color: frame, width: BrutalRadii.frameOverlay),
         ),
-        titleTextStyle: BrutalTextStyles.title2.copyWith(color: palette.ink),
+        titleTextStyle: BrutalTextStyles.title2
+            .copyWith(color: palette.ink, fontSize: 24, height: 1.3),
         contentTextStyle: BrutalTextStyles.body.copyWith(color: palette.muted),
         actionsPadding: const EdgeInsets.fromLTRB(
           LmSpacing.sLg,

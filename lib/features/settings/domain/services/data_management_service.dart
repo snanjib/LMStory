@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-
+import 'package:lmstory/core/utils/json_depth_guard.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
@@ -44,6 +44,10 @@ class DataManagementService {
 
   static const Logger _importLogger = Logger('DataManagementService.import');
 
+  /// JSON 嵌套深度超限的导入错误文案（主链抛出与页面预检提前拒绝共用，
+  /// 随当前 UI 语言）。
+  static String get depthLimitMessage => t.settings.data.backupTooDeep;
+
   /// 判定 JSON 内容是否为应用数据备份（全量或单会话导出，v1/v2/v3）。
   ///
   /// 外部"打开方式/分享"的 JSON 先经此分流再走资源库导入——备份的顶层
@@ -55,6 +59,9 @@ class DataManagementService {
   static bool looksLikeAppBackupJson(String content) {
     var source = content;
     if (source.startsWith('\uFEFF')) source = source.substring(1);
+    // 深度粗检先于 jsonDecode（与资源导入入口同口径）：超深内容不判为
+    // 备份，交还资源导入链以其明确的深度错误拒绝。
+    if (exceedsMaxDepth(source)) return false;
     final dynamic root;
     try {
       root = jsonDecode(source);
@@ -183,7 +190,17 @@ class DataManagementService {
     Future<void> Function()? preImportSnapshot,
     bool importApiKeys = false,
   }) async {
-    final jsonData = jsonDecode(jsonContent);
+    // 与 looksLikeAppBackupJson 同口径剥 BOM：记事本等编辑器另存的备份
+    // 带 U+FEFF 前缀，不剥则「确认可导入」后主链 jsonDecode 必败。
+    final source = jsonContent.startsWith('\uFEFF')
+        ? jsonContent.substring(1)
+        : jsonContent;
+    // 深度粗检先于 jsonDecode（与资源导入入口同口径），避免极深内容
+    // 递归解析栈溢出成晦涩的 Stack Overflow 文案。
+    if (exceedsMaxDepth(source)) {
+      throw FormatException(depthLimitMessage);
+    }
+    final jsonData = jsonDecode(source);
     final version =
         jsonData is Map<String, dynamic> ? jsonData['version'] : null;
 

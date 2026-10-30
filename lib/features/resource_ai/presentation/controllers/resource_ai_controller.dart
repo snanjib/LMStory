@@ -28,6 +28,7 @@ import 'package:lmstory/features/resource_ai/domain/services/draft_change_summar
 import 'package:lmstory/features/resource_ai/domain/services/resource_ai_prompts.dart';
 import 'package:lmstory/features/resource_ai/domain/services/resource_ai_session.dart';
 import 'package:lmstory/features/resource_ai/domain/services/resource_ai_tools.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 
 enum ResourceAiPhase {
   /// 未选模型（等待内联选择或全局配置）
@@ -52,7 +53,12 @@ enum ResourceAiPhase {
 enum ResourceAiMessageRole { user, assistant, material, tool }
 
 /// fatal/保存失败的结构化错误（UI 按 kind 映射 slang 文案，detail 为技术细节）。
-enum ResourceAiErrorKind { modelUnavailable, turnIncomplete, saveFailed }
+enum ResourceAiErrorKind {
+  modelUnavailable,
+  turnIncomplete,
+  saveFailed,
+  nameMissing
+}
 
 class ResourceAiError {
   const ResourceAiError({required this.kind, required this.detail});
@@ -480,6 +486,23 @@ class ResourceAiController extends ChangeNotifier {
       return null;
     }
 
+    // 空名守卫：AI 未定名/用户未补名 → 失败信封（不落「未命名」条目）。
+    // 草稿现场保留，用户补名或让 AI 补名后可再保存。
+    final nameMissing = kind == DraftKind.characterCard
+        ? (draft.card ?? CardDraft.initial())
+            .value(CardField.name)
+            .trim()
+            .isEmpty
+        : (draft.book ?? WorldbookDraft.initial()).name.trim().isEmpty;
+    if (nameMissing) {
+      return _saveFailed(
+        const ResourceAiError(
+          kind: ResourceAiErrorKind.nameMissing,
+          detail: '',
+        ),
+      );
+    }
+
     _setState(
       ResourceAiState(
         phase: ResourceAiPhase.saving,
@@ -498,12 +521,14 @@ class ResourceAiController extends ChangeNotifier {
           draft: draft.card ?? CardDraft.initial(),
           existingCardId: overwrite ? targetCardId : null,
           originalRawJson: overwrite ? originalRawJson : null,
+          defaultName: t.resourceAi.unnamedCard,
         );
       } else {
         await _saveService.saveWorldbook(
           draft: draft.book ?? WorldbookDraft.initial(),
           existingBookId: overwrite ? targetBookId : null,
           originalRawJson: overwrite ? originalRawJson : null,
+          defaultName: t.resourceAi.unnamedBook,
         );
       }
       _setState(

@@ -18,6 +18,7 @@ import 'package:lmstory/features/intermediate/presentation/controllers/intermedi
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_review_enabled_section.dart'
     show IntermediateReviewEnabledSection;
 import 'package:lmstory/features/templates/domain/entities/template.dart';
+import 'package:lmstory/features/templates/presentation/support/template_l10n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 中级模式会话设置 — 工具调用开关（夜航主题，2 态下拉）。
@@ -228,7 +229,7 @@ void showSystemPromptTemplatePicker(
               final template = templates[index];
               return ListTile(
                 title: Text(
-                  template.name,
+                  template.localizedName(t),
                   style: IntermediateTextStyles.bodyUi.copyWith(
                     color: colors.ink,
                     fontWeight: FontWeight.w500,
@@ -237,7 +238,7 @@ void showSystemPromptTemplatePicker(
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                  template.content,
+                  template.localizedContent(t),
                   style: IntermediateTextStyles.caption
                       .copyWith(color: colors.muted),
                   maxLines: 2,

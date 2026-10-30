@@ -93,7 +93,7 @@ class BubbleMessageContent extends StatelessWidget {
               colors: colors,
             ),
           // Main content
-          if (isStreaming && !isThinking && content.isEmpty)
+          if (isStreaming && content.isEmpty)
             BubbleBouncingDotsIndicator(colors: colors)
           else if (content.isNotEmpty || (isStreaming && !isThinking))
             Row(

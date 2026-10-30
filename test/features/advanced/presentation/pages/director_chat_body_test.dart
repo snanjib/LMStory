@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_compaction_summary_card.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_actions.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_navigation.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_compaction_summary_card.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_markdown_body.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_actions.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_navigation.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/core/utils/smooth_follow_scroller.dart'
     show streamingFollowCushionPx;
@@ -1496,7 +1496,7 @@ void main() {
 
   // ── ：阅读行宽钳制 ─────────────────────
   group('G-27：阅读行宽钳制', () {
-    testWidgets('宽屏下稿件正文行宽不超过 readingWidth（720）', (tester) async {
+    testWidgets('宽屏下稿件正文行宽不超过 readingWidth（800）', (tester) async {
       tester.view.physicalSize = const Size(1280, 900);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -1519,8 +1519,72 @@ void main() {
       final cardWidth = tester.getSize(find.text(longText)).width;
       expect(
         cardWidth,
-        lessThan(720),
+        lessThan(800),
         reason: '宽屏（1280px 视口）下稿件卡应钳制在 readingWidth 内并居中',
+      );
+    });
+
+    testWidgets('宽屏下整列进版心：用户气泡与幕后折叠组与正文同列', (tester) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final artifacts = <int, StoryRoundArtifacts>{
+        1: StoryRoundArtifacts(
+          sessionId: 'dir-1',
+          turnNumber: 1,
+          createdAt: DateTime(2026),
+          agentTimeline: const [
+            AgentTimelineBlock(
+              kind: AgentTimelineKind.action,
+              stepIndex: 0,
+              action: AgentWorkStep(
+                toolName: 'search_story',
+                callId: 'c1',
+                title: '「古碑」',
+              ),
+            ),
+          ],
+        ),
+      };
+      await tester.pumpWidget(
+        wrap(
+          AdvancedChatState(
+            phase: IntermediatePhase.idle,
+            messages: [_message('user', '推进剧情'), _message('assistant', '正文')],
+            retryCounts: const {},
+            session: _testSession(),
+            artifactsByTurnNumber: artifacts,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // 用户气泡（含动作行）不超出版心（列表已整体收窄；行内仍有
+      // 92% 列宽等自身约束，这里只守"不超版心"的上界）。
+      // 流式版心：1280 窗口下 = max(800, 1280×85%) = 1088
+      expect(
+        tester.getSize(find.text('推进剧情')).width,
+        lessThan(1088),
+      );
+      // 幕后折叠组（工作状态行）与用户气泡水平范围一致（同列）：
+      // 折叠组标题行不再通铺整窗
+      final bubbleRight = tester.getTopRight(find.text('推进剧情')).dx;
+      final groupRow = find.byType(DirectorWorkGroup);
+      expect(groupRow, findsOneWidget);
+      expect(
+        tester.getSize(groupRow).width,
+        lessThan(1088),
+        reason: '幕后折叠组应与正文同列（版心内），不得通铺整窗',
+      );
+      // 版心（1088）在 1280 视口居中：列表右缘 = 1280/2 + 1088/2 = 1184，
+      // 减横向 padding 后内容右缘 1172；气泡右缘贴版心而不再贴窗口右缘
+      expect(bubbleRight, lessThan(1172), reason: '用户气泡右缘应在版心内');
+      expect(
+        bubbleRight,
+        greaterThan(1000),
+        reason: '用户气泡仍右对齐版心右缘，而非失去右对齐',
       );
     });
   });
@@ -1806,6 +1870,157 @@ void main() {
           )
           .fontScale;
       expect(bubble, 1.5, reason: '用户气泡随全局字号缩放');
+    });
+  });
+
+  // 回归：工作态直播把指令气泡（pending）挤出视口时，
+  // 顶部显示可点击的「正在执行的指示」浮条；点击滚回指令气泡。
+  group('工作态指示浮条（指令气泡出视口）', () {
+    ChatMessage msg(String id, String role, String content) => ChatMessage(
+          messageId: id,
+          sessionId: 'dir-1',
+          role: role,
+          content: content,
+          createdAt: DateTime(2026),
+        );
+
+    const instruction = '让主角进入地下城探险';
+
+    AdvancedChatState stateOf({
+      required IntermediatePhase phase,
+      required List<AgentLiveBlock> blocks,
+      required List<AgentWorkStep> steps,
+    }) {
+      return AdvancedChatState(
+        phase: phase,
+        messages: const [],
+        retryCounts: const {},
+        session: _testSession(),
+        pendingUserMessage: msg('p1', 'user', instruction),
+        liveBlocks: blocks,
+        agentSteps: steps,
+      );
+    }
+
+    List<AgentWorkStep> stepsFor(String prefix, int count) =>
+        List<AgentWorkStep>.generate(
+          count,
+          (i) => AgentWorkStep(
+            callId: '$prefix$i',
+            toolName: 'search_story',
+            title: '检索',
+            startedAtMs: 0,
+          ),
+        );
+
+    /// 直播内容长到把 pending 气泡（列表倒数第 2 项之前）挤出手机视口。
+    final longStreamingBlocks = <AgentLiveBlock>[
+      for (var i = 0; i < 8; i++)
+        AgentLiveBlock(
+          kind: AgentLiveBlockKind.thinking,
+          stepIndex: i,
+          text: '思考片段 $i ' * 20,
+        ),
+      AgentLiveBlock(
+        kind: AgentLiveBlockKind.text,
+        stepIndex: 9,
+        text: '夜色沉下来，长稿件流式正文。' * 60,
+      ),
+    ];
+
+    final stripFinder = find.text('正在执行的指示 · $instruction');
+
+    testWidgets('失败态指令可见→无浮条；续跑直播挤出→浮条出现；点击回看后消失', (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // ① 失败态：折叠组单行 + 短思考块，指令气泡在视口内 → 无浮条
+      await tester.pumpWidget(
+        wrap(
+          stateOf(
+            phase: IntermediatePhase.failed,
+            blocks: const [
+              AgentLiveBlock(
+                kind: AgentLiveBlockKind.thinking,
+                stepIndex: 0,
+                text: '想了想',
+              ),
+            ],
+            steps: stepsFor('c', 2),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text(instruction), findsOneWidget);
+      expect(stripFinder, findsNothing);
+
+      // ② 续跑直播态：直播尾区把指令气泡挤出视口 → 浮条出现
+      await tester.pumpWidget(
+        wrap(
+          stateOf(
+            phase: IntermediatePhase.reviewing,
+            blocks: longStreamingBlocks,
+            steps: stepsFor('r', 5),
+          ),
+        ),
+      );
+      await tester.pump();
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(stripFinder, findsOneWidget);
+
+      // ③ 点击浮条 → 滚回指令气泡（重新可见）→ 浮条消失
+      await tester.tap(stripFinder);
+      await tester.pump();
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text(instruction), findsOneWidget);
+      expect(stripFinder, findsNothing);
+    });
+
+    testWidgets('收工（idle）后浮条不显示', (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        wrap(
+          stateOf(
+            phase: IntermediatePhase.reviewing,
+            blocks: longStreamingBlocks,
+            steps: stepsFor('r', 5),
+          ),
+        ),
+      );
+      await tester.pump();
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(stripFinder, findsOneWidget);
+
+      // 收工：pending 落库清空 + liveBlocks 折叠 → 浮条随之消失
+      await tester.pumpWidget(
+        wrap(
+          AdvancedChatState(
+            phase: IntermediatePhase.idle,
+            messages: [
+              msg('u1', 'user', instruction),
+              msg('a1', 'assistant', '正文'),
+            ],
+            retryCounts: const {},
+            session: _testSession(),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(stripFinder, findsNothing);
     });
   });
 }

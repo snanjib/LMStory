@@ -106,7 +106,7 @@ class GeminiSseParser {
         } catch (e) {
           yield LlmStreamError(
             'Failed to parse Gemini SSE data: $e',
-            code: 'PARSE_ERROR',
+            code: 'FORMAT_ERROR',
           );
         }
       }

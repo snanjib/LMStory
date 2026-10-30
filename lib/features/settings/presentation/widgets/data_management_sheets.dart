@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
@@ -62,15 +63,7 @@ class _ExportOptionsSheetState extends State<ExportOptionsSheet> {
           children: [
             _Handle(colors: colors),
             const SizedBox(height: SimpleSpacing.sMd),
-            Text(
-              t.settings.data.exportOptions.title,
-              style: SimpleTextStyles.title2.copyWith(
-                color: colors.ink,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
+            PanelHeading(title: t.settings.data.exportOptions.title),
             const SizedBox(height: SimpleSpacing.sMd),
             _OptionTile(
               label: t.settings.data.exportOptions.sessions,
@@ -96,6 +89,18 @@ class _ExportOptionsSheetState extends State<ExportOptionsSheet> {
               value: _includeGlobalAssets,
               onChanged: (v) => setState(() => _includeGlobalAssets = v),
             ),
+            // 仅勾世界资产时导出保持禁用——世界资产随其他域一并导出，
+            // 禁用无解释会被当成坏按钮
+            if (!_includeSessions &&
+                !_includePresets &&
+                !_includePreferences &&
+                _includeGlobalAssets) ...[
+              const SizedBox(height: SimpleSpacing.sSm),
+              Text(
+                t.settings.data.exportOptions.globalAssetsOnlyHint,
+                style: SimpleTextStyles.caption.copyWith(color: colors.muted),
+              ),
+            ],
             const Divider(height: SimpleSpacing.sXl),
             // API Key 独立开关：仅当选择 API 供应商时可用
             Opacity(
@@ -247,15 +252,7 @@ class _ImportModeSheetState extends State<ImportModeSheet> {
           children: [
             _Handle(colors: colors),
             const SizedBox(height: SimpleSpacing.sMd),
-            Text(
-              t.settings.data.importMode.title,
-              style: SimpleTextStyles.title2.copyWith(
-                color: colors.ink,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
+            PanelHeading(title: t.settings.data.importMode.title),
             const SizedBox(height: SimpleSpacing.sMd),
             _ModeTile(
               title: t.settings.data.importMode.append,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
@@ -58,39 +59,52 @@ class InputToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(
-        left: LmSpacing.sMd,
-        right: LmSpacing.sMd,
-        bottom: LmSpacing.s2xs,
-      ),
-      child: Row(
-        children: [
-          _ToolbarButton(
-            icon: Icons.format_quote_outlined,
-            label: Translations.of(context).intermediate.chat.toolbar.addQuote,
-            onPressed: onAddQuote,
+    // 宽屏版心对齐——工具行内容（按钮 + 行末 trailing chip）与正文同版心，
+    // 不再把上下文圆环推到窗口最右缘。正文列的阅读限宽是**无条件**的
+    //（>800 即收窄），工具行必须同口径用裸钳制而不是 LmMeasure 的
+    // ≥1280 门，否则 800–1280 段会出现"正文已收窄、工具行仍通铺"的错位。
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
+        child: Padding(
+          padding: const EdgeInsets.only(
+            left: LmSpacing.sMd,
+            right: LmSpacing.sMd,
+            bottom: LmSpacing.s2xs,
           ),
-          const SizedBox(width: LmSpacing.sSm),
-          _ToolbarButton(
-            icon: Icons.rounded_corner,
-            label: Translations.of(context).intermediate.chat.toolbar.addParen,
-            onPressed: onAddParen,
+          child: Row(
+            children: [
+              _ToolbarButton(
+                icon: Icons.format_quote_outlined,
+                label:
+                    Translations.of(context).intermediate.chat.toolbar.addQuote,
+                onPressed: onAddQuote,
+              ),
+              const SizedBox(width: LmSpacing.sSm),
+              _ToolbarButton(
+                icon: Icons.rounded_corner,
+                label:
+                    Translations.of(context).intermediate.chat.toolbar.addParen,
+                onPressed: onAddParen,
+              ),
+              const SizedBox(width: LmSpacing.sSm),
+              _ToolbarButton(
+                icon: Icons.auto_awesome_outlined,
+                label:
+                    Translations.of(context).intermediate.chat.toolbar.suggest,
+                onPressed:
+                    canSuggest && !isGeneratingSuggest ? onSuggest : null,
+                isLoading: isGeneratingSuggest,
+                tooltip: Translations.of(context)
+                    .intermediate
+                    .chat
+                    .toolbar
+                    .suggestTooltip,
+              ),
+              if (trailing != null) ...[const Spacer(), trailing!],
+            ],
           ),
-          const SizedBox(width: LmSpacing.sSm),
-          _ToolbarButton(
-            icon: Icons.auto_awesome_outlined,
-            label: Translations.of(context).intermediate.chat.toolbar.suggest,
-            onPressed: canSuggest && !isGeneratingSuggest ? onSuggest : null,
-            isLoading: isGeneratingSuggest,
-            tooltip: Translations.of(context)
-                .intermediate
-                .chat
-                .toolbar
-                .suggestTooltip,
-          ),
-          if (trailing != null) ...[const Spacer(), trailing!],
-        ],
+        ),
       ),
     );
   }

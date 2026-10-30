@@ -267,7 +267,7 @@ class AnthropicSseParser {
     } catch (e) {
       yield LlmStreamError(
         'Failed to parse Anthropic SSE data: $e',
-        code: 'PARSE_ERROR',
+        code: 'FORMAT_ERROR',
       );
       return;
     }

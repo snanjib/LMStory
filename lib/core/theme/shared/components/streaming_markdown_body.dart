@@ -86,6 +86,15 @@ class _StreamingMarkdownBodyState extends State<StreamingMarkdownBody>
   final List<int> _frozenStarts = [];
   final List<Widget> _frozenWidgets = [];
 
+  /// 切块扫描增量化（批2）：append 流式下每帧只扫新增行，
+  /// 替换/收缩自动全量重建（见 MarkdownBlockStartsTracker）。
+  final MarkdownBlockStartsTracker _startsTracker =
+      MarkdownBlockStartsTracker();
+
+  /// 判纯增量化（批2）：尾窗「是否全纯」按行缓存，失败行
+  /// O(1) 短路（见 StreamingPlainTextGate）。
+  final StreamingPlainTextGate _plainGate = StreamingPlainTextGate();
+
   /// 冻结前缀覆盖长度（= 最后一个冻结块结束偏移；0 = 无冻结）
   int _frozenPrefixEnd = 0;
 
@@ -145,7 +154,7 @@ class _StreamingMarkdownBodyState extends State<StreamingMarkdownBody>
       return const SizedBox.shrink();
     }
 
-    final starts = markdownBlockStarts(data);
+    final starts = _startsTracker.scan(data);
     final tailBlockCount = widget.unstableTailBlocks < starts.length
         ? widget.unstableTailBlocks
         : starts.length;
@@ -177,6 +186,11 @@ class _StreamingMarkdownBodyState extends State<StreamingMarkdownBody>
     _frozenPrefixEnd = targetEnd;
 
     final tail = data.substring(_frozenPrefixEnd);
+    // 尾窗块起点由全文 starts 推导（块起点处扫描器状态与尾串新起扫描
+    // 等价：inFence/inMath 恒 false、延续判定不吃前文状态），消灭单块
+    // 超长文的每帧二次全文扫描。防御回退：frozenPrefixEnd 不在 starts
+    // 中（追加语义破坏，理论不可达）时按原路现扫。
+    final tailStarts = _deriveTailStarts(starts, tail);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -188,10 +202,36 @@ class _StreamingMarkdownBodyState extends State<StreamingMarkdownBody>
         if (_frozenWidgets.isNotEmpty) SizedBox(height: widget.blockGap),
         KeyedSubtree(
           key: const ValueKey('streaming-tail'),
-          child: _buildTail(tail),
+          child: _buildTail(data, tail, tailStarts),
         ),
       ],
     );
+  }
+
+  /// 尾窗块起点（尾坐标，首元素恒 0）。frozenPrefixEnd ∈ starts 时由全文
+  /// starts 偏移推导（与 markdownBlockStarts(tail) 恒等），否则回退现扫。
+  List<int> _deriveTailStarts(List<int> starts, String tail) {
+    final base = _frozenPrefixEnd;
+    // starts 升序，二分找 base
+    var lo = 0;
+    var hi = starts.length;
+    var idx = -1;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (starts[mid] < base) {
+        lo = mid + 1;
+      } else if (starts[mid] > base) {
+        hi = mid;
+      } else {
+        idx = mid;
+        break;
+      }
+    }
+    if (idx < 0) return markdownBlockStarts(tail);
+    return [
+      0,
+      for (var k = idx + 1; k < starts.length; k++) starts[k] - base,
+    ];
   }
 
   ///  纯文本快速路径 +  新增段淡入 + R2（2026-09-10 复验修复二）：
@@ -214,19 +254,20 @@ class _StreamingMarkdownBodyState extends State<StreamingMarkdownBody>
   /// 为 null 时整段禁用。冻结块一律走 `blockBuilder`（历史块只构建一次）。
   /// 淡入为布局中性实现（R，无占位盒/无盒预算），无障碍
   /// （disableAnimations）与重生成替换不淡入。
-  Widget _buildTail(String tail) {
+  Widget _buildTail(String data, String tail, List<int> tailStarts) {
     final plainStyle = widget.plainTextStyle;
     if (plainStyle != null) {
-      final tailStarts = markdownBlockStarts(tail);
       if (tailStarts.length <= 1) {
         final plainTail = tail.trim();
-        if (plainTail.isNotEmpty && looksLikePlainText(plainTail)) {
+        if (plainTail.isNotEmpty &&
+            _plainGate.isPlainFrom(data, _frozenPrefixEnd)) {
           return _buildPlainTail(plainTail, plainStyle);
         }
       } else {
         final lastStart = tailStarts.last;
         final lastBlock = tail.substring(lastStart).trim();
-        if (lastBlock.isNotEmpty && looksLikePlainText(lastBlock)) {
+        if (lastBlock.isNotEmpty &&
+            _plainGate.isPlainFrom(data, _frozenPrefixEnd + lastStart)) {
           final head = tail.substring(0, lastStart);
           return Column(
             mainAxisSize: MainAxisSize.min,
@@ -293,5 +334,9 @@ class _StreamingMarkdownBodyState extends State<StreamingMarkdownBody>
     _frozenStarts.clear();
     _frozenWidgets.clear();
     _frozenPrefixEnd = 0;
+    // 扫描/判纯缓存随冻结缓存一并失效（tracker 自身可检测替换，这里
+    // 显式重置保持语义单一：_reset 之后两者都回到首观察态）。
+    _startsTracker.reset();
+    _plainGate.reset();
   }
 }

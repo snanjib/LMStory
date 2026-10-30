@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:lmstory/core/agent/agent_budget.dart';
 import 'package:lmstory/core/agent/agent_cancellation.dart';
@@ -11,7 +10,7 @@ import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
 import 'package:lmstory/core/agent/agent_waterfall.dart';
 import 'package:lmstory/core/agent/agent_workbench_reminder.dart';
 import 'package:lmstory/core/agent/doom_loop_detector.dart';
-import 'package:lmstory/core/network/retry_after.dart';
+import 'package:lmstory/core/network/retry_policy.dart';
 import 'package:lmstory/core/utils/logger.dart';
 
 // ==================== 瀑布钩子类型（dsh 四钩子）====================
@@ -114,6 +113,8 @@ class AgentTurnResult {
   });
 
   final AgentStopReason reason;
+
+  /// 本轮完成的总步数（携带续跑种子时含上次尝试已完成的步数）
   final int steps;
 
   /// 本轮追加到 surface 的全部消息（assistant/tool/注入消息）
@@ -142,6 +143,25 @@ class AgentTurnResult {
       reason == AgentStopReason.completedByTool;
 }
 
+/// 续跑种子：上次尝试已完成的消耗（失败后从事件日志续跑同一轮时携带）
+///
+/// 种子化的是**预算执法与步号连续性**，不是事件报量——usage 累计器仍从
+/// 零计（本次尝试自己的用量），事件日志各段各报各的，聚合面相加即真实
+/// 总消耗。步数种子同时充当首个 step 的 stepIndex 基数，直播时间线与
+/// durable 事件的步号跨尝试连续不重叠。
+class AgentResumeSeed {
+  const AgentResumeSeed({
+    this.initialSteps = 0,
+    this.priorTotalTokens = 0,
+  });
+
+  /// 上次尝试已完成的 step 数（新 step 从该序号起；计入 maxSteps 余量）
+  final int initialSteps;
+
+  /// 上次尝试已消耗的 token（计入 maxTotalTokens 余量执法，不进事件报量）
+  final int priorTotalTokens;
+}
+
 /// 单轮执行规格
 class AgentTurnSpec {
   const AgentTurnSpec({
@@ -163,6 +183,7 @@ class AgentTurnSpec {
     this.onToolProgress,
     this.onToolArgDelta,
     this.overflowCompactor,
+    this.resumeSeed,
   });
 
   final String sessionId;
@@ -219,6 +240,9 @@ class AgentTurnSpec {
 
   /// 溢出自愈压缩器；null = 溢出不自愈（维持原错误路径）
   final AgentOverflowCompactor? overflowCompactor;
+
+  /// 续跑种子；null = 全新轮（步号从 0 起、预算全额）
+  final AgentResumeSeed? resumeSeed;
 }
 
 /// AgentRunner：turn/step 循环（opencode 三层中的 runLoop+process 层）
@@ -263,11 +287,15 @@ class AgentRunner {
     // error 停轮的原始异常（类型化错误码判定依据）
     Object? crashError;
     spec.events.emit(
-      AgentTurnStarted(maxSteps: spec.budget.maxSteps),
+      AgentTurnStarted(
+        maxSteps: spec.budget.maxSteps,
+        resumed: spec.resumeSeed != null,
+      ),
     );
 
     try {
-      final outcome = _TurnOutcome();
+      final outcome =
+          _TurnOutcome(initialSteps: spec.resumeSeed?.initialSteps ?? 0);
       await _runSteps(
         spec: spec,
         working: working,
@@ -358,12 +386,17 @@ class AgentRunner {
         );
       }
       final tokenBudget = spec.budget.maxTotalTokens;
+      // 续跑种子：上次尝试已耗 token 计入余量执法（事件报量不含种子，
+      // 见 AgentResumeSeed——聚合面各段相加即真实总消耗）
+      final priorTokens = spec.resumeSeed?.priorTotalTokens ?? 0;
       if (budgetTrigger == null &&
           tokenBudget != null &&
-          usage.totalTokens >= tokenBudget) {
+          usage.totalTokens + priorTokens >= tokenBudget) {
         budgetTrigger = (
           AgentStopReason.budgetTokens,
-          'token 累计消耗达上限（$tokenBudget）',
+          priorTokens > 0
+              ? 'token 累计消耗达上限（$tokenBudget，含上次尝试 $priorTokens）'
+              : 'token 累计消耗达上限（$tokenBudget）',
         );
       }
       final duration = spec.budget.maxDuration;
@@ -731,6 +764,11 @@ class AgentRunner {
     );
     var requestMessages = outgoing;
     var attempt = 0;
+    // 2026-10-15 批 E：重试判定/退避/预算读共享 RetryPolicy（契约层；
+    // 判定表单源——网关归一码直接查表，次数仍由导演侧
+    // budget.maxRequestRetries 覆盖项控制，默认 5 与 P5 对齐）
+    const retryPolicy = RetryPolicy();
+    var cumulativeWait = Duration.zero;
     while (true) {
       try {
         spec.events
@@ -828,7 +866,11 @@ class AgentRunner {
             //（与修复前 400 不可重试的行为一致，但带上归一后的明确原因）
             return AgentRequestErrorAbort('$message（上下文超限，已无法继续）');
           }
-          if (!e.retryable) {
+          // 判定双源合一：e.retryable 是网关归一产物（其判定已委托共享
+          // 表）——尊重网关显式标注；再查共享表兜底（code 语义级判定，
+          // 如 AUTH/BAD_REQUEST），两源任一说不重试即停。
+          if (!e.retryable ||
+              !retryPolicy.isRetryable(e.code ?? e.semantic)) {
             return AgentRequestErrorAbort('$message（不可重试错误）');
           }
           if (attempt >= spec.budget.maxRequestRetries) {
@@ -847,16 +889,32 @@ class AgentRunner {
             attempt++;
             //  修复：请求错误重试加指数退避——此前立即重发，
             // 429/限流场景大概率再撞，徒增失败步与 token 消耗。
-            // 优先尊重服务端 Retry-After 冷却指示（封顶 60s）；无指示时
-            // 指数退避（500ms 起翻倍封顶 4s）+ ±25% jitter。等待期间尊重取消。
-            final delay = retryDelayFor(e, attempt);
+            // 2026-10-15 批 E：退避改读共享 RetryPolicy（判定/退避/预算
+            // 单源；封顶 4s→15s，EMPTY/FORMAT 立即重试）+ P6 预算闸
+            //（累计纯等待超 90s 提前放弃，防 5 连长冷却纯等）。
+            final delay = retryPolicy.delayFor(
+              semantic: e.code,
+              attempt: attempt,
+              retryAfter: e.retryAfter,
+            );
+            if (retryPolicy.exceedsBudget(cumulativeWait, delay)) {
+              outcome.done(
+                AgentStopReason.error,
+                '$message（${RetryPolicy.budgetExceededReason}）',
+              );
+              return null;
+            }
+            cumulativeWait += delay;
             if (delay > Duration.zero) {
               // 重试等待可视化——等待开始前
-              // 上抛事件，UI 以到达时刻为锚渲染倒计时状态条
+              // 上抛事件，UI 以到达时刻为锚渲染倒计时状态条；
+              // 批 F 补 maxAttempts/cause（「原因 · Xs 后第 k/N 次」）
               spec.events.emit(
                 AgentRetryScheduled(
                   waitMs: delay.inMilliseconds,
                   attempt: attempt,
+                  maxAttempts: spec.budget.maxRequestRetries,
+                  cause: e.code,
                 ),
               );
               // 退避期可被打断——取消经 whenCancelled
@@ -1027,9 +1085,13 @@ extension AgentToolResultPreview on AgentToolResult {
 
 /// 轮内可变结果容器（循环体与重试逻辑跨方法回填停止原因/步数）
 class _TurnOutcome {
+  _TurnOutcome({int initialSteps = 0}) : steps = initialSteps;
+
   AgentStopReason reason = AgentStopReason.completed;
   String? message;
-  int steps = 0;
+
+  /// 已完成步数（续跑种子化时含上次尝试的步数；兼作下一个 step 的序号）
+  int steps;
 
   /// maxSteps 软着陆已注入最后通牒（二次到达上限才判停止）
   bool finalNoticeIssued = false;
@@ -1084,34 +1146,6 @@ const int _maxFinishRoundAttempts = 5;
 /// 默认 doom 阈值 8 → 提醒落在 3/5 次）
 const Set<int> _repeatReminderStreaks = {3, 5};
 
-/// 请求错误重试的指数退避毫秒数（修复 2026-08-23）
-///
-/// 500ms 起翻倍，封顶 4s：attempt=1→500，2→1000，3→2000，≥4→4000。
-int _retryBackoffMs(int attempt) {
-  var ms = 500;
-  for (var i = 1; i < attempt && ms < 4000; i++) {
-    ms *= 2;
-  }
-  return ms > 4000 ? 4000 : ms;
-}
-
-/// Retry-After 冷却封顶（：尊重长冷却但不无限等待）
-const Duration _maxRetryAfterDelay = Duration(seconds: 60);
-
-/// 请求错误重试延迟
-///
-/// 优先 [AgentLlmException.retryAfter]（服务端限流冷却指示，封顶 60s）；
-/// 无指示时指数退避 + ±25% jitter（隐藏真实重试节奏，避免同批客户端
-/// 同步重发）。[roll] ∈ [0,1) 可注入（测试确定性），缺省随机。
-Duration retryDelayFor(AgentLlmException e, int attempt, {double? roll}) {
-  final retryAfter = e.retryAfter;
-  if (retryAfter != null) {
-    return retryAfter > _maxRetryAfterDelay ? _maxRetryAfterDelay : retryAfter;
-  }
-  return jitteredDelay(
-    Duration(milliseconds: _retryBackoffMs(attempt)),
-    roll ?? _retryJitterRandom.nextDouble(),
-  );
-}
-
-final Random _retryJitterRandom = Random();
+// 请求错误重试的退避/封顶/jitter（修复 2026-08-23 引入）已于
+// 2026-10-15 批 E 收敛至共享 RetryPolicy（lib/core/network/retry_policy.dart，
+// 封顶 4s→15s）——本文件旧退避函数删除，判定表与预算闸同源。

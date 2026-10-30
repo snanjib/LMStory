@@ -3,15 +3,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_markdown_body.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
-import 'package:lmstory/core/theme/simple/components/simple_markdown_body.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_card.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_markdown_body.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_setting_card.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_markdown_body.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 
 import '../../test_helpers/load_app_fonts.dart';
 
-/// 四组合 × 明暗 渲染基线（外观双轴的组件面快照）。
+/// classic/glass × 经典/波尔多四组合 × 明暗 渲染基线（外观三轴的组件面
+/// 快照；golden 仅覆盖 classic/glass 两结构——brutal/wonder 按实现约定
+/// 走装配+交互验证，不进 golden）。
 ///
 /// 前身 `classic_visual_parity_test.dart` 绑在 `SimpleTheme`（已退役的
 /// 旧主题）上，golden 文本还是测试占位字形——基线校验的是错误对象。
@@ -29,6 +31,9 @@ void main() {
       (call) async => Directory.systemTemp.path,
     );
     await loadAppFonts();
+    final iconLoader = FontLoader('MaterialIcons')
+      ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+    await iconLoader.load();
   });
 
   const combos = <(String, String)>[
@@ -46,15 +51,13 @@ void main() {
         (tester) async {
           await tester.binding.setSurfaceSize(const Size(1000, 900));
           addTearDown(() => tester.binding.setSurfaceSize(null));
+          final theme = ThemeCatalog.assemble(
+            LmAppearance(structureId: structureId, paletteId: paletteId),
+            brightness,
+          );
           await tester.pumpWidget(
             MaterialApp(
-              theme: ThemeCatalog.assemble(
-                LmAppearance(
-                  structureId: structureId,
-                  paletteId: paletteId,
-                ),
-                brightness,
-              ),
+              theme: withLoadedTestFonts(theme),
               home: RepaintBoundary(
                 key: const ValueKey('surface'),
                 child: Scaffold(

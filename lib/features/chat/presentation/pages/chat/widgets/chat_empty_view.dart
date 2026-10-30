@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:lmstory/core/theme/simple/components/simple_empty_state.dart';
+import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 无消息状态的空态引导页（自 chat_mode_page.dart 拆出，逻辑原样搬运）。
@@ -14,7 +14,8 @@ class ChatEmptyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SimpleEmptyState(
+    return context.lmUi.emptyState(
+      context,
       title: t.chat.empty.noMessage,
       actionLabel: t.chat.empty.startAction,
       onAction: onStart,

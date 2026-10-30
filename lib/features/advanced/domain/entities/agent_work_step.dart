@@ -253,6 +253,11 @@ class AgentWorkSummary {
   }
 }
 
+/// 累计器分项落 [AgentWorkSummary] 前的口径闸：非正值（端点未回 usage
+/// 时累计器留 0）映射为 null——null 才走「—」/空环展示并放行旧会话
+/// 回填探针；0 会伪装成「真实为 0」污染面板（内测反馈「全是 —」排查）。
+int? positiveOrNullOrNull(int value) => value > 0 ? value : null;
+
 /// 待回答的导演问题（ask_user 横幅展示态，体验重构）
 class AgentAskPrompt {
   const AgentAskPrompt({required this.question, this.options = const []});
@@ -265,11 +270,83 @@ class AgentAskPrompt {
 
 /// 待确认的工具写入（监督模式审批横幅展示态，体验重构）
 class AgentApprovalPrompt {
-  const AgentApprovalPrompt({required this.toolName, required this.summary});
+  const AgentApprovalPrompt({
+    required this.toolName,
+    required this.summary,
+    this.changes = const [],
+    this.pendingPriorChanges = 0,
+  });
 
   /// 工具名（审计标识，横幅主体用人话摘要）
   final String toolName;
 
   /// 人话摘要（如「修订设定集 · 2 处」）
   final String summary;
+
+  /// 结构化变更明细（2026-10-15 批 B：干跑投影合成；空列表 = 无明细可
+  /// 展示或组装降级，横幅退化为现状纯摘要）
+  final List<AgentApprovalChange> changes;
+
+  /// 本轮此前已批准暂存的变更条数（脚注提示「收笔时统一提交」用）
+  final int pendingPriorChanges;
+}
+
+/// 审批变更的种类徽标（纯展示模型；不触碰 facts 层 FactAction 枚举）
+enum ApprovalChangeKind {
+  createEntity,
+  updateAttr,
+  appendList,
+  removeFromList,
+  addAlias,
+  archiveEntity,
+  merge,
+  mergeNote,
+  entitySnapshot,
+  anchor,
+  eventMemory,
+}
+
+/// 单条审批变更的展示单元（2026-10-15 批 B）
+///
+/// 由审批投影器（干跑）合成：before 为库侧现查旧值、after 为模型意图
+/// 新值；转写/跳过说明进 [note]（已映射人话）。纯展示模型，不进 facts 层。
+class AgentApprovalChange {
+  const AgentApprovalChange({
+    required this.entityName,
+    required this.kind,
+    this.attrKey,
+    this.before,
+    this.after,
+    this.note,
+    this.reason,
+    this.confidence,
+    this.effective = true,
+  });
+
+  /// 人话定位（实体主名；merge 类为「源 → 目标」；锚线/事件类可为空串）
+  final String entityName;
+
+  /// 属性名（update/append/remove 类必有；事件/锚线类可为 null）
+  final String? attrKey;
+
+  final ApprovalChangeKind kind;
+
+  /// 变更前值（新建类为 null；list 类为旧 JSON 串，展示层解析）
+  final String? before;
+
+  /// 变更后值（归档类为 null；append/remove 为单条目值）
+  final String? after;
+
+  /// 转写/跳过说明（如「值相同，不会产生变化」「重名，将转为新增别名」）
+  final String? note;
+
+  /// 模型给出的修改理由（deltas 自带，判断「一时表演 vs 真性格」的证据链）
+  final String? reason;
+
+  /// 模型置信度 1–5（低置信度徽标提示）
+  final int? confidence;
+
+  /// 是否实际生效（false = 被防护跳过/值相同不会落库，UI 灰显带说明；
+  /// true 含转写后生效——note 携带转写说明）
+  final bool effective;
 }

@@ -115,6 +115,57 @@ void main() {
       );
       expect(tail.every((m) => m.role == 'user'), isTrue);
     });
+
+    test('turn1 开篇角色提示：置首（能力提示之前），null 整条省略；非首回合不注入', () {
+      final hint = firstTurnCharacterInitHint('林九，男，落魄刀客');
+      expect(hint, isNotNull);
+      final tail = surfaceTailMessages(
+        pacing: NarrativePacing.balanced,
+        isFirstTurn: true,
+        toolNames: const {'search_story', 'spawn', 'finish_round'},
+        characterInitHint: hint,
+      );
+      expect(tail, hasLength(5));
+      expect(tail.first.content, contains('【开篇角色】'));
+      expect(tail.first.content, contains('林九，男，落魄刀客'));
+      expect(
+        tail[1].content,
+        contains('spawn'),
+        reason: '能力提示退居开篇角色之后',
+      );
+      expect(tail.last.content, contains(pacingDirectiveFor(NarrativePacing.balanced)));
+
+      // 未启用（null）→ 无开篇角色条，回到能力提示置首
+      final without = surfaceTailMessages(
+        pacing: NarrativePacing.balanced,
+        isFirstTurn: true,
+        toolNames: const {'search_story', 'spawn', 'finish_round'},
+      );
+      expect(without, hasLength(4));
+      expect(without.first.content, contains('spawn'));
+
+      // 非首回合即使误传也不注入（一次性语义双保险）
+      final later = surfaceTailMessages(
+        pacing: NarrativePacing.balanced,
+        isFirstTurn: false,
+        toolNames: const {'search_story', 'spawn', 'finish_round'},
+        characterInitHint: hint,
+      );
+      expect(later, hasLength(3));
+      expect(
+        later.every((m) => !(m.content ?? '').contains('【开篇角色】')),
+        isTrue,
+      );
+    });
+
+    test('firstTurnCharacterInitHint：空/空白/未启用返回 null；正文含设定原文', () {
+      expect(firstTurnCharacterInitHint(null), isNull);
+      expect(firstTurnCharacterInitHint(''), isNull);
+      expect(firstTurnCharacterInitHint('   '), isNull);
+      final hint = firstTurnCharacterInitHint('  苏澜，女，出海的船长 ');
+      expect(hint, contains('苏澜，女，出海的船长'));
+      expect(hint, contains('【开篇角色】'));
+    });
   });
 
   group('伏笔定期清点（体验重构卡片 C 维护性补强）', () {

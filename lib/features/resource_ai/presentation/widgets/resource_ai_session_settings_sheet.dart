@@ -11,6 +11,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
@@ -94,12 +95,16 @@ Future<bool> showResourceAiFinishFlow(
       await controller.save(overwrite: choice == _FinishChoice.overwrite);
   if (error != null) {
     if (!context.mounted) return false;
+    // 空名失败信封有专门指引文案（detail 为空），按 kind 分流。
+    final message = error.kind == ResourceAiErrorKind.nameMissing
+        ? t.resourceAi.errorNameMissing
+        : t.resourceAi.saveFailed(error: error.detail);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
-          content: Text(t.resourceAi.saveFailed(error: error.detail)),
+          content: Text(message),
         ),
       );
     return false;
@@ -182,18 +187,9 @@ class _ResourceAiSessionSettingsSheetState
             // 标题行
             Padding(
               padding: const EdgeInsets.all(SimpleSpacing.sLg),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      t.resourceAi.settingsTitle,
-                      style: SimpleTextStyles.title2.copyWith(
-                        color: colors.ink,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+              child: PanelHeading(
+                title: t.resourceAi.settingsTitle,
+                actions: [
                   IconButton(
                     //  语义缺口：复用 common.close（不新增 i18n key）。
                     tooltip: t.common.close,

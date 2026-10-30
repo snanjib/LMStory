@@ -42,7 +42,10 @@ void main() {
         _entry(keys: ['普通词条'], comment: '普通设定'),
       ]);
 
-      final preview = await service.previewWorldbook(bookId: 'book-1');
+      final preview = await service.previewWorldbook(
+        bookId: 'book-1',
+        defaultSettingName: '未命名设定',
+      );
 
       expect(preview.title, '测试书');
       expect(preview.lines, hasLength(2), reason: '3 词条中 1 条停用，只列 2 条启用');
@@ -75,7 +78,10 @@ void main() {
       ];
       repo.worldbook = _worldbookJson(entries);
 
-      final preview = await service.previewWorldbook(bookId: 'book-1');
+      final preview = await service.previewWorldbook(
+        bookId: 'book-1',
+        defaultSettingName: '未命名设定',
+      );
 
       // 7 条启用（6 常驻 + 1 普通）：停用常驻不计入
       expect(preview.constantCount, 6, reason: '常驻计数不应包含停用词条（WA7-3 虚高）');
@@ -93,7 +99,10 @@ void main() {
         _entry(keys: ['唯一词条'], comment: '唯一设定'),
       ]);
 
-      final preview = await service.previewWorldbook(bookId: 'book-1');
+      final preview = await service.previewWorldbook(
+        bookId: 'book-1',
+        defaultSettingName: '未命名设定',
+      );
 
       expect(preview.lines, hasLength(1));
       expect(preview.lines.single.kind, SeedPreviewLineKind.worldbookEntry);
@@ -112,7 +121,10 @@ void main() {
         ],
       );
 
-      final preview = await service.previewCharacterCard(cardId: 'card-1');
+      final preview = await service.previewCharacterCard(
+        cardId: 'card-1',
+        defaultCharacterName: '未命名角色',
+      );
 
       expect(preview.title, '测试主角');
       expect(preview.lines, hasLength(3));
@@ -146,7 +158,10 @@ void main() {
         ],
       );
 
-      final preview = await service.previewCharacterCard(cardId: 'card-1');
+      final preview = await service.previewCharacterCard(
+        cardId: 'card-1',
+        defaultCharacterName: '未命名角色',
+      );
 
       expect(
         preview.lines.map((l) => l.text),
@@ -169,7 +184,10 @@ void main() {
         personality: '',
       );
 
-      final preview = await service.previewCharacterCard(cardId: 'card-1');
+      final preview = await service.previewCharacterCard(
+        cardId: 'card-1',
+        defaultCharacterName: '未命名角色',
+      );
       final text = preview.lines
           .singleWhere((l) => l.kind == SeedPreviewLineKind.cardBackground)
           .text;
@@ -192,7 +210,10 @@ void main() {
         personality: '',
       );
 
-      final preview = await service.previewCharacterCard(cardId: 'card-1');
+      final preview = await service.previewCharacterCard(
+        cardId: 'card-1',
+        defaultCharacterName: '未命名角色',
+      );
       final text = preview.lines
           .singleWhere((l) => l.kind == SeedPreviewLineKind.cardBackground)
           .text;

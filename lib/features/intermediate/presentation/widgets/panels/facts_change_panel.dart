@@ -2,12 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/facts_change_detail_dialog.dart';
-import 'package:lmstory/core/theme/intermediate/components/history_panel_shell.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/facts_change_detail_dialog.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_change_record.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
@@ -30,7 +29,7 @@ import 'package:lmstory/i18n/strings.g.dart';
 /// - 空列表：明确无事实变更时显示「本轮无事实变更」占位（不隐藏卡片，
 ///   区别于摘要小窗的无数据即隐藏）
 /// - 失败：灰度滤镜（与 SummarizePanel 失败态一致）
-/// - 历史态（[artifacts] != null）：用 [HistoryPanelShell] 渲染
+/// - 历史态（[artifacts] != null）：用 HistoryPanelShell 渲染
 ///
 /// 数据源：实时态从 [factsChanges]（state.currentFactsChanges，oldValue 为 null
 /// 的「应用中」预览）读取；历史/完成态从 `artifacts.factsChanges`（含完整
@@ -208,7 +207,8 @@ class _FactsChangePanelState extends State<FactsChangePanel> {
               turn: artifacts.turnNumber,
               count: changes.length,
             );
-    return HistoryPanelShell(
+    return context.lmUi.historyPanelShell(
+      context,
       key: ValueKey('history-facts-change-${artifacts.turnNumber}'),
       summary: summary,
       animateEntrance: false,

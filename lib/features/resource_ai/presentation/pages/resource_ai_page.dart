@@ -9,12 +9,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
-import 'package:lmstory/core/theme/simple/components/simple_markdown_body.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/file_reader.dart'
@@ -24,7 +23,6 @@ import 'package:lmstory/features/resource_ai/presentation/controllers/resource_a
 import 'package:lmstory/features/resource_ai/presentation/resource_ai_providers.dart';
 import 'package:lmstory/features/resource_ai/presentation/widgets/draft_change_labels.dart';
 import 'package:lmstory/features/resource_ai/presentation/widgets/resource_ai_session_settings_sheet.dart';
-import 'package:lmstory/features/resource_library/domain/services/resource_import_service.dart';
 import 'package:lmstory/features/settings/presentation/widgets/default_model_picker_sheet.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -148,7 +146,8 @@ class _ResourceAiPageState extends ConsumerState<ResourceAiPage> {
         backgroundColor: context.scaffoldBgOf(
           Theme.of(context).scaffoldBackgroundColor,
         ),
-        appBar: SimpleAppBar(
+        appBar: context.lmUi.appBar(
+          context,
           title: _title(t),
           actions: [
             // 设置入口：进入会话后可见；saved 后页面即将自动退出，隐藏。
@@ -294,6 +293,7 @@ class _ResourceAiPageState extends ConsumerState<ResourceAiPage> {
           t.resourceAi.errorTurnIncomplete(detail: e.detail),
         ResourceAiErrorKind.saveFailed =>
           t.resourceAi.saveFailed(error: e.detail),
+        ResourceAiErrorKind.nameMissing => t.resourceAi.errorNameMissing,
       };
 
   String _title(Translations t) {
@@ -325,12 +325,13 @@ class _ResourceAiPageState extends ConsumerState<ResourceAiPage> {
       if (result == null || result.files.isEmpty) return;
       final picked = result.files.single;
       final path = picked.path;
-      if (path == null) return;
-      final content = await readFileContentNative(path);
-      if (content.length > ResourceImportService.maxImportBytes) {
-        _snack(t.resourceAi.attachTooLarge);
+      // Web 端 FilePicker 可能返回无 path 的字节流条目——此前静默 return
+      // 成死按钮；明确告知平台限制（Web 一等公民与否另议）。
+      if (path == null) {
+        _snack(t.resourceAi.attachUnsupported);
         return;
       }
+      final content = await readFileContentNative(path);
       controller.attachReference(content, picked.name);
       _snack(t.resourceAi.attached(name: picked.name));
     } catch (e) {
@@ -414,7 +415,10 @@ class _ModelGateState extends ConsumerState<_ModelGate> {
             children: [
               Text(
                 t.resourceAi.modelGateTitle,
-                style: SimpleTextStyles.title2,
+                style: LmNarrativeTextStyles.narrativeHeadline.copyWith(
+                  color: colors.ink,
+                  fontSize: 28,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: SimpleSpacing.sMd),
@@ -579,7 +583,7 @@ class _MessageListState extends State<_MessageList> {
                 constraints: const BoxConstraints(
                   maxWidth: LmLayout.panelWidth,
                 ),
-                child: SimpleMarkdownBody(data: m.text),
+                child: context.lmUi.markdownBody(context, data: m.text),
               ),
             ),
           ResourceAiMessageRole.material => Padding(
@@ -701,67 +705,72 @@ class _InputBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Translations.of(context);
     final colors = context.lm.palette;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: SimpleSpacing.sLg,
-          vertical: SimpleSpacing.sXs,
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            IconButton(
-              tooltip: t.resourceAi.attach,
-              icon: const Icon(Icons.attach_file_outlined),
-              onPressed: busy ? null : onAttach,
-            ),
-            const SizedBox(width: SimpleSpacing.s2xs),
-            Expanded(
-              child: TextField(
-                controller: controller,
-                enabled: !busy,
-                minLines: 1,
-                maxLines: 6,
-                onSubmitted: busy ? null : onSend,
-                decoration: InputDecoration(
-                  hintText: t.resourceAi.inputHint,
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: SimpleSpacing.sMd,
-                    vertical: SimpleSpacing.sXs,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius:
-                        BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-                    borderSide: BorderSide(color: colors.divider),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius:
-                        BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-                    borderSide: BorderSide(color: colors.divider),
+    return context.lmUi.inputArea(
+      context,
+      SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: SimpleSpacing.sLg,
+            vertical: SimpleSpacing.sXs,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              IconButton(
+                tooltip: t.resourceAi.attach,
+                icon: const Icon(Icons.attach_file_outlined),
+                onPressed: busy ? null : onAttach,
+              ),
+              const SizedBox(width: SimpleSpacing.s2xs),
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  enabled: !busy,
+                  minLines: 1,
+                  maxLines: 6,
+                  onSubmitted: busy ? null : onSend,
+                  decoration: InputDecoration(
+                    hintText: t.resourceAi.inputHint,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: SimpleSpacing.sMd,
+                      vertical: SimpleSpacing.sXs,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(
+                        context.lmUi.radius(LmCorner.md),
+                      ),
+                      borderSide: BorderSide(color: colors.divider),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(
+                        context.lmUi.radius(LmCorner.md),
+                      ),
+                      borderSide: BorderSide(color: colors.divider),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: SimpleSpacing.s2xs),
-            if (busy)
-              IconButton.filled(
-                tooltip: t.resourceAi.stop,
-                icon: const Icon(Icons.stop),
-                onPressed: onCancel,
-              )
-            else
-              IconButton.filled(
-                tooltip: t.resourceAi.send,
-                icon: const Icon(Icons.send_outlined),
-                onPressed: () {
-                  final text = controller.text.trim();
-                  if (text.isEmpty) return;
-                  onSend(text);
-                },
-              ),
-          ],
+              const SizedBox(width: SimpleSpacing.s2xs),
+              if (busy)
+                IconButton.filled(
+                  tooltip: t.resourceAi.stop,
+                  icon: const Icon(Icons.stop),
+                  onPressed: onCancel,
+                )
+              else
+                IconButton.filled(
+                  tooltip: t.resourceAi.send,
+                  icon: const Icon(Icons.send_outlined),
+                  onPressed: () {
+                    final text = controller.text.trim();
+                    if (text.isEmpty) return;
+                    onSend(text);
+                  },
+                ),
+            ],
+          ),
         ),
       ),
     );

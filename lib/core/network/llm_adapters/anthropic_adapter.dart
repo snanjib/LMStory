@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:lmstory/core/config/output_token_policy.dart';
 import 'package:lmstory/core/llm/reasoning_effort.dart';
 import 'package:lmstory/core/llm/tool_calling/tool_call.dart';
@@ -10,6 +9,7 @@ import 'package:lmstory/core/network/llm_adapters/sampling_params.dart';
 import 'package:lmstory/core/network/sse/anthropic_sse_parser.dart';
 import 'package:lmstory/core/utils/api_url_resolver.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 
 /// Anthropic Claude 原生协议适配器
 ///
@@ -110,10 +110,7 @@ class AnthropicAdapter implements LlmProtocolAdapter {
     if (configuredMaxTokens != null && configuredMaxTokens <= 0) {
       final modelMaxOutput = request.modelMaxOutputTokens;
       if (modelMaxOutput == null || modelMaxOutput <= 0) {
-        throw ArgumentError(
-          'Anthropic 协议的 max_tokens 为必填项；配置为 0 时需要模型的最大输出元数据。 '
-          '请在模型设置中填写“最大输出”，或改用正数上限。',
-        );
+        throw ArgumentError(t.common.errors.anthropicMaxTokens);
       }
       effectiveMaxTokens = modelMaxOutput;
     } else {

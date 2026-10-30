@@ -26,9 +26,13 @@ void main() {
     expect(LmLayout.mediumMax, 1280);
     expect(LmLayout.wideMax, 1920);
 
-    expect(LmLayout.readingMeasure, 720);
+    // 720 → 800（宽窗口留白观感，见 lm_layout 头注释）
+    expect(LmLayout.readingMeasure, 800);
     expect(LmLayout.formMeasure, 880);
     expect(LmLayout.listMeasure, 1120);
+
+    // 流式版心占比：版心 = max(槽值, 窗口 × 0.85)，两侧各留 7.5% 安全边距
+    expect(LmLayout.measureFraction, 0.85);
 
     expect(LmLayout.dialogMaxWidth, 560);
     expect(LmLayout.dialogNarrowWidth, 480);
@@ -53,6 +57,68 @@ void main() {
 
     expect(LmLayout.usesMeasure(1279), isFalse);
     expect(LmLayout.usesMeasure(1280), isTrue);
+  });
+
+  test('流式版心：槽值保底、随窗口按占比放大、无固定上限', () {
+    // 窗口 × 占比 ≤ 槽值：保底生效（窄窗不产生比基线更窄的回退）
+    expect(LmLayout.measureOf(700, 800), 800);
+    expect(LmLayout.measureOf(1000, 880), 880);
+    // 窗口 × 占比 > 槽值：流式放大（85%）
+    expect(LmLayout.measureOf(1280, 800), closeTo(1088, 0.01));
+    expect(LmLayout.measureOf(1920, 800), closeTo(1632, 0.01));
+    expect(LmLayout.measureOf(2560, 800), closeTo(2176, 0.01));
+    expect(LmLayout.measureOf(2560, 1120), closeTo(2176, 0.01));
+    // 无上限：单调不减
+    expect(
+      LmLayout.measureOf(3840, 800),
+      greaterThan(LmLayout.measureOf(2560, 800)),
+    );
+  });
+
+  test('capped 模式：版心恒为槽基线（用户可选的固定上限行为）', () {
+    expect(LmLayout.measureOf(2560, 800, mode: LmContentWidthMode.capped), 800);
+    expect(
+      LmLayout.measureOf(1920, 880, mode: LmContentWidthMode.capped),
+      880,
+    );
+    // 缺省模式为流式（消费面无 scope 时同）
+    expect(LmLayout.measureOf(2560, 800), closeTo(2176, 0.01));
+  });
+
+  testWidgets('LmContentWidthScope：capped 下 LmMeasure 与阅读列不随窗口放大',
+      (tester) async {
+    const key = ValueKey('t07-mode-probe');
+
+    Future<double> probe(double surfaceWidth) async {
+      await tester.binding.setSurfaceSize(Size(surfaceWidth, 600));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: LmContentWidthScope(
+            mode: LmContentWidthMode.capped,
+            child: MediaQuery(
+              data: MediaQueryData(size: Size(surfaceWidth, 600)),
+              child: const Center(
+                child: LmMeasure(
+                  maxWidth: 600,
+                  child: SizedBox(
+                    key: key,
+                    width: 3000,
+                    height: 20,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return tester.getSize(find.byKey(key)).width;
+    }
+
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    // capped：2560 窗口下仍钳在保底 600，不流式放大
+    expect(await probe(2560), 600);
   });
 
   // ── 2. 断点数字不外泄 ───────────────────────────────────────────
@@ -83,12 +149,13 @@ void main() {
   });
 
   // ── 3. LmMeasure 阈值行为（经典零视觉变化在组件层的证据）──────────
-  testWidgets('LmMeasure：<1280 原样透传、≥1280 钳制到版心并居中', (tester) async {
+  testWidgets('LmMeasure：<1280 原样透传、≥1280 钳制到流式版心并居中', (tester) async {
     const key = ValueKey('t07-measure-probe');
-    const wide = 1000.0;
     const measure = 600.0;
 
-    Future<double> probe(double surfaceWidth) async {
+    // 子件宽度按档位给：须 < 窗口宽（窗口不干涉）且与该档流式版心错开，
+    // 才能分辨"没钳/钳了"。
+    Future<double> probe(double surfaceWidth, double childWidth) async {
       // 两条通道：setSurfaceSize 决定**真实几何**，显式 MediaQuery 决定
       // LmMeasure 读到的**窗口宽度**（测试绑定下 setSurfaceSize 不会改写
       // MediaQuery.sizeOf，两者必须同时给才能既量准又判准）。
@@ -97,12 +164,12 @@ void main() {
         MaterialApp(
           home: MediaQuery(
             data: MediaQueryData(size: Size(surfaceWidth, 600)),
-            child: const Center(
+            child: Center(
               child: LmMeasure(
                 maxWidth: measure,
                 child: SizedBox(
                   key: key,
-                  width: wide,
+                  width: childWidth,
                   height: 20,
                 ),
               ),
@@ -116,13 +183,19 @@ void main() {
 
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    // < 1280：逐像素原样（子件拿到 1000 的原宽）。
-    expect(await probe(1279), wide, reason: '1279 下不得收敛（历史区间零变化）');
-    expect(await probe(1100), wide, reason: '1100 下不得收敛（须宽于子件才能分辨）');
+    // < 1280：LmMeasure 透传——子件（1100 < 窗口）拿原宽，不被钳到保底。
+    expect(await probe(1279, 1100), 1100, reason: '1279 下不得收敛（历史区间零变化）');
+    expect(await probe(1100, 1100), 1100, reason: '1100 下不得收敛');
 
-    // ≥ 1280：钳制到版心并水平居中。
-    expect(await probe(1280), measure);
-    expect(await probe(2560), measure);
+    // ≥ 1280：钳制到流式版心（max(保底, 窗口×85%)）并水平居中。
+    expect(
+      await probe(1280, 3000),
+      closeTo(LmLayout.measureOf(1280, measure), 0.5),
+    );
+    expect(
+      await probe(2560, 3000),
+      closeTo(LmLayout.measureOf(2560, measure), 0.5),
+    );
 
     final center = tester.getCenter(find.byKey(key));
     expect(center.dx, closeTo(2560 / 2, 0.5), reason: '版心须水平居中');
@@ -194,10 +267,18 @@ const _widthWhitelist = <String, Set<int>>{
   // 思考卡正文预览的最大高度。
   'lib/core/theme/system/structures/classic/conversation/message_bubble/bubble_thinking_card.dart':
       {220},
+  // HITL 审批横幅「变更明细」折叠区的最大高度（明细可达 30+ 行，
+  // 限高滚动防挤占正文区——内容固有尺寸，2026-10-15 批 C）。
+  'lib/features/advanced/presentation/widgets/director_hitl_banner.dart': {220},
   // 1920 是 image_picker 的**降采样上限**（非布局）；100/180 是附件缩略图
   // 与附件条目的固有尺寸；200/120 是输入框折叠前的最大高度。
-  'lib/core/theme/system/structures/classic/conversation/simple_chat_input.dart':
-      {1920, 200, 120, 100, 180},
+  'lib/features/chat/presentation/widgets/chat_mode_input_area.dart': {
+    1920,
+    200,
+    120,
+    100,
+    180,
+  },
   // 建议回复浮层的最大高度。
   'lib/core/theme/system/structures/classic/narrative/suggest_reply_overlay.dart':
       {280},

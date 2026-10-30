@@ -18,6 +18,8 @@ import 'package:lmstory/features/chat/domain/services/configuration_resolver.dar
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
 import 'package:lmstory/features/intermediate/presentation/controllers/intermediate_chat_controller.dart';
+import 'package:lmstory/features/intermediate/presentation/pages/intermediate_chat_page.dart'
+    show canAcceptPartialReply;
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
@@ -62,10 +64,21 @@ import '../../../../test_helpers/stub_failure_log_repository.dart';
 /// 成功路径需两次 streamPost 调用（draft + revise），
 /// 用 [responses] 队列按调用顺序依次返回。
 class _SseHttpClient implements HttpClient {
-  _SseHttpClient(this.responses);
+  _SseHttpClient(this.responses, {this.hangAt});
 
   final List<String> responses;
+
+  /// 第 [hangAt] 次调用吐一条文本增量后挂住（不吐 DONE），取消令牌
+  /// 触发后以流错误收尾——模拟「正文流到一半用户点停止」。挂住次
+  /// 不消费 responses 列表。
+  final int? hangAt;
+  static const _hangChunk = '夜色渐沉，碑文在暮色里明灭。';
   int callCount = 0;
+  var _hangFired = false;
+
+  /// 挂闸已吐首帧的确定性信号（测试 await 它替代轮询流式缓冲，
+  /// 消除并发全量下的假超时/did-not-complete）。
+  final hangFired = Completer<void>();
 
   /// 每次请求的 body 快照（注入断言用；对既有测试零影响）
   final List<String?> bodies = [];
@@ -80,6 +93,38 @@ class _SseHttpClient implements HttpClient {
     Duration? connectTimeout,
     Duration? readTimeout,
   }) {
+    if (hangAt != null && callCount == hangAt && !_hangFired) {
+      // 挂住次不消费列表、不推进计数——被取消的调用半途而废，
+      // 后续轮次从当前列表位续读。
+      _hangFired = true;
+      late final StreamController<String> controller;
+      Timer? poller;
+      controller = StreamController<String>(
+        onListen: () {
+          final chunkJson = jsonEncode({
+            'choices': [
+              {
+                'delta': {'content': _hangChunk},
+              },
+            ],
+          });
+          controller.add('data: $chunkJson\n\n');
+          if (!hangFired.isCompleted) hangFired.complete();
+          final deadline = DateTime.now().add(const Duration(seconds: 12));
+          poller = Timer.periodic(const Duration(milliseconds: 10), (_) {
+            if ((cancelToken?.isCancelled ?? false) ||
+                DateTime.now().isAfter(deadline)) {
+              poller?.cancel();
+              controller
+                ..addError(Exception('cancelled mid-stream'))
+                ..close();
+            }
+          });
+        },
+        onCancel: () => poller?.cancel(),
+      );
+      return controller.stream;
+    }
     final response = responses[callCount];
     callCount++;
     bodies.add(body);
@@ -4095,6 +4140,42 @@ void main() {
       );
     });
 
+    test('P7 自动重试续写式：流中断半截作前缀注入重跑请求（不整轮白跑）',
+        () async {
+      // 2026-10-15 批 G：streamInterruptRetry=1 时 E016 自动重试——
+      // 半截正文经 continuationPrefix 进续写指令块（等价自动执行
+      // 「从中断处继续」，与手动续跑同链路：请求含【续写说明】+前缀）
+      final httpClient = _SseHttpClient([
+        _extractKeywordsSse(),
+        _partialThenErrorSse('夜色沉下来，刀锋抵住'),
+        _draftV2('门外的脚步声近了。'),
+        _summarizeSse(),
+      ]);
+      final controller = _buildController(
+        session: _realSession(),
+        httpClient: httpClient,
+        chatRepo: _IntegrationChatRepository(),
+        experienceRepo: _StubExperienceRepository(),
+        persistenceService: _VariantAwarePersistenceService(),
+        config: const IntermediateConfig(
+          retry: RetryConfig(streamInterruptRetry: 1),
+        ),
+        forceReviewEnabled: false,
+      );
+
+      await controller.sendMessage('推进剧情');
+
+      // 自动重试成功收轮（不进 failed）
+      expect(controller.state.phase, IntermediatePhase.idle);
+      // 重跑的生成请求携带续写指令块 + 半截正文前缀（P7 续写式）
+      final generateBody = httpClient.bodies[2]!;
+      expect(generateBody, contains('【续写说明】'));
+      expect(generateBody, contains('夜色沉下来，刀锋抵住'));
+      expect(generateBody, contains('已写正文'));
+      // 与手动续跑同语义：最终正文为续写新输出（清场防拼接）
+      expect(controller.state.messages.last.content, '门外的脚步声近了。');
+    });
+
     test('以此收稿：快照为正文直奔摘要+固化，正文与消息一致', () async {
       final controller = await pumpFailedMidStream(
         _SseHttpClient([
@@ -4137,6 +4218,150 @@ void main() {
         isNull,
         reason: 'clearTemporary 随轮清理快照',
       );
+    });
+  });
+
+  group('停止保留半截正文 + failed 态直发', () {
+    /// 轮询等待条件成立（超时返回 false 交由断言报错）。
+    Future<bool> until(
+      bool Function() cond, {
+      // 并发全量下事件循环粒度放大，5s 窗会假超时——15s 保负载边界
+      Duration timeout = const Duration(seconds: 15),
+    }) async {
+      final sw = Stopwatch()..start();
+      while (!cond()) {
+        if (sw.elapsed > timeout) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      return true;
+    }
+
+    test('1. 生成中手动停止 → 半截正文保留为快照，收稿出口可用', () async {
+      final httpClient = _SseHttpClient(
+        [
+          _extractKeywordsSse(),
+          _summarizeSse(),
+        ],
+        hangAt: 1,
+      );
+      final persistenceService = _StubPersistenceService();
+      final controller = _buildController(
+        session: _realSession(),
+        httpClient: httpClient,
+        chatRepo: _IntegrationChatRepository(),
+        experienceRepo: _StubExperienceRepository(),
+        persistenceService: persistenceService,
+        config: const IntermediateConfig(
+          retry: RetryConfig(streamInterruptRetry: 0),
+        ),
+        forceReviewEnabled: false,
+      );
+
+      unawaited(controller.sendMessage('推进剧情'));
+      await httpClient.hangFired.future.timeout(const Duration(seconds: 20));
+      // HTTP 层吐帧 ≠ state 已收增量：等流式缓冲非空再停止
+      // （太早停止会走清场分支丢半截）。
+      expect(
+        await until(
+          () =>
+              (controller.state.streamingGenerated ?? '').isNotEmpty ||
+              (controller.state.streamingReply ?? '').isNotEmpty,
+        ),
+        isTrue,
+        reason: '等待正文增量到达流式缓冲',
+      );
+
+      await controller.cancel();
+      expect(
+        await until(() => !controller.state.isStopping),
+        isTrue,
+        reason: '等待后台取消完成',
+      );
+
+      // 停止≠丢弃：进「已停止」failed 态，半截正文进快照
+      expect(controller.state.phase, IntermediatePhase.failed);
+      expect(controller.state.failureContext!.errorCode, 'user_stopped');
+      expect(
+        controller.state.failureContext!.failedPhase,
+        IntermediatePhase.generating,
+      );
+      expect(controller.state.partialReplySnapshot, isNotNull);
+      expect(controller.state.partialReplySnapshot, contains('夜色渐沉'));
+      // pending 气泡保留（与失败态呈现同构），收稿判定可用
+      expect(controller.state.pendingUserMessage, isNotNull);
+      expect(
+        canAcceptPartialReply(
+          controller.state.partialReplySnapshot,
+          controller.state.failureContext?.failedPhase,
+        ),
+        isTrue,
+      );
+
+      // 收稿出口真实可用：快照落为最终回复 → summarize → persist
+      await controller.acceptPartialReplyAsFinal();
+      expect(controller.state.phase, IntermediatePhase.idle);
+      expect(controller.state.messages.last.content, contains('夜色渐沉'));
+      expect(persistenceService.persistRoundCalls, 1);
+    });
+
+    test('2. 停止后 failed 态直发新消息 → 事务性清残留无幽灵轮', () async {
+      final httpClient = _SseHttpClient(
+        [
+          _extractKeywordsSse(),
+          // 第二轮完整链路（hang 次不消费列表，故从 0 起读）
+          _extractKeywordsSse(),
+          _draftV2('完整的第二轮正文。'),
+          _summarizeSse(),
+        ],
+        hangAt: 1,
+      );
+      final persistenceService = _StubPersistenceService();
+      final chatRepo = _IntegrationChatRepository();
+      final controller = _buildController(
+        session: _realSession(),
+        httpClient: httpClient,
+        chatRepo: chatRepo,
+        experienceRepo: _StubExperienceRepository(),
+        persistenceService: persistenceService,
+        config: const IntermediateConfig(
+          retry: RetryConfig(streamInterruptRetry: 0),
+        ),
+        forceReviewEnabled: false,
+      );
+
+      unawaited(controller.sendMessage('第一条'));
+      await httpClient.hangFired.future.timeout(const Duration(seconds: 20));
+      expect(
+        await until(
+          () =>
+              (controller.state.streamingGenerated ?? '').isNotEmpty ||
+              (controller.state.streamingReply ?? '').isNotEmpty,
+        ),
+        isTrue,
+      );
+      await controller.cancel();
+      expect(
+        await until(
+          () =>
+              controller.state.phase == IntermediatePhase.failed &&
+              !controller.state.isStopping,
+        ),
+        isTrue,
+      );
+      expect(controller.state.partialReplySnapshot, isNotNull);
+
+      // failed 态直发：不再要求先清空本轮
+      await controller.sendMessage('第二条');
+
+      expect(controller.state.phase, IntermediatePhase.idle);
+      // 残留全清：快照/失败上下文不留
+      expect(controller.state.partialReplySnapshot, isNull);
+      expect(controller.state.failureContext, isNull);
+      // 幽灵轮检查：第一轮从未持久化，库里只有第二轮一对消息
+      expect(persistenceService.persistRoundCalls, 1);
+      expect(controller.state.messages, hasLength(2));
+      expect(controller.state.messages.first.content, '第二条');
+      expect(controller.state.messages.last.content, '完整的第二轮正文。');
     });
   });
 }

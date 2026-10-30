@@ -21,6 +21,14 @@ extension _ChatModePageInputArea on _ChatModePageState {
     _lastCountedText = text;
 
     _tokenDebounce?.cancel();
+    // 草稿防抖落库（与 token 计数同窗）：输入中随时退出最多丢 500ms。
+    // dispose 不写库（Riverpod 生命周期禁 ref），此路径是退出兜底主力。
+    _draftDebounce?.cancel();
+    final sessionId = widget.session.sessionId;
+    // lm-motion-exempt: 草稿落库去抖（交互节流，非过渡动效）
+    _draftDebounce = Timer(const Duration(milliseconds: 500), () {
+      _persistDraftColumn(sessionId, text);
+    });
     if (text.isEmpty) {
       setState(() => _tokenCount = 0);
       return;

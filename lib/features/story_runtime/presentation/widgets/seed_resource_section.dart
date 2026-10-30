@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
@@ -45,7 +44,9 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.badge_outlined,
           title: t.common.seedResource.applyCard,
           subtitle: '',
@@ -53,7 +54,9 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
           enabled: widget.enabled,
         ),
         const SizedBox(height: IntermediateSpacing.sMd),
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.auto_stories_outlined,
           title: t.common.seedResource.applyBook,
           subtitle: '',
@@ -61,7 +64,8 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
           enabled: widget.enabled,
         ),
         const SizedBox(height: IntermediateSpacing.sMd),
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context, narrative: true,
           // F1 修复：兑现「可随时取消应用」承诺
           icon: Icons.remove_circle_outline,
           title: t.common.seedResource.unapplyResource,
@@ -357,6 +361,7 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
       // 批 J-b：应用前预览——确认前先看会带来什么
       final preview = await _resourceApplyService().previewCharacterCard(
         cardId: selected,
+        defaultCharacterName: t.settings.resourceLibrary.unnamedCharacter,
       );
       if (!mounted) return;
       final confirmed = await _showApplyPreviewDialog(preview);
@@ -364,6 +369,10 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
       final count = await _resourceApplyService().applyCharacterCard(
         sessionId: widget.sessionId,
         cardId: selected,
+        defaultCharacterName: t.settings.resourceLibrary.unnamedCharacter,
+        defaultSettingName: t.settings.resourceLibrary.unnamedSetting,
+        duplicateErrorMessage:
+            t.common.seedResource.duplicateCharacter(name: preview.title),
       );
       if (!mounted) return;
       _showResourceSnack(
@@ -397,6 +406,7 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
       // 批 J-b：应用前预览（词条样例+常驻量级）
       final preview = await _resourceApplyService().previewWorldbook(
         bookId: selected,
+        defaultSettingName: t.settings.resourceLibrary.unnamedSetting,
       );
       if (!mounted) return;
       final confirmed = await _showApplyPreviewDialog(preview);
@@ -404,6 +414,7 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
       final count = await _resourceApplyService().applyWorldbook(
         sessionId: widget.sessionId,
         bookId: selected,
+        defaultSettingName: t.settings.resourceLibrary.unnamedSetting,
       );
       if (!mounted) return;
       _showResourceSnack(

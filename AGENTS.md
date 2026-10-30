@@ -1,9 +1,28 @@
 # Repository Instructions for Coding Agents
 
 This file applies to the entire repository. Read it before making changes.
-`CLAUDE.md`, `CONTRIBUTING.md`, and `doc/README.md` remain authoritative;
-this file is the agent-oriented execution checklist that consolidates their
-most important rules.
+This file is the source of truth for coding-agent behavior rules (task scope,
+editing discipline, validation, and delivery). Project knowledge and current
+boundaries live in `CLAUDE.md`, contribution workflow in `CONTRIBUTING.md`,
+and document status in `doc/README.md`.
+
+## Task Scope & Permissions
+
+- The user's explicit request for the current task takes precedence over the
+  general rules in this file; when they conflict, state the conflict and how
+  you resolved it. Data protection and the confirmation thresholds below are
+  not waived by a routine request — only by an explicit instruction.
+- Scope of action by request type:
+  - Analysis, review, diagnosis, and Q&A requests: read-only. Deliver an
+    assessment; do not modify files as a side effect.
+  - Implementation and fix requests: autonomously complete all in-scope work
+    (code, generation, tests, commit). When a reasonable assumption unblocks
+    the work, proceed and list key assumptions in the handoff.
+  - Actions that would change the deliverable's direction, exceed the
+    request's scope, or are irreversible: confirm before doing.
+- Confirm-before-acting operations include: rewriting, discarding, resetting,
+  or amending in-progress user work; deleting data or files; force pushes and
+  history rewrites; and sending repository content to external services.
 
 ## Source of Truth
 

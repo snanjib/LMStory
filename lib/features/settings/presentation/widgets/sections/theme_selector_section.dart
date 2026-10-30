@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_selection_option.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/theme/theme_controller.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -25,21 +24,24 @@ class ThemeSelectorSection extends ConsumerWidget {
       ),
       child: Column(
         children: [
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.themeOptions.dark,
             isSelected: themeMode == ThemeMode.dark,
             onTap: () => ref
                 .read(themeModeProvider.notifier)
                 .setThemeMode(ThemeMode.dark),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.themeOptions.light,
             isSelected: themeMode == ThemeMode.light,
             onTap: () => ref
                 .read(themeModeProvider.notifier)
                 .setThemeMode(ThemeMode.light),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.themeOptions.system,
             isSelected: themeMode == ThemeMode.system,
             onTap: () => ref

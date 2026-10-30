@@ -30,8 +30,9 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
     int? httpStatus,
     String? errorMessage,
     String? rawError,
+    String? outcome,
   }) async {
-    //  修复：入库前脱敏——rawError 携带原始异常原文（可能含
+    // 入库前脱敏——rawError 携带原始异常原文（可能含
     // API Key/Authorization 头），且 failure_logs 会随会话备份导出到设备外；
     // redactSecrets 此前只在剪贴板复制路径使用，防线画错了地方。
     // 在此单一收口点处理，三个模式控制器的调用方无需各自处理。
@@ -46,6 +47,7 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
               mode: mode,
               errorCategory: errorCategory,
               errorCode: Value(errorCode),
+              outcome: Value(outcome),
               failedPhase: Value(failedPhase),
               httpStatus: Value(httpStatus),
               errorMessage: Value(safeErrorMessage),
@@ -53,7 +55,7 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
               createdAt: now.millisecondsSinceEpoch,
             ),
           );
-      //  修复：保留策略——仅保留最近 200 条。
+      // 保留策略：仅保留最近 200 条。
       // failure_logs 此前无任何清理路径，无限增长且计入 dbSize。
       // 写入低频（每轮失败一次），此处顺带清理的开销可忽略。
       await _database.customStatement(
@@ -71,6 +73,7 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
         errorMessage: safeErrorMessage,
         rawError: safeRawError,
         createdAt: now,
+        outcome: outcome,
       );
     } catch (e, s) {
       // 日志写入失败静默降级：记录到 Logger（落盘），返回 id=-1 占位 entry
@@ -86,6 +89,7 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
         errorMessage: safeErrorMessage,
         rawError: safeRawError,
         createdAt: now,
+        outcome: outcome,
       );
     }
   }
@@ -115,6 +119,21 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
   }
 
   @override
+  Future<int> countAll() async {
+    try {
+      final rows = await _database
+          .customSelect(
+            'SELECT COUNT(*) AS c FROM failure_logs',
+          )
+          .get();
+      return rows.first.read<int>('c');
+    } catch (e, s) {
+      _logger.error('countAll failed', error: e, stackTrace: s);
+      return 0;
+    }
+  }
+
+  @override
   Future<void> clearAll() async {
     try {
       await _database.delete(_database.failureLogsTable).go();
@@ -135,6 +154,18 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
     }
   }
 
+  @override
+  Future<void> markRecovered(int logId) async {
+    if (logId <= 0) return; // 占位 id（写入失败）无行可标
+    try {
+      await (_database.update(_database.failureLogsTable)
+            ..where((t) => t.id.equals(logId)))
+          .write(const FailureLogsTableCompanion(outcome: Value('recovered')));
+    } catch (e) {
+      _logger.warn('markRecovered failed', detail: '$e');
+    }
+  }
+
   /// drift TypedResult → FailureLogEntry
   FailureLogEntry _entryFromTyped(FailureLogsTableData row) {
     return FailureLogEntry(
@@ -147,6 +178,7 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
       httpStatus: row.httpStatus,
       errorMessage: row.errorMessage,
       rawError: row.rawError,
+      outcome: row.outcome,
       createdAt: DateTime.fromMillisecondsSinceEpoch(row.createdAt),
     );
   }

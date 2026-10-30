@@ -192,9 +192,10 @@ class DurableAgentEventSink implements AgentEventSink {
   /// live 事件 → durable 事件（null = 不落库）
   AgentDurableEvent? _map(AgentRunEvent event) {
     return switch (event) {
-      AgentTurnStarted(:final maxSteps) => AgentDurableEvent(
+      AgentTurnStarted(:final maxSteps, :final resumed) => AgentDurableEvent(
           type: AgentEventTypes.turnBegin,
-          data: {'maxSteps': maxSteps},
+          // resumed=true 标记失败后的续跑段（同 turn 多段时轨迹可辨）
+          data: {'maxSteps': maxSteps, if (resumed) 'resumed': true},
         ),
       AgentTurnFinished(
         :final reason,

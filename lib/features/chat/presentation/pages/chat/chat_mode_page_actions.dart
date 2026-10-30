@@ -51,6 +51,8 @@ extension _ChatModePageActions on _ChatModePageState {
     ref
         .read(chatModeControllerProvider(widget.session).notifier)
         .sendMessage(text, attachments: attachments);
+    // 已发送即不再是草稿（清窄列；Map 由切走分支维护）
+    _persistDraftColumn(widget.session.sessionId, '');
     _forceToBottomWithSettle();
   }
 

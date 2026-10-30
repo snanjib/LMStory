@@ -9,7 +9,7 @@ import 'package:lmstory/core/di/providers.dart'
     show apiPresetRepositoryProvider, settingsRepositoryProvider;
 import 'package:lmstory/core/di/providers.dart' as di
     show templateRepositoryProvider;
-import 'package:lmstory/core/theme/simple/components/simple_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_message_bubble.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';

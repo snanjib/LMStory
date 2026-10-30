@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
@@ -24,7 +23,7 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///
 /// **2026-07-24 双菜单→单菜单改造**：
 /// - 删除原"供应商 dropdown + 模型 dropdown"双 dropdown 设计
-/// - 改为每个阶段一个 [IntermediateSettingCard] 入口，点击弹出
+/// - 改为每个阶段一个 叙事设置卡（context.lmUi.settingCard）入口，点击弹出
 ///   [IntermediateModelPickerSheet]（夜航主题，按供应商分组 + 折叠）
 /// - 卡片副标题显示当前生效模型：会话级 > 全局级回退 > "未配置"
 /// - 两种模式均提供清除按钮（：全局模式配后无清除路径）：
@@ -414,7 +413,9 @@ class _IntermediatePhaseModelsSectionState
       items: consumers.join('、'),
     );
 
-    return IntermediateSettingCard(
+    return context.lmUi.settingCard(
+      context,
+      narrative: true,
       icon: Icons.smart_toy_outlined,
       title: _phaseLabel(t, phase.key),
       subtitle: '$subtitle\n$consumerText',

@@ -121,6 +121,8 @@ void main() {
     final count = await service.applyCharacterCard(
       sessionId: 's1',
       cardId: card.cardId,
+      defaultCharacterName: '未命名角色',
+      duplicateErrorMessage: '已存在同名角色',
       card: const ParsedCharacterCard(
         name: '爱蜜莉雅',
         description: '银发精灵',
@@ -202,6 +204,8 @@ void main() {
     await applyService.applyCharacterCard(
       sessionId: 's1',
       cardId: card.cardId,
+      defaultCharacterName: '未命名角色',
+      duplicateErrorMessage: '已存在同名角色',
     );
 
     expect(

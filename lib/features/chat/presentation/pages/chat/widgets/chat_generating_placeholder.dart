@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:lmstory/core/theme/simple/components/simple_message_bubble.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_message_bubble.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/settings/domain/entities/display_preferences.dart';
 
@@ -47,6 +48,10 @@ class ChatGeneratingPlaceholderBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return LmArrival(child: _buildBubble(context));
+  }
+
+  Widget _buildBubble(BuildContext context) {
     return SimpleMessageBubble(
       message: ChatMessage(
         messageId: '__generating_placeholder__',

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/input_toolbar.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/input_toolbar.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 

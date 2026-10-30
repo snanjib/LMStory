@@ -9,7 +9,7 @@ void main() {
     expect(t.defaultMaxSteps, 8);
     expect(t.maxDurationMinutes, 5);
     expect(t.tokenBudgetRatio, 0.6);
-    expect(t.maxRequestRetries, 1);
+    expect(t.maxRequestRetries, 5); // P5 上调后默认
     expect(t.doomLoopThreshold, 8); // 默认阈值 3→8（递进提醒前置）
     expect(t.askUserTimeout, const Duration(minutes: 3));
     expect(t.approvalTimeout, const Duration(minutes: 5));

@@ -29,7 +29,6 @@ class ProviderToolCapabilities {
     required this.streamingToolCallsReliable,
     required this.idStrategy,
     required this.preservesThoughtSignature,
-    this.note,
   });
 
   /// 端点支持的 tool_choice 取值集合
@@ -52,9 +51,6 @@ class ProviderToolCapabilities {
 
   /// 是否需要原样回传 thoughtSignature（Gemini 3 多轮质量依赖）
   final bool preservesThoughtSignature;
-
-  /// 备注（诊断页展示用）
-  final String? note;
 
   /// 全能力（OpenAI 官方 / Anthropic）
   static const ProviderToolCapabilities full = ProviderToolCapabilities(
@@ -82,7 +78,7 @@ class ProviderToolCapabilities {
     streamingToolCallsReliable: true,
     idStrategy: ToolCallIdStrategy.locallyGenerated,
     preservesThoughtSignature: true,
-    note: 'Gemini：无 tool call id，按顺序配对；thoughtSignature 需原样回传',
+    // 说明：无 tool call id，按顺序配对；thoughtSignature 需原样回传
   );
 
   /// GLM 直连（open.bigmodel.cn / glm- 模型）
@@ -93,7 +89,7 @@ class ProviderToolCapabilities {
     streamingToolCallsReliable: true,
     idStrategy: ToolCallIdStrategy.serverProvided,
     preservesThoughtSignature: false,
-    note: 'GLM 直连：tool_choice 仅 auto；流式工具需 tool_stream=true',
+    // 说明：tool_choice 仅 auto；流式工具需 tool_stream=true
   );
 
   /// Qwen 百炼（dashscope）：并行默认关
@@ -108,7 +104,7 @@ class ProviderToolCapabilities {
     streamingToolCallsReliable: true,
     idStrategy: ToolCallIdStrategy.serverProvided,
     preservesThoughtSignature: false,
-    note: 'Qwen 百炼：parallel_tool_calls 默认关，建议串行',
+    // 说明：parallel_tool_calls 默认关，建议串行
   );
 
   /// DeepSeek：仅串行、思考模式不支持 required（DeepSeekAdapter 亦做兜底）
@@ -119,7 +115,7 @@ class ProviderToolCapabilities {
     streamingToolCallsReliable: true,
     idStrategy: ToolCallIdStrategy.serverProvided,
     preservesThoughtSignature: false,
-    note: 'DeepSeek：仅串行工具调用；required 被适配器降级为 auto',
+    // 说明：仅串行工具调用；required 被适配器降级为 auto
   );
 
   /// 保守档（未知中转站/自建端点）：串行 + 流式工具不可靠
@@ -131,7 +127,7 @@ class ProviderToolCapabilities {
     streamingToolCallsReliable: false,
     idStrategy: ToolCallIdStrategy.serverProvided,
     preservesThoughtSignature: false,
-    note: '未知端点：保守降级（工具步回退非流式请求）',
+    // 说明：保守降级（工具步回退非流式请求）
   );
 
   /// SenseNova（商汤日日新，token.sensenova.cn / api.sensenova.cn）：
@@ -146,7 +142,7 @@ class ProviderToolCapabilities {
     streamingToolCallsReliable: false,
     idStrategy: ToolCallIdStrategy.serverProvided,
     preservesThoughtSignature: false,
-    note: 'SenseNova：预览版端点，工具步非流式；参数 schema 无服务端约束',
+    // 说明：预览版端点，工具步非流式；参数 schema 无服务端约束
   );
 
   /// 解析端点能力画像

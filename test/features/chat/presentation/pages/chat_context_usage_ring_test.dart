@@ -56,7 +56,7 @@ void main() {
     repo = _RingChatRepository();
   });
 
-  Future<void> pumpPage(WidgetTester tester) async {
+  Future<ProviderContainer> pumpPage(WidgetTester tester) async {
     final container = ProviderContainer(
       overrides: [
         chatModeControllerProvider(session).overrideWith((ref) {
@@ -103,6 +103,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
+    return container;
   }
 
   testWidgets('圆环出现在输入区工具栏，数字与旧徽章同源', (tester) async {
@@ -164,6 +165,37 @@ void main() {
 
     // 仅 1 条非摘要消息 → insufficient → 既有专属文案的 floating SnackBar
     expect(find.text(t.chat.compaction.insufficient), findsOneWidget);
+  });
+
+  testWidgets('最近一轮输出/缓存分项随流式完成进入面板；缺失时「—」+ 口径脚注', (
+    tester,
+  ) async {
+    final container = await pumpPage(tester);
+    final notifier = container.read(chatModeControllerProvider(session).notifier);
+
+    // 流式完成前的初始态：输出/缓存读取行「—」，脚注解释口径
+    await tester.tap(find.byType(ContextUsageChip));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 100));
+    // 三个「—」：输出行 + 缓存读取行 + 命中率最近一轮 + 会话平均 = 4
+    expect(find.text('—'), findsNWidgets(4));
+    expect(find.textContaining('「≈」为本地估算值'), findsOneWidget);
+
+    // 模拟一轮流式完成（_onFinishStreaming 写入 usage 分项）——面板经
+    // Consumer watch 原位刷新，无需重开
+    notifier.state = notifier.state.copyWith(
+      lastCompletionTokens: 800,
+      lastCacheReadTokens: 132000,
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('800 tokens'), findsOneWidget);
+    expect(find.text('132k tokens'), findsOneWidget);
+    // 最近一轮命中率：132000/(132000+48000) ≈ 73.3%
+    expect(find.text('73.3%'), findsOneWidget);
+    // 分项齐全后脚注退场（会话平均仍「—」：chat 不做命中率累计）
+    expect(find.text('—'), findsOneWidget);
+    expect(find.textContaining('「≈」为本地估算值'), findsNothing);
   });
 }
 

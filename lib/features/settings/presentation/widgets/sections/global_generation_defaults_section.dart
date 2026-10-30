@@ -326,7 +326,6 @@ class _GlobalGenerationDefaultsSectionState
               borderSide: BorderSide.none,
             ),
             hintText: desc,
-            hintStyle: SimpleTextStyles.bodySm.copyWith(color: colors.faint),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: SimpleSpacing.sMd,
               vertical: SimpleSpacing.sSm,

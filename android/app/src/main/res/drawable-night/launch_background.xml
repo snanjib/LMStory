@@ -1,15 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Modify this file to customize your launch splash screen -->
 
-<!-- Splash background for dark mode, aligned with the app's default
-     appearance (classic structure + classic palette): darkBg = #0E1018.
-     Single source in
-     lib/core/theme/system/palettes/classic/classic_palette.dart, kept in
-     sync by test/core/theme/t10_android_window_bg_guard_test.dart.
+<!-- T10-4：深色模式的启动图底色 —— 对齐默认外观（classic 结构 + classic 配色）
+     的夜间档 darkBg = #0E1018。单源在
+     lib/core/theme/system/palettes/classic/classic_palette.dart，
+     由 test/core/theme/t10_android_window_bg_guard_test.dart 锁死同源。
 
-     Previously only res/drawable (always white) and res/drawable-v21
-     (?android:colorBackground) existed, so a cold start in dark mode
-     flashed a white screen. This file adds the dark variant. -->
+     此前只有 res/drawable（恒白）与 res/drawable-v21（?android:colorBackground）
+     两个变体，深色模式冷启动先闪一屏纯白。本文件补上夜间档。 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <color android:color="#0E1018" />

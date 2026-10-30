@@ -3,6 +3,7 @@ import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 版本更新记录示意图（2026-07-27 新增）。
@@ -51,7 +52,10 @@ class VersionHistoryDiagram extends StatelessWidget {
             title: t.help.versionHistory.diagramV03Title,
             status: t.help.versionHistory.v03Status,
             statusDesc: t.help.versionHistory.v03StatusDesc,
-            schema: t.help.versionHistory.v03Schema,
+            schema: t.help.versionHistory.v03Schema(
+              // 上界从代码真源注入（drift schemaVersion），文案不手写数字
+              schemaVersion: AppDatabase.currentSchemaVersion,
+            ),
             schemaDesc: t.help.versionHistory.v03SchemaDesc,
             statusColor: colors.muted,
           ),

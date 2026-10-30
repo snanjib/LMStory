@@ -79,17 +79,31 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
     // 进 _scheduleRetry 只会空转：phase=failed 但 failureContext=null，
     // 无 FailureBar/无提示/无失败日志，regenerate 场景会话死锁到重启。
     // E104 的"临时降级"出口（continueWithFts5Only）也依赖 failed 终态可达。
+    // P6 预算闸（2026-10-15 批 E）：累计纯等待超 90s 提前放弃——
+    // 防连续长冷却（单次 Retry-After 封顶 60s）纯等约 5 分钟。
+    final retryAfter = _retryAfterFromError(error);
+    final nextDelay = _retryScheduler.retryDelay(
+      errorCode,
+      retryAfter: retryAfter,
+    );
+    final budgetExceeded = const RetryPolicy().exceedsBudget(
+      _retryWaitTotal,
+      nextDelay,
+    );
     if (currentCount < maxRetries &&
+        !budgetExceeded &&
         _round != null &&
         phase != IntermediatePhase.persisting) {
       // 可重试：进入 *Retry 状态，延迟后重跑。
       // 限流场景提取 Retry-After 冷却指示（Retry-After 头/流语义码
       // 透传），调度器按指示冷却而非固定 1s。
+      _retryWaitTotal += nextDelay;
       await _scheduleRetry(
         phase: phase,
         errorCode: errorCode,
         retryCount: currentCount + 1,
-        retryAfter: _retryAfterFromError(error),
+        retryAfter: retryAfter,
+        delay: nextDelay,
       );
     } else {
       // 重试用尽或不可重试：进入 failed
@@ -160,6 +174,7 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
     required IntermediatePhase phase,
     required String errorCode,
     required int retryCount,
+    required Duration delay,
     Duration? retryAfter,
   }) async {
     final retryPhase = _retryScheduler.toRetryPhase(phase);
@@ -168,7 +183,6 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
       retryCounts: {...state.retryCounts, phase: retryCount},
     );
 
-    final delay = _retryScheduler.retryDelay(errorCode, retryAfter: retryAfter);
     if (delay > Duration.zero) {
       await Future<void>.delayed(delay);
     }
@@ -180,7 +194,23 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
       return;
     }
 
-    // 清理该阶段流式产物，避免新旧叠加
+    // 2026-10-15 批 G：generating 流中断自动重试改**续写式**——
+    // 半截正文快照后作 continuationPrefix 注入重跑（等价自动执行
+    // 「从中断处继续」，与手动续跑同链路：prefix 进续写指令块，模型从
+    // 断点自然续写不重复）；零输出（首字节前失败）= 无前缀退化普通重跑。
+    // 重试粒度是断点而非整轮——「自动重试=整轮重跑本身就是一种错误」。
+    // E016 之外的阶段错误（关键词/摘要失败无正文概念）维持整阶段重跑。
+    if (phase == IntermediatePhase.generating) {
+      final partial = _firstNonEmpty(
+        state.streamingGenerated,
+        state.streamingReply,
+      );
+      if (partial != null && partial.isNotEmpty) {
+        _round!.continuationPrefix = partial;
+      }
+    }
+
+    // 清理该阶段流式产物，避免新旧叠加（快照已先行取走注入前缀）
     state = _resetPhaseState(state, phase);
 
     // 重跑该阶段（V2 六步流程：6 个阶段均支持重试重跑）

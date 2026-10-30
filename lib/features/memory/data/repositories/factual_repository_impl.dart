@@ -13,6 +13,7 @@ import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/memory/domain/entities/force_inject_target.dart';
 import 'package:lmstory/features/memory/domain/repositories/factual_repository.dart';
 import 'package:lmstory/features/memory/domain/services/memory_query.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 import 'package:uuid/uuid.dart';
 
 /// FactualRepository 实现（Data 层，DOC-11 §11.1）
@@ -412,7 +413,9 @@ class FactualRepositoryImpl implements FactualRepository {
     // 只读兜底拦截（DOC-15 §8.2）：source != auto 的属性不可修改
     final attr = await _findAttributeById(attributeId);
     if (attr != null && attr.source.isReadOnly) {
-      throw const ResourceApplyException('只读资源属性不可修改');
+      throw ResourceApplyException(
+        t.common.seedResource.readOnlyAttributeCannotBeModified,
+      );
     }
 
     final now = DateTime.now();
@@ -971,7 +974,9 @@ class FactualRepositoryImpl implements FactualRepository {
     // 只读兜底拦截（DOC-15 §8.2）：source != auto 的实体不可删除
     final entity = await getEntityById(entityId);
     if (entity != null && entity.source.isReadOnly) {
-      throw const ResourceApplyException('只读资源实体不可删除');
+      throw ResourceApplyException(
+        t.common.seedResource.readOnlyEntityCannotBeDeleted,
+      );
     }
 
     await _database.transaction(() async {
@@ -1035,7 +1040,9 @@ class FactualRepositoryImpl implements FactualRepository {
     // 只读兜底拦截（DOC-15 §8.2）：source != auto 的属性不可删除
     final attr = await _findAttributeById(attributeId);
     if (attr != null && attr.source.isReadOnly) {
-      throw const ResourceApplyException('只读资源属性不可删除');
+      throw ResourceApplyException(
+        t.common.seedResource.readOnlyAttributeCannotBeDeleted,
+      );
     }
 
     await (_database.delete(_database.factualAttributesTable)
@@ -1064,7 +1071,9 @@ class FactualRepositoryImpl implements FactualRepository {
             type != null ||
             importance != null ||
             category != null)) {
-      throw const ResourceApplyException('只读资源实体的内容不可编辑');
+      throw ResourceApplyException(
+        t.common.seedResource.readOnlyEntityContentCannotBeEdited,
+      );
     }
 
     final companion = FactualEntitiesTableCompanion(

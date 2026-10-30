@@ -8,7 +8,11 @@ import 'package:lmstory/features/advanced/domain/entities/narrative_pacing.dart'
 /// askUserTimeout 默认 3 分钟（原硬编码 10 分钟，全计划唯一默认行为变更，
 /// 用户 ，可配回）；**0 = 永不超时**（对齐 maxSteps
 /// 0=无上限语义）——[askUserTimeout] 为 null 表示一直等待导演回答。
-/// 审批超时保持 fail-closed（0 不开放，安全默认不变）。
+/// 审批超时 2026-10-15 P2 ：[approvalTimeoutEnabled] 关闭时两类 HITL
+/// 横幅（审批 + ask_user）均永不超时（[approvalTimeout]/[askUserTimeout]
+/// 为 null）；开启时保持 fail-closed（审批 0 值钳制见
+/// [AdvancedHitlConfig.effectiveApprovalTimeout]，两侧共用同一真源，
+/// 修）。
 class DirectorRoundTuning {
   const DirectorRoundTuning({
     required this.defaultMaxSteps,
@@ -21,6 +25,7 @@ class DirectorRoundTuning {
     required this.subagentMaxSteps,
     required this.subagentMaxDuration,
     required this.subagentTokenBudgetRatio,
+    required this.approvalTimeoutEnabled,
     this.globalTools = const {},
     this.globalPacing = NarrativePacing.balanced,
     this.toolOutputLimit = 20000,
@@ -38,21 +43,17 @@ class DirectorRoundTuning {
         tokenBudgetRatio: c.budget.tokenBudgetRatio,
         maxRequestRetries: c.budget.maxRequestRetries,
         doomLoopThreshold: c.doomLoop.threshold,
-        // ask_user_timeout_minutes=0 → 永不超时（null）
-        askUserTimeout: c.hitl.askUserTimeoutMinutes <= 0
-            ? null
-            : Duration(minutes: c.hitl.askUserTimeoutMinutes),
-        // approval_timeout=0 会物化 Duration.zero →
-        // 审批 completer.future.timeout(0) 立即超时，fail-closed 每次秒拒
-        // 且横幅闪没。设置 UI 已挡 0（fail-closed 不开放），此处对手编/
-        // 导入的坏值钳回默认 5 分钟；0 的「合法立即拒」语义如需开放应
-        // 显式设计而非副作用。
-        approvalTimeout: c.hitl.approvalTimeoutMinutes <= 0
-            ? const Duration(minutes: 5)
-            : Duration(minutes: c.hitl.approvalTimeoutMinutes),
+        // P2 开关同盖：关闭时提问横幅也永不超时；0 = 永不超时（既有语义）
+        askUserTimeout: c.hitl.effectiveAskUserTimeout,
+        // P2 ：开关关闭 → null（runner 不挂 .timeout，永不 fail-closed）；
+        // 开启时 0 值钳回默认 5（Duration.zero 会让 completer 立即秒拒且
+        // 横幅闪没）——钳制真源在 AdvancedHitlConfig.effectiveApprovalTimeout，
+        // 页面倒计时与 runner 同源（修）。
+        approvalTimeout: c.hitl.effectiveApprovalTimeout,
         subagentMaxSteps: c.subagent.maxSteps,
         subagentMaxDuration: Duration(minutes: c.subagent.maxDurationMinutes),
         subagentTokenBudgetRatio: c.subagent.tokenBudgetRatio,
+        approvalTimeoutEnabled: c.hitl.approvalTimeoutEnabled,
         globalTools: c.tools,
         globalPacing: NarrativePacing.fromConfigValue(c.narrativePacing),
         toolOutputLimit: c.harness.toolOutputLimit,
@@ -72,9 +73,15 @@ class DirectorRoundTuning {
   final int maxRequestRetries;
   final int doomLoopThreshold;
 
-  /// ask_user 挂起超时（null = 永不超时，「一直等待」档）
+  /// ask_user 挂起超时（null = 永不超时，「一直等待」档；P2 开关同盖）
   final Duration? askUserTimeout;
-  final Duration approvalTimeout;
+
+  /// 审批挂起超时（null = 永不超时，P2 开关关闭时；开启时 fail-closed
+  /// 必有超时——0 值已由 effectiveApprovalTimeout 钳回默认）
+  final Duration? approvalTimeout;
+
+  /// 确认超时自动拒绝开关（P2；页面倒计时显隐与设置文案用）
+  final bool approvalTimeoutEnabled;
   final int subagentMaxSteps;
   final Duration subagentMaxDuration;
 

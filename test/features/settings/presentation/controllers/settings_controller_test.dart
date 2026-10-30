@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_loader.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/entities/llm_protocol.dart';
@@ -272,6 +273,48 @@ void main() {
       }
       expect(settingsRepo.overrides['advanced.system_prompt'], '导演规则');
       expect(settingsRepo.overrides['other-preset.key'], 'test-preset');
+    });
+  });
+
+  group('内容宽度模式（通用设置-外观）', () {
+    test('默认流式；set 持久化到 general.content_width_mode', () async {
+      final notifier = SettingsNotifier(
+        presetRepo: presetRepo,
+        templateRepo: templateRepo,
+        settingsRepo: settingsRepo,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(notifier.state.contentWidthMode, LmContentWidthMode.fluid);
+
+      await notifier.setContentWidthMode(LmContentWidthMode.capped);
+      expect(notifier.state.contentWidthMode, LmContentWidthMode.capped);
+      expect(
+        settingsRepo.overrides['general.content_width_mode'],
+        'capped',
+      );
+
+      // 重启（重建 notifier）：从 override 读回 capped
+      final fresh = SettingsNotifier(
+        presetRepo: presetRepo,
+        templateRepo: templateRepo,
+        settingsRepo: settingsRepo,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(fresh.state.contentWidthMode, LmContentWidthMode.capped);
+      fresh.dispose();
+      notifier.dispose();
+    });
+
+    test('坏值回落流式（容忍化与 fontSize 同口径）', () async {
+      settingsRepo.overrides['general.content_width_mode'] = 'bogus';
+      final fresh = SettingsNotifier(
+        presetRepo: presetRepo,
+        templateRepo: templateRepo,
+        settingsRepo: settingsRepo,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(fresh.state.contentWidthMode, LmContentWidthMode.fluid);
+      fresh.dispose();
     });
   });
 

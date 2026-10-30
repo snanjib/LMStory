@@ -52,7 +52,7 @@ class _IncomingImportListenerState
 
       final Uint8List bytes;
       try {
-        // 同步读：本地临时缓存文件（原生侧已复制，≤导入上限），且后续
+        // 同步读：本地临时缓存文件（原生侧已复制），且后续
         // 解析（jsonDecode/base64）本就是同步的
         bytes = readFileBytesSyncNative(file.path);
       } catch (e) {

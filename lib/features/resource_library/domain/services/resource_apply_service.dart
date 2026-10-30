@@ -26,6 +26,7 @@ class ResourceApplyService {
   /// 常驻计数，保证「预览说的 = 实际投的」。
   Future<SeedApplyPreview> previewCharacterCard({
     required String cardId,
+    required String defaultCharacterName,
   }) async {
     final card = await _resourceRepository.getCharacterCard(cardId);
     if (card == null) {
@@ -64,7 +65,7 @@ class ResourceApplyService {
     return SeedApplyPreview(
       // 空名兜底与投影侧一致（resource_projection_service
       // 「未命名角色」），预览不再出现空白标题
-      title: parsed.name.trim().isNotEmpty ? parsed.name : '未命名角色',
+      title: parsed.name.trim().isNotEmpty ? parsed.name : defaultCharacterName,
       lines: lines,
       constantCount: activeEntries.where((e) => e.constant).length,
       // （只读语义 2.0）：启用内置词条总数——预览弹窗「注入方式」段的
@@ -73,7 +74,10 @@ class ResourceApplyService {
     );
   }
 
-  Future<SeedApplyPreview> previewWorldbook({required String bookId}) async {
+  Future<SeedApplyPreview> previewWorldbook({
+    required String bookId,
+    required String defaultSettingName,
+  }) async {
     final book = await _resourceRepository.getWorldbook(bookId);
     if (book == null) {
       throw ModelNotFoundException(bookId);
@@ -96,7 +100,7 @@ class ResourceApplyService {
         ),
     ];
     return SeedApplyPreview(
-      title: book.name,
+      title: book.name.trim().isNotEmpty ? book.name : defaultSettingName,
       lines: lines,
       constantCount: entries.where((e) => e.constant).length,
       // 启用词条总数（与 constantCount 同口径剔除停用行）
@@ -117,6 +121,9 @@ class ResourceApplyService {
   Future<int> applyCharacterCard({
     required String sessionId,
     required String cardId,
+    required String defaultCharacterName,
+    required String duplicateErrorMessage,
+    String? defaultSettingName,
   }) async {
     final card = await _resourceRepository.getCharacterCard(cardId);
     if (card == null) {
@@ -127,6 +134,9 @@ class ResourceApplyService {
       sessionId: sessionId,
       cardId: cardId,
       card: parsed,
+      defaultCharacterName: defaultCharacterName,
+      duplicateErrorMessage: duplicateErrorMessage,
+      defaultSettingName: defaultSettingName,
     );
   }
 
@@ -134,6 +144,7 @@ class ResourceApplyService {
   Future<int> applyWorldbook({
     required String sessionId,
     required String bookId,
+    required String defaultSettingName,
   }) async {
     final book = await _resourceRepository.getWorldbook(bookId);
     if (book == null) {
@@ -144,6 +155,7 @@ class ResourceApplyService {
       sessionId: sessionId,
       bookId: bookId,
       entries: entries,
+      defaultSettingName: defaultSettingName,
     );
   }
 

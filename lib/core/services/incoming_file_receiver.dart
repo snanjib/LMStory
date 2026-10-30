@@ -80,5 +80,11 @@ class IncomingFileReceiver {
     _controller.add(file);
   }
 
+  /// 站内事件源（如 macOS 文件拖放）注入：绕过双来源路径去重——
+  /// 用户把同一个文件拖入两次是合法且预期的操作。
+  void emitExternal(IncomingFile file) {
+    _controller.add(file);
+  }
+
   Future<void> dispose() => _controller.close();
 }

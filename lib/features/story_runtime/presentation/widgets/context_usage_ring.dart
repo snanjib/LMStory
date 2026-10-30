@@ -252,6 +252,7 @@ class ContextUsageDetailSheet extends StatefulWidget {
     required this.onManualCompact,
     this.composition,
     this.compositionNote,
+    this.isEstimated = false,
     super.key,
   });
 
@@ -270,6 +271,12 @@ class ContextUsageDetailSheet extends StatefulWidget {
   final bool isRoundActive;
 
   final VoidCallback onManualCompact;
+
+  /// 最近一轮分项是否为本地估算兜底（端点未回 usage 时由各模式控制器
+  /// 用 tiktoken 估算 prompt/completion 写入）。true 时 hero 与
+  /// 输入/输出行加「≈」前缀，面板底部显示口径脚注；缓存分项本地
+  /// 不可估算，恒为端点真实数据或「—」。
+  final bool isEstimated;
 
   /// 上下文构成段（null = 未装配，不渲染构成区）
   final List<ContextCompositionSegment>? composition;
@@ -315,10 +322,24 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
   String _formatRatio(double? ratio) =>
       ratio == null ? '—' : '${(ratio * 100).toStringAsFixed(1)}%';
 
-  String _tokenLabel(int? tokens, Translations t) => tokens == null
-      ? t.common.contextRing.noData
-      : t.common.contextRing
-          .tokenCount(count: ContextUsageDetailSheet.formatTokenCount(tokens));
+  String _tokenLabel(int? tokens, Translations t, {bool estimated = false}) =>
+      tokens == null
+          ? t.common.contextRing.noData
+          : estimated
+              ? t.common.contextRing.estTokenCount(
+                  count: ContextUsageDetailSheet.formatTokenCount(tokens),
+                )
+              : t.common.contextRing.tokenCount(
+                  count: ContextUsageDetailSheet.formatTokenCount(tokens),
+                );
+
+  /// 「—」/「≈」口径脚注显隐：分项缺失（端点未回 usage/端点不提供
+  /// 缓存统计）或展示的是本地估算值时显示，消除「面板是不是坏了」
+  /// 的误读（内测反馈：全「—」以为模型不支持）。
+  bool get _showUsageNote =>
+      widget.isEstimated ||
+      widget.lastCompletionTokens == null ||
+      widget.lastCacheReadTokens == null;
 
   @override
   Widget build(BuildContext context) {
@@ -407,6 +428,15 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
                 _buildLastRequestSection(colors, t),
                 const SizedBox(height: IntermediateSpacing.sLg),
                 _buildSessionSection(colors, t),
+                if (_showUsageNote) ...[
+                  const SizedBox(height: IntermediateSpacing.sXs),
+                  Text(
+                    t.common.contextRing.usageNote,
+                    style: IntermediateTextStyles.caption.copyWith(
+                      color: colors.faint,
+                    ),
+                  ),
+                ],
                 if (widget.isManualCompacting) ...[
                   const SizedBox(height: IntermediateSpacing.sLg),
                   _buildStreamingBlock(colors, t),
@@ -462,14 +492,15 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
       children: [
         Expanded(
           child: Text(
-            t.common.contextRing.usageFraction(
+            '${widget.isEstimated ? '≈ ' : ''}'
+            '${t.common.contextRing.usageFraction(
               used: ContextUsageDetailSheet.formatTokenCount(
                 widget.lastPromptTokens!,
               ),
               total: ContextUsageDetailSheet.formatTokenCount(
                 widget.contextWindowTokens!,
               ),
-            ),
+            )}',
             style: _valueStyle().copyWith(
               fontSize: IntermediateTextStyles.title.fontSize,
               fontWeight: IntermediateTextStyles.title.fontWeight,
@@ -480,6 +511,7 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
         ),
         const SizedBox(width: IntermediateSpacing.sMd),
         Text(
+          '${widget.isEstimated ? '≈' : ''}'
           '${(widget.lastPromptTokens! / widget.contextWindowTokens! * 100).toStringAsFixed(1)}%',
           style: _valueStyle().copyWith(
             fontSize: IntermediateTextStyles.title.fontSize,
@@ -659,8 +691,14 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
         const SizedBox(height: IntermediateSpacing.sXs),
         _kvRow(
           t.common.contextRing.cacheHitLast,
+          // 与「会话平均」同分母 C/(C+P)：最近一轮此前用 C/P，
+          // 同屏两行两种口径（Anthropic promptTokens 不含 cache-read，
+          // C/P 会把命中率系统性高估）。
           hasLastHit
-              ? _formatRatio(widget.lastCacheReadTokens! / lastPrompt)
+              ? _formatRatio(
+                  widget.lastCacheReadTokens! /
+                      (widget.lastCacheReadTokens! + lastPrompt),
+                )
               : t.common.contextRing.noData,
           colors,
         ),
@@ -681,12 +719,21 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
         const SizedBox(height: IntermediateSpacing.sXs),
         _kvRow(
           t.common.contextRing.inputLabel,
-          _tokenLabel(widget.lastPromptTokens, t),
+          // 估算兜底时输入/输出行同加「≈」前缀；缓存读取本地不可估算
+          _tokenLabel(
+            widget.lastPromptTokens,
+            t,
+            estimated: widget.isEstimated,
+          ),
           colors,
         ),
         _kvRow(
           t.common.contextRing.outputLabel,
-          _tokenLabel(widget.lastCompletionTokens, t),
+          _tokenLabel(
+            widget.lastCompletionTokens,
+            t,
+            estimated: widget.isEstimated,
+          ),
           colors,
         ),
         _kvRow(

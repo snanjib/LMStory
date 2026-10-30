@@ -1,6 +1,10 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository.
+This file is the source of truth for project knowledge and current boundaries:
+what the project is, how it is organized, and which designs are abandoned. The
+source of truth for coding-agent behavior rules (task scope, editing
+discipline, validation checklist, Git delivery) is `AGENTS.md` — read and
+follow it before making changes.
 
 ## Project Overview
 
@@ -10,11 +14,14 @@ LMStory is a Flutter application for general AI chat and memory-backed interacti
 |---|---|---|
 | `chat` | 对话模式 / Chat mode | Implemented |
 | `intermediate` | 故事模式 / Story mode | Implemented |
-| `advanced` | 导演模式 / Director mode | Implemented (experimental; toggle in Settings, off by default) |
+| `advanced` | 导演模式 / Director mode | Implemented (toggle in Settings, on by default) |
 
 Director mode (`advanced`) is the v0.3 Agent Loop: an AI backstage executor that runs the world under user-authored "project rules" and produces the story text as the single outcome. Its kernel lives in `lib/features/advanced/` (AgentRunner, tools, skills, durable event log, HITL ask/approval, watch mode, spawn subagent, maxSteps soft landing, story anchor/recap), and it shares the story runtime (persistence, compaction, retry, phase models) with Story mode through `lib/features/story_runtime/`. The reusable agent-loop contract (runner, tool pipeline, gateway) lives in `lib/core/agent/`. Design docs: `doc/design/v0.3.0/`. The former standalone HUD, `factual_memories` single-table, `state_snapshots`, and HUD-specific `update_world` pipeline are abandoned designs, not future requirements. Mid-round steering was removed: to correct a running story, edit the message and regenerate.
 
-The repository has internationalization infrastructure, but the application currently ships only the `zh-CN` locale. English UI is planned but not implemented.
+The application ships two locales, `zh-CN` and `en-US` (the English UI is
+fully delivered, with key parity against zh and a zh-en parity guard in CI).
+Switch language in Settings → 语言与输入; the choice persists. "Follow
+system" is not offered yet (selector placeholder).
 
 ## Source of Truth and Document Status
 
@@ -43,9 +50,10 @@ The document map and status rules live in `doc/README.md`. Use the following ref
 | Settings interaction | `doc/design/14_设置交互优化设计.md` |
 | Director mode (Agent Loop) design | `doc/design/v0.3.0/` (调研规划、体验重构方案、设置体系、剧情节奏、正文交付契约、上下文用量指示、长会话退化治理、AI建卡工具、记忆库实体归并); historical direction drafts: `doc/design/03A_v0.3子系统设计.md`, `doc/design/04A_v0.3详细设计.md` |
 | Worldbook / character cards | `doc/design/15_世界书与角色卡设计.md` (implemented in `lib/features/resource_library/` and `lib/features/resource_ai/`) |
+| Appearance system v2 & component interface layer | `doc/design/v0.4.0/` (dual-axis appearance system, LmComponentKit interface layer, structure research snapshots) |
 | Project positioning (external messaging) | `doc/product/00_项目定位.md` |
 
-Director mode has no standalone visual specification: it reuses the 06B nightVoyage theme plus the theater-language UI spec in `doc/design/v0.3.0/导演模式体验重构调研与方案.md` §4. Do not recreate the abandoned HUD design as `06C`.
+Director mode has no standalone visual specification: it reuses the 06B story-mode visual spec plus the global three-axis appearance system (structure × palette × day/night; the early "nightVoyage" theme was absorbed into the global night base — there is no standalone nightVoyage theme anymore) and the theater-language UI spec in `doc/design/v0.3.0/导演模式体验重构调研与方案.md` §4. Do not recreate the abandoned HUD design as `06C`.
 
 ## Reference Project
 

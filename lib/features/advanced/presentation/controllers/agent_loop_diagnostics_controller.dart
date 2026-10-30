@@ -9,6 +9,7 @@ import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/agent/agent_runner.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_event_bus.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_log_recovery.dart';
 import 'package:lmstory/features/advanced/domain/services/api_key_lookup.dart';
 import 'package:lmstory/features/advanced/presentation/tools/agent_diagnostic_tools.dart';
 import 'package:lmstory/features/chat/data/agent/llm_service_agent_gateway.dart';
@@ -257,9 +258,15 @@ class AgentLoopDiagnosticsController
                 ms: event.duration.inMilliseconds,
               ) +
               (event.isError ? tl.toolFailedSuffix : ''),
-          detail: event.output.length > 160
-              ? '${event.output.substring(0, 160)}…'
-              : event.output,
+          detail: () {
+            final output =
+                AgentLogRecoveryService.isInterruptedOutput(event.output)
+                    ? t.advanced.process.interruptedToolOutput
+                    : event.output;
+            return output.length > 160
+                ? '${output.substring(0, 160)}…'
+                : output;
+          }(),
           isError: event.isError,
         ),
       AgentStepFinished() => AgentDiagnosticEntry(

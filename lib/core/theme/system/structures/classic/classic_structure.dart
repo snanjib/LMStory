@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/system/lm_button_metrics.dart';
 import 'package:lmstory/core/theme/system/lm_focus_ring.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_page_transitions.dart';
 import 'package:lmstory/core/theme/system/lm_palette.dart';
 import 'package:lmstory/core/theme/system/lm_radius.dart';
@@ -172,7 +173,8 @@ class ClassicStructure implements LmStructure {
           shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.all(Radius.circular(LmRadius.rXl)),
           ),
-          titleTextStyle: LmUiTextStyles.title2.copyWith(color: palette.ink),
+          titleTextStyle: LmNarrativeTextStyles.narrativeDisplay
+              .copyWith(color: palette.ink, fontSize: 24, height: 1.3),
           contentTextStyle: LmUiTextStyles.body.copyWith(color: palette.muted),
           actionsPadding: const EdgeInsets.fromLTRB(
             LmSpacing.sLg,

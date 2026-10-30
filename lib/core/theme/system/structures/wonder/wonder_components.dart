@@ -1,12 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/api/lm_motion_profile.dart';
+import 'package:lmstory/core/theme/shared/components/composer_surface.dart';
+import 'package:lmstory/core/theme/shared/components/navigation_card_content.dart';
 import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/classic_components.dart';
 
 /// A quiet narrative gallery: the writing remains the brightest exhibit.
-class WonderComponents implements LmComponentKit {
+///
+/// Extends [ClassicComponents] so undifferentiated surfaces keep the
+/// established look; overrides carry the wonder differentiation.
+class WonderComponents extends ClassicComponents {
   const WonderComponents();
+
+  @override
+  LmMotionProfile get motionProfile => const LmMotionProfile(
+        enterOffset: Offset(0, 10),
+        hoverOffset: Offset(0, -2),
+      );
 
   @override
   double radius(LmCorner corner) => switch (corner) {
@@ -72,50 +85,19 @@ class WonderComponents implements LmComponentKit {
     bool narrative = false,
     bool enabled = true,
   }) {
-    final palette = context.lm.palette;
     return Opacity(
       opacity: enabled ? 1 : 0.5,
-      child: card(
-        context,
-        onTap: enabled ? onTap : null,
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: palette.primaryDim,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: palette.primary, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
-                      color: palette.ink,
-                      fontSize: 18,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    subtitle,
-                    style: LmNarrativeTextStyles.caption.copyWith(
-                      color: palette.muted,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.arrow_forward_ios, size: 16, color: palette.faint),
-          ],
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        child: card(
+          context,
+          onTap: enabled ? onTap : null,
+          child: NavigationCardContent(
+            icon: icon,
+            title: title,
+            subtitle: subtitle,
+          ),
         ),
       ),
     );
@@ -249,6 +231,16 @@ class WonderComponents implements LmComponentKit {
     bool narrative = false,
   }) {
     final palette = context.lm.palette;
+    if (narrative) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isUser ? palette.primaryDim : Colors.transparent,
+          borderRadius: cardRadius,
+        ),
+        child: child,
+      );
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -274,11 +266,9 @@ class WonderComponents implements LmComponentKit {
     bool narrative = false,
   }) {
     final palette = context.lm.palette;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: palette.surface,
-        border: Border(top: BorderSide(color: palette.dividerStrong)),
-      ),
+    return ComposerSurface(
+      color: palette.surface,
+      borderColor: palette.dividerStrong,
       child: child,
     );
   }

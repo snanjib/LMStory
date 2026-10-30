@@ -1,15 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Modify this file to customize your launch splash screen -->
 
-<!-- Splash background aligned with the app's default appearance (classic
-     structure + classic palette), light variant: lightBg = #F4F5F7. The
-     single source of truth is
-     lib/core/theme/system/palettes/classic/classic_palette.dart, kept in
-     sync by test/core/theme/t10_android_window_bg_guard_test.dart.
+<!-- T10-4：启动图底色对齐**默认外观**（classic 结构 + classic 配色）的日间档
+     lightBg = #F4F5F7。单源在
+     lib/core/theme/system/palettes/classic/classic_palette.dart，
+     由 test/core/theme/t10_android_window_bg_guard_test.dart 锁死同源。
 
-     Previously this was always @android:color/white with no dark variant,
-     so a cold start in dark mode flashed a white screen. The dark variant
-     lives in res/drawable-night/launch_background.xml. -->
+     此前恒为 @android:color/white 且**没有夜间变体** —— 深色模式冷启动
+     会先闪一屏纯白。夜间档见 res/drawable-night/launch_background.xml。 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <color android:color="#F4F5F7" />

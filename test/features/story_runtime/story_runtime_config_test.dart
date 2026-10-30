@@ -59,6 +59,39 @@ void main() {
       expect(pinned.recentMinTokenTarget, 24000);
     });
 
+    test('directorClamped 不变量：会话覆盖优先、双路钳域、形态同 directorPinned', () {
+      const global = ContextBudget(
+        compactionTriggerRatio: 0.86, // 域外（软着陆线 0.85 之上=饿死带）
+        recentMinRatio: 0.2, // 导演不用三段式：输出必须丢弃（retrievalRatio 走默认 0.15）
+        recentMinTokenTarget: 24000,
+      );
+
+      // 全局域外值过钳制（无会话覆盖路径）
+      final clampedGlobal = global.directorClamped(sessionOverride: null);
+      expect(clampedGlobal.compactionTriggerRatio, 0.80);
+      expect(clampedGlobal.retrievalRatio, 0);
+      expect(clampedGlobal.recentMinRatio, isNull);
+      expect(clampedGlobal.recentMinTokenTarget, 24000);
+      // 形态与 directorPinned 一致（除触发线为生效值）
+      final pinned = global.directorPinned;
+      expect(clampedGlobal.retrievalRatio, pinned.retrievalRatio);
+      expect(clampedGlobal.recentMinRatio, pinned.recentMinRatio);
+      expect(
+        clampedGlobal.recentMinTokenTarget,
+        pinned.recentMinTokenTarget,
+      );
+
+      // 会话覆盖优先于全局，同样过钳制（低侧）
+      final clampedSession = global.directorClamped(
+        sessionOverride: 0.2,
+      );
+      expect(clampedSession.compactionTriggerRatio, 0.30);
+
+      // 域内值原样通过
+      final inRange = global.directorClamped(sessionOverride: 0.6);
+      expect(inRange.compactionTriggerRatio, 0.6);
+    });
+
     test('故事侧 ContextBudget 不受影响（同一实例透传）', () {
       const config = IntermediateConfig();
       expect(

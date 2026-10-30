@@ -3,10 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_section.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/features/settings/presentation/widgets/sections/content_width_selector_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/font_size_selector_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/palette_selector_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/structure_selector_section.dart';
@@ -34,8 +33,10 @@ class GeneralAppearanceSettingsPage extends ConsumerWidget {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar:
-          SimpleAppBar(title: t.settings.general.categories.appearance.title),
+      appBar: context.lmUi.appBar(
+        context,
+        title: t.settings.general.categories.appearance.title,
+      ),
       body: LmMeasure(
         child: ListView(
           padding: const EdgeInsets.all(SimpleSpacing.sLg),
@@ -44,7 +45,8 @@ class GeneralAppearanceSettingsPage extends ConsumerWidget {
               ConfigVisibilityKeys.appearanceStructure,
               level,
             )) ...[
-              SimpleSettingSection(
+              context.lmUi.settingSection(
+                context,
                 title: t.settings.general.structure,
                 child: const StructureSelectorSection(),
               ),
@@ -54,7 +56,8 @@ class GeneralAppearanceSettingsPage extends ConsumerWidget {
               ConfigVisibilityKeys.appearancePalette,
               level,
             )) ...[
-              SimpleSettingSection(
+              context.lmUi.settingSection(
+                context,
                 title: t.settings.general.palette,
                 child: const PaletteSelectorSection(),
               ),
@@ -64,7 +67,8 @@ class GeneralAppearanceSettingsPage extends ConsumerWidget {
               ConfigVisibilityKeys.appearanceThemeMode,
               level,
             ))
-              SimpleSettingSection(
+              context.lmUi.settingSection(
+                context,
                 title: t.settings.general.theme,
                 child: const ThemeSelectorSection(),
               ),
@@ -73,9 +77,20 @@ class GeneralAppearanceSettingsPage extends ConsumerWidget {
               ConfigVisibilityKeys.appearanceFontSize,
               level,
             ))
-              SimpleSettingSection(
+              context.lmUi.settingSection(
+                context,
                 title: t.settings.general.fontSize,
                 child: const FontSizeSelectorSection(),
+              ),
+            const SizedBox(height: SimpleSpacing.sLg),
+            if (ConfigVisibility.of(
+              ConfigVisibilityKeys.appearanceContentWidth,
+              level,
+            ))
+              context.lmUi.settingSection(
+                context,
+                title: t.settings.general.contentWidth,
+                child: const ContentWidthSelectorSection(),
               ),
           ],
         ),

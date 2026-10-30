@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -92,28 +93,10 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
           SimpleSpacing.sMd,
           SimpleSpacing.sSm,
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      t.settings.provider.models,
-                      style: SimpleTextStyles.title2,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: SimpleSpacing.sXs),
-                  Text(
-                    '(${_selectedIds.length}/${widget.fetchedModels.length})',
-                    style:
-                        SimpleTextStyles.caption.copyWith(color: colors.muted),
-                  ),
-                ],
-              ),
-            ),
+        child: PanelHeading(
+          title: t.settings.provider.models,
+          subtitle: '(${_selectedIds.length}/${widget.fetchedModels.length})',
+          actions: [
             IconButton(
               //  语义缺口：复用 common.close（不新增 i18n key）。
               tooltip: t.common.close,
@@ -131,7 +114,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
           onChanged: (v) => setState(() => _query = v),
           decoration: InputDecoration(
             hintText: t.settings.provider.searchModels,
-            hintStyle: SimpleTextStyles.body.copyWith(color: colors.faint),
+            hintStyle: SimpleTextStyles.body.copyWith(color: colors.muted),
             prefixIcon: Icon(Icons.search, size: 20, color: colors.faint),
             isDense: true,
             filled: true,
@@ -255,39 +238,32 @@ class _ModelPickItem extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Text(
+                    model.displayName ?? model.modelId,
+                    style: SimpleTextStyles.body,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: SimpleSpacing.sXs),
+                  Text(
+                    model.modelId,
+                    style:
+                        SimpleTextStyles.overline.copyWith(color: colors.muted),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: SimpleSpacing.sXs),
+                  Wrap(
+                    spacing: SimpleSpacing.sSm,
+                    runSpacing: SimpleSpacing.sXs,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          model.displayName ?? model.modelId,
-                          style: SimpleTextStyles.body,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (model.capabilities.isNotEmpty) ...[
-                        const SizedBox(width: SimpleSpacing.sXs),
+                      if (model.capabilities.isNotEmpty)
                         ModelCapabilityBadges(
                           capabilities: model.capabilities,
                           size: 13,
                         ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          model.modelId,
-                          style: SimpleTextStyles.overline
-                              .copyWith(color: colors.muted),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
                       if (model.contextWindow != null) ...[
-                        const SizedBox(width: SimpleSpacing.sSm),
                         _metaChip(
                           colors,
                           Icons.straighten,
@@ -295,7 +271,6 @@ class _ModelPickItem extends StatelessWidget {
                         ),
                       ],
                       if (model.maxOutput != null) ...[
-                        const SizedBox(width: SimpleSpacing.sXs),
                         _metaChip(
                           colors,
                           Icons.output,

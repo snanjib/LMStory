@@ -24,9 +24,11 @@ import 'package:lmstory/features/advanced/domain/entities/agent_live_block.dart'
 import 'package:lmstory/features/advanced/domain/entities/agent_round_draft.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_timeline_block.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
+import 'package:lmstory/features/advanced/domain/entities/director_resume_context.dart';
 import 'package:lmstory/features/advanced/domain/entities/director_round_tuning.dart';
 import 'package:lmstory/features/advanced/domain/entities/director_session_extension.dart';
 import 'package:lmstory/features/advanced/domain/entities/tool_permissions.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_approval_composer.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_live_delta_coalescer.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_log_recovery.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_pacing.dart';
@@ -157,6 +159,9 @@ class DirectorRoundRunner {
   /// 挂起审批对应的工具名（「本会话总是允许」的记忆写入依据）
   String? _pendingApprovalToolName;
 
+  /// 挂起审批的变更条数（durable 留痕「批准 N 处变更」用）
+  int _pendingApprovalChangeCount = 0;
+
   /// 本会话审批放行记忆（「本会话总是允许」）：命中的 ask 态工具在
   /// approvalRequiredFor 直接放行并留痕 L2。随 runner 实例更换而清空
   ///（一 runner 一会话），设置面板可手动清除。
@@ -197,6 +202,16 @@ class DirectorRoundRunner {
   /// 防跨轮残留——正文交付契约 §4.3）
   final Map<String, AgentProseExtractor> _proseExtractors = {};
 
+  /// 最近一次轮草稿（失败轮的写工具累积/一次性豁免标记暂存，真续跑
+  /// 复用；每次 runRound 开头刷新，新一轮自然覆盖旧残留）
+  AgentRoundDraft? _lastRoundDraft;
+
+  /// 失败轮草稿读取（真续跑上下文构建用；turnNumber 不匹配返回 null）
+  AgentRoundDraft? resumableDraftFor(int turnNumber) =>
+      _lastRoundDraft != null && _lastRoundDraft!.turnNumber == turnNumber
+          ? _lastRoundDraft
+          : null;
+
   /// 当前 step 的 0 基序号（AgentStepStarted 追踪）
   ///
   /// 工具执行事件不带 stepIndex，且 AgentToolCallReceived 用的是自增后的
@@ -210,9 +225,14 @@ class DirectorRoundRunner {
       DirectorRoundTuning.fromConfig(const AdvancedConfig());
 
   /// 导演模式一轮：agent 自主执行，产出写回 [round] 后复用故事持久化。
+  ///
+  /// [resume] 非空时为真续跑：surface 用投影重建序列（跳过重新装配与
+  /// 补账——bootstrap 已在日志中）、跳过轮前压缩、复用上次尝试草稿、
+  /// 直播时间线与步骤保留续号；预算携带前序尝试消耗执法。
   Future<void> runRound(
     RoundContext round, {
     DirectorRoundTuning? tuning,
+    DirectorResumeContext? resume,
   }) async {
     if (_host.isStreamCancelled || _host.currentRound != round) return;
     if (tuning != null) _tuning = tuning;
@@ -229,7 +249,21 @@ class DirectorRoundRunner {
 
     final sessionId = state.session.sessionId;
     final naming = round.generatingNamingConfig;
-    final draft = AgentRoundDraft(turnNumber: round.turnNumber);
+    // 续跑复用上次尝试草稿（turnNumber 防御性校验，不匹配回退新建——
+    // 调用方构建上下文时已校验，此处兜底不炸主链路）
+    final reuseDraft =
+        resume != null && resume.draft.turnNumber == round.turnNumber;
+    if (resume != null && !reuseDraft) {
+      _logger.warn(
+        'Director resume draft turn mismatch, starting fresh draft',
+        detail: 'draftTurn=${resume.draft.turnNumber}, '
+            'roundTurn=${round.turnNumber}',
+      );
+    }
+    final draft = reuseDraft
+        ? resume.draft
+        : AgentRoundDraft(turnNumber: round.turnNumber);
+    _lastRoundDraft = draft;
 
     final cancellation = AgentCancellationToken();
     _cancellation = cancellation;
@@ -372,15 +406,19 @@ class DirectorRoundRunner {
     final skills = await _ensureDirectorSkills();
     // core blocks 装配抽至共享服务（assembleDirectorCoreBlocks），
     // 注入面与场记板视图同源；失败返回 null 由下方各用点自行降级。
-    final coreBlocksData = await assembleDirectorCoreBlocks(
-      factual: factual,
-      experienceRepository: _experienceRepository,
-      sessionId: sessionId,
-      factualConfig: round.config.memory.factual,
-      narrativeTime: state.session.currentNarrativeTime,
-      anchor: state.session.storyAnchor,
-      logger: _logger,
-    );
+    // 续跑跳过：投影 surface 已含上次的 core 块；世界状态未变——
+    // 事实层仅在 persist 落库，失败轮没有 persist。
+    final coreBlocksData = resume == null
+        ? await assembleDirectorCoreBlocks(
+            factual: factual,
+            experienceRepository: _experienceRepository,
+            sessionId: sessionId,
+            factualConfig: round.config.memory.factual,
+            narrativeTime: state.session.currentNarrativeTime,
+            anchor: state.session.storyAnchor,
+            logger: _logger,
+          )
+        : null;
     final coreBlocks = coreBlocksData?.text;
 
     // ── // 跨轮素材：会话 artifacts（工作痕迹/风格漂移/零工具轮
@@ -474,7 +512,11 @@ class DirectorRoundRunner {
     );
 
     // ──  压缩接线：导演轮超阈值时压缩旧历史（轮前、随 persist 同事务落库）
-    await _runDirectorCompactionPhase(round, rulesPrompt);
+    // 续跑跳过：投影 surface 即上次实际发出的消息序列，轮前压缩若已跑
+    // 其产出已在其中；重跑会多烧一次 LLM 调用且与投影分叉。
+    if (resume == null) {
+      await _runDirectorCompactionPhase(round, rulesPrompt);
+    }
     if (_host.isStreamCancelled || _host.currentRound != round) return;
 
     // ──  溢出自愈：轮中 CONTEXT_OVERFLOW 时复用同一压缩服务自救一次 ──
@@ -498,126 +540,165 @@ class DirectorRoundRunner {
 
     // ── ① 组装 surface：冻结前缀（规则+工作法+常驻文风+工具索引+技能目录）
     // → core blocks（断点后可 replace； 实验可挪尾）→ 历史 → 本轮输入 ──
-    final residentStyleGuide = [
-      for (final s in skills)
-        if (s.alwaysInject && s.residentBody.isNotEmpty) s.residentBody,
-    ].join('\n\n');
+    // 续跑跳过整段重装配：surface 用事件日志投影重建（上次实际发出的
+    // 序列，含已完成的步骤与工具结果），bootstrap 补账也随之下移跳过。
+    final List<AgentMessage> surface;
+    final List<AgentMessage> tailMessages;
+    final List<String> tailKinds;
+    final String? driftReminderLine;
+    final String? previousTraceLine;
+    final String frozenPrefix;
+    if (resume == null) {
+      final residentStyleGuide = [
+        for (final s in skills)
+          if (s.alwaysInject && s.residentBody.isNotEmpty) s.residentBody,
+      ].join('\n\n');
 
-    final frozenPrefix = const AgentSystemPromptBuilder().buildFrozenPrefix(
-      rulesPrompt: rulesPrompt,
-      // 工具索引跟随实际注册集（含 read_skill/ask_user/spawn 等条件工具）
-      toolNames: [for (final t in tools) t.name],
-      residentStyleGuide:
-          residentStyleGuide.isEmpty ? null : residentStyleGuide,
-      // read_skill 未注册时目录尾句不再指引读取（不空许诺）
-      skillCatalog: skills.isEmpty
-          ? null
-          : AgentSkillRegistry(skills).buildCatalogText(
-              readSkillAvailable: tools.any((t) => t.name == 'read_skill'),
-            ),
-    );
-    // 轮尾部指令（剧情节奏档位设计 §5.5）：turn1 能力提示在前，节奏指令
-    // 收尾（recency 最优位）。节奏档每轮注入且只在尾部——档位可中途换，
-    // 冻结前缀保持档位无关以保前缀缓存（§4.2）。
-    //  提升为局部量：尾部面同时传给 surface 组装与轮首补账（落日志）。
-    final tailToolNames = {for (final t in tools) t.name};
-    final isFirstTurn = round.turnNumber == 1;
-    // 伏笔定期清点（体验重构卡片 C 维护性补强）：清点轮且存在未兑现伏笔
-    // 时注入尾部提醒；与 finish_round 对账闸门共用 isForeshadowSweepRound
-    // 节奏源——先提醒、未对账再拦一次。
-    final foreshadowSweepLine = isForeshadowSweepRound(
-      round.turnNumber,
-      _tuning.foreshadowCheckInterval,
-    )
-        ? foreshadowSweepReminderText(state.session.storyAnchor)
-        : null;
-    final tailMessages = surfaceTailMessages(
-      pacing: state.session.sessionNarrativePacing ?? _tuning.globalPacing,
-      isFirstTurn: isFirstTurn,
-      // deny 感知尾部文案按实际注册集生成（deny 工具不再被点名）
-      toolNames: tailToolNames,
-      // 世界状态含导入来源内容时追加资料边界重申
-      importedDataPresent: coreBlocksData?.hasImported ?? false,
-      foreshadowSweepLine: foreshadowSweepLine,
-    );
-    //  补账的 kind 与 tailMessages 一一同序（单一事实源在此组装）
-    final tailKinds = [
-      if (isFirstTurn && firstTurnCapabilityHint(tailToolNames) != null)
-        AgentInjectedMessageKinds.firstTurnHint,
-      AgentInjectedMessageKinds.tailContract,
-      if (foreshadowSweepLine != null)
-        AgentInjectedMessageKinds.foreshadowSweep,
-      AgentInjectedMessageKinds.styleIronRule,
-      AgentInjectedMessageKinds.pacing,
-      if (coreBlocksData != null && coreBlocksData.hasImported)
-        AgentInjectedMessageKinds.dataBoundaryReassert,
-    ];
-    //  风格漂移监测：近几轮 lint 多次命中且未重读规范时的一次性告知
-    final driftReminderLine = styleDriftReminderFor(sessionArtifacts);
-    // 上一轮的 round-work 痕迹（本轮装配期注入历史区；artifact 已在
-    // 上一轮结束后生成）。同轮仅落一次，随轮尾补账进入日志。
-    final previousArtifact = sessionArtifacts[round.turnNumber - 1];
-    final previousTraceLine =
-        previousArtifact == null ? null : roundWorkTraceFor(previousArtifact);
-    final surface = buildDirectorSurface(
-      frozenPrefix: frozenPrefix,
-      // 历史映射 + 压缩纪元内各轮在 assistant 正文后插 round-work
-      // trace（装配期合成，不落库不进压缩输入；冻结前缀不动。 折叠
-      // 锚点：保留边界=压缩基点，纪元内纯追加保跨轮缓存前缀）
-      historyMessages: mapHistoryWithWorkTraces(
-        history: round.history,
-        artifacts: sessionArtifacts,
-        compactedTurnBase: state.compactedTurnBase,
-      ),
-      coreBlocks: coreBlocks,
-      coreBlocksInTail: _tuning.coreBlocksInTail,
-      userInput: round.userInput,
-      tailMessages: tailMessages,
-      driftReminderLine: driftReminderLine,
-    );
+      frozenPrefix = const AgentSystemPromptBuilder().buildFrozenPrefix(
+        rulesPrompt: rulesPrompt,
+        // 工具索引跟随实际注册集（含 read_skill/ask_user/spawn 等条件工具）
+        toolNames: [for (final t in tools) t.name],
+        residentStyleGuide:
+            residentStyleGuide.isEmpty ? null : residentStyleGuide,
+        // read_skill 未注册时目录尾句不再指引读取（不空许诺）
+        skillCatalog: skills.isEmpty
+            ? null
+            : AgentSkillRegistry(skills).buildCatalogText(
+                readSkillAvailable: tools.any((t) => t.name == 'read_skill'),
+              ),
+      );
+      // 轮尾部指令（剧情节奏档位设计 §5.5）：turn1 开篇角色/能力提示在前，
+      // 节奏指令收尾（recency 最优位）。节奏档每轮注入且只在尾部——档位
+      // 可中途换，冻结前缀保持档位无关以保前缀缓存（§4.2）。
+      //  提升为局部量：尾部面同时传给 surface 组装与轮首补账（落日志）。
+      final tailToolNames = {for (final t in tools) t.name};
+      final isFirstTurn = round.turnNumber == 1;
+      // 开篇角色一次性提示（向导「初始化你的角色」自由描述路径）：
+      // 只在 turn1 注入，此后角色由正文与事实层承载。
+      final characterInitHint = isFirstTurn
+          ? firstTurnCharacterInitHint(state.session.characterInitPrompt)
+          : null;
+      // 伏笔定期清点（体验重构卡片 C 维护性补强）：清点轮且存在未兑现伏笔
+      // 时注入尾部提醒；与 finish_round 对账闸门共用 isForeshadowSweepRound
+      // 节奏源——先提醒、未对账再拦一次。
+      final foreshadowSweepLine = isForeshadowSweepRound(
+        round.turnNumber,
+        _tuning.foreshadowCheckInterval,
+      )
+          ? foreshadowSweepReminderText(state.session.storyAnchor)
+          : null;
+      tailMessages = surfaceTailMessages(
+        pacing: state.session.sessionNarrativePacing ?? _tuning.globalPacing,
+        isFirstTurn: isFirstTurn,
+        // deny 感知尾部文案按实际注册集生成（deny 工具不再被点名）
+        toolNames: tailToolNames,
+        // 世界状态含导入来源内容时追加资料边界重申
+        importedDataPresent: coreBlocksData?.hasImported ?? false,
+        characterInitHint: characterInitHint,
+        foreshadowSweepLine: foreshadowSweepLine,
+      );
+      //  补账的 kind 与 tailMessages 一一同序（单一事实源在此组装）
+      tailKinds = [
+        if (characterInitHint != null) AgentInjectedMessageKinds.characterInit,
+        if (isFirstTurn && firstTurnCapabilityHint(tailToolNames) != null)
+          AgentInjectedMessageKinds.firstTurnHint,
+        AgentInjectedMessageKinds.tailContract,
+        if (foreshadowSweepLine != null)
+          AgentInjectedMessageKinds.foreshadowSweep,
+        AgentInjectedMessageKinds.styleIronRule,
+        AgentInjectedMessageKinds.pacing,
+        if (coreBlocksData != null && coreBlocksData.hasImported)
+          AgentInjectedMessageKinds.dataBoundaryReassert,
+      ];
+      //  风格漂移监测：近几轮 lint 多次命中且未重读规范时的一次性告知
+      driftReminderLine = styleDriftReminderFor(sessionArtifacts);
+      // 上一轮的 round-work 痕迹（本轮装配期注入历史区；artifact 已在
+      // 上一轮结束后生成）。同轮仅落一次，随轮尾补账进入日志。
+      final previousArtifact = sessionArtifacts[round.turnNumber - 1];
+      previousTraceLine =
+          previousArtifact == null ? null : roundWorkTraceFor(previousArtifact);
+      surface = buildDirectorSurface(
+        frozenPrefix: frozenPrefix,
+        // 历史映射 + 压缩纪元内各轮在 assistant 正文后插 round-work
+        // trace（装配期合成，不落库不进压缩输入；冻结前缀不动。 折叠
+        // 锚点：保留边界=压缩基点，纪元内纯追加保跨轮缓存前缀）
+        historyMessages: mapHistoryWithWorkTraces(
+          history: round.history,
+          artifacts: sessionArtifacts,
+          compactedTurnBase: state.compactedTurnBase,
+        ),
+        coreBlocks: coreBlocks,
+        coreBlocksInTail: _tuning.coreBlocksInTail,
+        userInput: round.userInput,
+        tailMessages: tailMessages,
+        driftReminderLine: driftReminderLine,
+      );
+    } else {
+      surface = resume.surface;
+      tailMessages = const [];
+      tailKinds = const [];
+      driftReminderLine = null;
+      previousTraceLine = null;
+      frozenPrefix = '';
+    }
 
     // ③ 状态进入"生成/审校"式流式（直播分块时间线，复用 story 的气泡位）
     final stopwatch = Stopwatch()..start();
-    _currentStepIndex = 0;
+    // 续跑：步号从上次尝试续起（工具执行事件归并/直播增量同口径）
+    _currentStepIndex = resume?.priorSteps ?? 0;
     _proseExtractors.clear();
     _activeProseExtractor = null;
     //  批3：换轮丢弃上一轮残段（不得落进新轮的 liveBlocks）
     _liveDeltas.discardPending();
     _proseLiveDeltas.discardPending();
-    // 上下文构成分段字符数（装配期埋点，四段=系统提示词/场记板/
-    // 历史对话/本轮指令——检索记忆走工具结果非前缀段，不单列）
-    final contextSegmentChars = <String, int>{
-      'system': rulesPrompt.length,
-      'coreBlocks': coreBlocks?.length ?? 0,
-      'history': round.history.fold<int>(
-        0,
-        (sum, m) => sum + (m.content?.length ?? 0),
-      ),
-      'directive': round.userInput.length +
-          tailMessages.fold<int>(
-            0,
-            (sum, m) => sum + (m.content?.length ?? 0),
-          ) +
-          (driftReminderLine?.length ?? 0),
-    };
-    state = state.copyWith(
-      phase: IntermediatePhase.reviewing,
-      liveBlocks: const [],
-      clearAgentSteps: true,
-      agentWorkSummary: null,
-      agentStoryAnchor: null,
-      // 换轮重置重试等待状态
-      agentRetryWait: null,
-      // 轮中预算进度快照（maxSteps 与 AgentBudget 同源；步号
-      // 由 AgentStepStarted 事件推进）——live 标题「第 N/M 步 · 已用 X:XX」
-      agentRoundProgress: AgentRoundProgress(
-        currentStep: 1,
-        maxSteps: budget.maxSteps,
-        startedAtMs: DateTime.now().millisecondsSinceEpoch,
-      ),
-      // 随轮刷新构成分段
-      contextSegmentChars: contextSegmentChars,
-    );
+    if (resume == null) {
+      // 上下文构成分段字符数（装配期埋点，四段=系统提示词/场记板/
+      // 历史对话/本轮指令——检索记忆走工具结果非前缀段，不单列）
+      final contextSegmentChars = <String, int>{
+        'system': rulesPrompt.length,
+        'coreBlocks': coreBlocks?.length ?? 0,
+        'history': round.history.fold<int>(
+          0,
+          (sum, m) => sum + (m.content?.length ?? 0),
+        ),
+        'directive': round.userInput.length +
+            tailMessages.fold<int>(
+              0,
+              (sum, m) => sum + (m.content?.length ?? 0),
+            ) +
+            (driftReminderLine?.length ?? 0),
+      };
+      state = state.copyWith(
+        phase: IntermediatePhase.reviewing,
+        liveBlocks: const [],
+        clearAgentSteps: true,
+        agentWorkSummary: null,
+        agentStoryAnchor: null,
+        // 换轮重置重试等待状态
+        agentRetryWait: null,
+        // 轮中预算进度快照（maxSteps 与 AgentBudget 同源；步号
+        // 由 AgentStepStarted 事件推进）——live 标题「第 N/M 步 · 已用 X:XX」
+        agentRoundProgress: AgentRoundProgress(
+          currentStep: 1,
+          maxSteps: budget.maxSteps,
+          startedAtMs: DateTime.now().millisecondsSinceEpoch,
+        ),
+        // 随轮刷新构成分段
+        contextSegmentChars: contextSegmentChars,
+      );
+    } else {
+      // 续跑：直播时间线/步骤/构成分段保留（新步续号追加），进度从上次
+      // 尝试续起；时长重新起算（失败→继续的间隔是用户思考时间）。
+      state = state.copyWith(
+        phase: IntermediatePhase.reviewing,
+        agentRetryWait: null,
+        agentRoundProgress: AgentRoundProgress(
+          currentStep: resume.priorSteps + 1,
+          maxSteps: budget.maxSteps,
+          startedAtMs: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
+    }
 
     final runner =
         AgentRunner(gateway: LlmServiceAgentGateway(llmService: _llmService));
@@ -661,7 +742,9 @@ class DirectorRoundRunner {
     // assistant/tool 事件，日志从此可重建每步实际发出的消息序列 ──
     // 尾部装配面（coreBlocks 挪尾/工作契约/文风铁律/节奏指令/
     // 漂移提醒）与上一轮 round-work 痕迹一并落日志，投影重建含完整尾部面。
-    if (durableSink != null) {
+    // 续跑跳过：bootstrap 已在日志中，重写会造成投影里用户消息与
+    // 尾部注入出现两遍。
+    if (durableSink != null && resume == null) {
       await _appendRoundBootstrapEvents(
         durableSink,
         turnNumber: round.turnNumber,
@@ -688,6 +771,13 @@ class DirectorRoundRunner {
           events: sink,
           cancellation: cancellation,
           hooks: hooks,
+          // 续跑种子：上次尝试的步数/token 消耗并入预算执法（步号续起）
+          resumeSeed: resume == null
+              ? null
+              : AgentResumeSeed(
+                  initialSteps: resume.priorSteps,
+                  priorTotalTokens: resume.priorTotalTokens,
+                ),
           //  工具三态权限：任一注册工具为 ask 态即装审批管线；
           // 逐工具审批判定交给 approvalRequiredFor（ask 态才拦，
           // allow 直过；deny 已不注册）。旧 watchMode 布尔不再读取。
@@ -788,9 +878,14 @@ class DirectorRoundRunner {
 
     // ⑤ 有可提交正文则复用故事模式持久化；否则把失败原因接出来
     if (round.replyText == null || round.replyText!.isEmpty) {
-      // 取消：cancel() 已同步清理临时态，此处仅防御性回 idle，不判失败
+      // 取消：cancel() 已同步清理临时态，此处仅防御性回 idle，不判失败。
+      // 停止保留半截正文路径 cancel()/后台中断已刻意置 failed(user_stopped)
+      // ——防御性 idle 不覆写该终态，否则失败栏瞬态闪失、「从中断处继续」
+      // 入口被吞。
       if (result.reason == AgentStopReason.cancelled) {
-        state = state.copyWith(phase: IntermediatePhase.idle);
+        if (state.phase != IntermediatePhase.failed) {
+          state = state.copyWith(phase: IntermediatePhase.idle);
+        }
         return;
       }
       // 致命工具异常（embedding 失败，fallback=false）→ E104。
@@ -848,14 +943,22 @@ class DirectorRoundRunner {
     stopwatch.stop();
     state = state.copyWith(
       agentWorkSummary: AgentWorkSummary(
+        // result.steps 已含续跑种子；token/时长在此并入前序尝试——
+        // 轮摘要口径=整轮总消耗，与事件日志各段相加一致
         steps: result.steps,
-        totalTokens: result.usage.totalTokens,
-        durationMs: stopwatch.elapsedMilliseconds,
+        totalTokens: result.usage.totalTokens + (resume?.priorTotalTokens ?? 0),
+        durationMs:
+            stopwatch.elapsedMilliseconds + (resume?.priorDurationMs ?? 0),
         deliveryChannel: deliveryChannel,
-        // 上下文用量指示 §3.1：最后一次请求分项随 summary 落库
-        lastPromptTokens: result.usage.lastPromptTokens,
-        lastCompletionTokens: result.usage.lastCompletionTokens,
-        lastCacheReadTokens: result.usage.lastCacheReadTokens,
+        // 上下文用量指示 §3.1：最后一次请求分项随 summary 落库。
+        // 0 → null（端点未回 usage 时累计器留 0）：null 才能走「—」/
+        // 空环展示并放行旧会话回填探针，0 会伪装成「真实为 0」
+        lastPromptTokens:
+            positiveOrNullOrNull(result.usage.lastPromptTokens),
+        lastCompletionTokens:
+            positiveOrNullOrNull(result.usage.lastCompletionTokens),
+        lastCacheReadTokens:
+            positiveOrNullOrNull(result.usage.lastCacheReadTokens),
         //  风格漂移监测：本轮完稿 lint 终值留痕（null=本轮未过 lint）
         styleLintHits: draft.styleLintHits,
       ),
@@ -903,6 +1006,10 @@ class DirectorRoundRunner {
       _logger.warn('Event log trim failed (ignored)', detail: '$e');
     }
   }
+
+  /// 滚动清理事件日志（外部收尾入口）——persist-only 续跑等不经
+  /// runRound 收尾的出口补用；正常轮完成在 runRound 末尾已带。
+  Future<void> trimEventLog() => _trimEventLog();
 
   /// 取消进行中的导演回合（宿主 cancel() 桥接；无进行中回合时为 no-op）。
   ///
@@ -1037,20 +1144,55 @@ class DirectorRoundRunner {
   Future<AgentApprovalVerdict> _pendingDirectorApproval(
     ToolExecutionRequest request,
   ) async {
+    // 2026-10-15 批 B：干跑组装变更明细——在挂 completer **之前**完成
+    //（本地 SQLite 毫秒级，不占 fail-closed 倒计时锚点）；任一步异常降级
+    // 空明细，审批照常（横幅退化为现状纯摘要）。
+    var changes = const <AgentApprovalChange>[];
+    final draft = _lastRoundDraft;
+    try {
+      final repo = _factualRepository;
+      if (repo != null) {
+        final composer = AgentApprovalComposer(
+          repository: repo,
+          sessionId: state.session.sessionId,
+          draftTurnNumber: draft?.turnNumber ?? 1,
+          currentAnchor: state.session.storyAnchor,
+          draftAnchor: draft?.storyAnchor,
+          draftEventSummary: draft?.eventSummary,
+          t: t,
+        );
+        changes = await composer.compose(request);
+      }
+    } catch (e) {
+      _logger.warn(
+        'Approval changes composition failed, falling back to summary',
+        detail: 'tool=${request.toolName}, error=$e',
+      );
+    }
+
     final completer = Completer<AgentApprovalVerdict>();
     _approvalCompleter = completer;
     _pendingApprovalToolName = request.toolName;
+    _pendingApprovalChangeCount = changes.length;
     state = state.copyWith(
       agentApprovalPrompt: AgentApprovalPrompt(
         toolName: request.toolName,
         summary: _approvalSummary(request),
+        changes: changes,
+        pendingPriorChanges: draft?.factsDeltas.length ?? 0,
       ),
     );
     try {
-      // fail-closed：超时视同审批通道无响应
-      //（advanced.hitl.approval_timeout_minutes，默认 5 分钟不变）
+      // fail-closed：超时视同审批通道无响应（默认 5 分钟不变）；
+      // P2 ：approval_timeout_enabled 关闭时永不超时——
+      // 不挂 .timeout，横幅一直等待用户处置（停止按钮/重启中断/无人值守
+      // 三道兜底不变，推翻 2026-08「审批不开放永等档」旧口径）。
+      final timeout = _tuning.approvalTimeout;
+      if (timeout == null) {
+        return await completer.future;
+      }
       return await completer.future.timeout(
-        _tuning.approvalTimeout,
+        timeout,
         onTimeout: () {
           //  修复：同 ask 超时——留痕说明本轮写入为何被拒
           _appendTraceStep(t.advanced.hitl.approvalTimeout);
@@ -1101,8 +1243,14 @@ class DirectorRoundRunner {
 
   /// 处置待确认写入（allow=false 可带反馈回给模型）。
   ///
+  /// [feedback]：导演批注
+  /// ——allow 时随 Granted 下发（工具成功回执尾部信封），deny 时与旧拒绝
+  /// 留言通道完全一致；空 = 纯批准/纯拒绝，行为与现状一致。
+  ///
   /// [always] = true（横幅「本会话总是允许」）时同时把该工具记入
   /// 会话级放行集——后续同工具的 ask 态调用不再弹横幅，直接放行留痕。
+  /// **merge_entities 永不进放行集**：归并横幅不显示该按钮，
+  /// 这里再兜一道底——即便误传 always 也不记入，永远逐次审批。
   void resolveDirectorApproval({
     required bool allow,
     String? feedback,
@@ -1110,7 +1258,7 @@ class DirectorRoundRunner {
   }) {
     if (allow && always) {
       final toolName = _pendingApprovalToolName;
-      if (toolName != null) {
+      if (toolName != null && toolName != 'merge_entities') {
         _sessionApprovalAllows.add(toolName);
         _appendTraceStep(
           t.advanced.approval.sessionAlwaysRemembered(
@@ -1119,10 +1267,29 @@ class DirectorRoundRunner {
         );
       }
     }
+    if (allow) {
+      // durable 留痕（批 B）：变更条数 + 是否附批注（不含全文，防事件膨胀）
+      final toolName = _pendingApprovalToolName;
+      if (toolName != null) {
+        _appendTraceStep(
+          '${t.advanced.approval.approvedTrace(
+            tool: stageVerbOf(toolName, t),
+            count: _pendingApprovalChangeCount,
+          )}'
+          '${feedback == null || feedback.trim().isEmpty
+              ? ''
+              : t.advanced.approval.approvedTraceNoted}',
+        );
+      }
+    }
     final completer = _approvalCompleter;
     if (completer != null && !completer.isCompleted) {
+      final trimmed = feedback?.trim();
+      final hasNote = trimmed != null && trimmed.isNotEmpty;
       completer.complete(
-        allow ? const AgentApprovalGranted() : AgentApprovalDenied(feedback),
+        allow
+            ? AgentApprovalGranted(feedback: hasNote ? trimmed : null)
+            : AgentApprovalDenied(feedback),
       );
     }
   }
@@ -1169,13 +1336,21 @@ class DirectorRoundRunner {
           agentRoundProgress:
               state.agentRoundProgress?.copyWith(currentStep: stepIndex + 1),
         );
-      case AgentRetryScheduled(:final waitMs, :final attempt, :final at):
+      case AgentRetryScheduled(
+          :final waitMs,
+          :final attempt,
+          :final at,
+          :final maxAttempts,
+          :final cause,
+        ):
         // 退避/Retry-After 等待可视化——以事件到达时刻为锚
         state = state.copyWith(
           agentRetryWait: AgentRetryWait(
             waitMs: waitMs,
             attempt: attempt,
             scheduledAtMs: at.millisecondsSinceEpoch,
+            maxAttempts: maxAttempts,
+            cause: cause,
           ),
         );
       case AgentToolCallReceived(:final call):

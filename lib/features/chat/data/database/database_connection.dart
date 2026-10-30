@@ -35,7 +35,11 @@ Future<QueryExecutor> createDatabaseExecutor() async {
       // 仅牺牲极小的崩溃恢复窗口换取明显写入吞吐。
       rawDb
         ..execute('PRAGMA journal_mode = WAL')
-        ..execute('PRAGMA synchronous = NORMAL');
+        ..execute('PRAGMA synchronous = NORMAL')
+        // WAL 文件只增不减：应用数据目录会随备份进 iCloud（iOS），
+        // 流式写高峰留下的 wal 若不设上限将永久占用备份体积；
+        // 8MB 足够容纳写入高峰，checkpoint 后自动收缩。
+        ..execute('PRAGMA journal_size_limit = 8388608');
     },
   );
 }

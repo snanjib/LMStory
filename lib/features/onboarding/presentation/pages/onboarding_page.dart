@@ -4,7 +4,9 @@ import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/shared/components/brand_logo.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/onboarding/presentation/controllers/onboarding_controller.dart';
 import 'package:lmstory/features/settings/presentation/pages/provider_list_page.dart';
@@ -171,54 +173,62 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
         horizontal: SimpleSpacing.sLg,
         vertical: SimpleSpacing.sSm,
       ),
-      child: Row(
-        children: [
-          Flexible(
-            child: Text(
-              t.onboarding.stepIndicator(
-                current: _currentStep + 1,
-                total: _kTotalSteps,
+      child: Center(
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  t.onboarding.stepIndicator(
+                    current: _currentStep + 1,
+                    total: _kTotalSteps,
+                  ),
+                  style: SimpleTextStyles.caption.copyWith(color: colors.faint),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              style: SimpleTextStyles.caption.copyWith(color: colors.faint),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: SimpleSpacing.sMd),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final segmentWidth =
-                    (constraints.maxWidth - (_kTotalSteps - 1) * 4) /
-                        _kTotalSteps;
-                return Row(
-                  children: List.generate(_kTotalSteps, (i) {
-                    final isDone = i < _currentStep;
-                    final isCurrent = i == _currentStep;
-                    // segmentWidth 只扣了 n-1 个间隔，
-                    // 逐段右 margin 会让 Row 总宽超 4px（debug 溢出黄黑条/
-                    // release 末段裁切）——末段不带 margin。
-                    return Container(
-                      width: segmentWidth,
-                      height: 3,
-                      margin: i == _kTotalSteps - 1
-                          ? EdgeInsets.zero
-                          : const EdgeInsets.only(right: 4),
-                      decoration: BoxDecoration(
-                        color: isCurrent
-                            ? colors.primary
-                            : (isDone ? colors.muted : colors.surfaceVariant),
-                        borderRadius: BorderRadius.circular(
-                          context.lmUi.radius(LmCorner.xs),
-                        ),
-                      ),
+              const SizedBox(width: SimpleSpacing.sMd),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final segmentWidth =
+                        (constraints.maxWidth - (_kTotalSteps - 1) * 4) /
+                            _kTotalSteps;
+                    return Row(
+                      children: List.generate(_kTotalSteps, (i) {
+                        final isDone = i < _currentStep;
+                        final isCurrent = i == _currentStep;
+                        // segmentWidth 只扣了 n-1 个间隔，
+                        // 逐段右 margin 会让 Row 总宽超 4px（debug 溢出黄黑条/
+                        // release 末段裁切）——末段不带 margin。
+                        return Container(
+                          width: segmentWidth,
+                          height: 3,
+                          margin: i == _kTotalSteps - 1
+                              ? EdgeInsets.zero
+                              : const EdgeInsets.only(right: 4),
+                          decoration: BoxDecoration(
+                            color: isCurrent
+                                ? colors.primary
+                                : (isDone
+                                    ? colors.muted
+                                    : colors.surfaceVariant),
+                            borderRadius: BorderRadius.circular(
+                              context.lmUi.radius(LmCorner.xs),
+                            ),
+                          ),
+                        );
+                      }),
                     );
-                  }),
-                );
-              },
-            ),
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -229,26 +239,29 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
     return _StepScaffold(
       colors: colors,
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _HeroLogo(colors: colors),
           const SizedBox(height: SimpleSpacing.sXl),
           Text(
             t.onboarding.welcome.title,
-            style: SimpleTextStyles.display.copyWith(color: colors.ink),
-            textAlign: TextAlign.center,
+            style: LmNarrativeTextStyles.narrativeHeadline.copyWith(
+              color: colors.ink,
+              fontSize: 40,
+            ),
+            textAlign: TextAlign.start,
           ),
           const SizedBox(height: SimpleSpacing.sSm),
           Text(
             t.onboarding.welcome.subtitle,
             style: SimpleTextStyles.title3.copyWith(color: colors.primary),
-            textAlign: TextAlign.center,
+            textAlign: TextAlign.start,
           ),
           const SizedBox(height: SimpleSpacing.sLg),
           Text(
             t.onboarding.welcome.desc,
             style: SimpleTextStyles.body.copyWith(color: colors.muted),
-            textAlign: TextAlign.center,
+            textAlign: TextAlign.start,
           ),
         ],
       ),
@@ -265,7 +278,10 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
         children: [
           Text(
             t.onboarding.modes.title,
-            style: SimpleTextStyles.title1.copyWith(color: colors.ink),
+            style: LmNarrativeTextStyles.narrativeHeadline.copyWith(
+              color: colors.ink,
+              fontSize: 28,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: SimpleSpacing.s2xs),
@@ -285,15 +301,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
             desc: t.onboarding.modes.chatDesc,
           ),
           const SizedBox(height: SimpleSpacing.sMd),
-          _ModeCard(
-            colors: colors,
-            icon: Icons.auto_stories_outlined,
-            iconColor: colors.accent,
-            iconBg: colors.accentDim,
-            title: t.onboarding.modes.storyTitle,
-            desc: t.onboarding.modes.storyDesc,
-          ),
-          const SizedBox(height: SimpleSpacing.sMd),
+          // 卡序对齐首页主推层级：对话与导演并排主推、故事默认隐藏
           _ModeCard(
             colors: colors,
             icon: Icons.theater_comedy_outlined,
@@ -301,6 +309,15 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
             iconBg: colors.warning.withValues(alpha: 0.12),
             title: t.onboarding.modes.directorTitle,
             desc: t.onboarding.modes.directorDesc,
+          ),
+          const SizedBox(height: SimpleSpacing.sMd),
+          _ModeCard(
+            colors: colors,
+            icon: Icons.auto_stories_outlined,
+            iconColor: colors.accent,
+            iconBg: colors.accentDim,
+            title: t.onboarding.modes.storyTitle,
+            desc: t.onboarding.modes.storyDesc,
           ),
         ],
       ),
@@ -322,7 +339,10 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
           const SizedBox(height: SimpleSpacing.sXl),
           Text(
             t.onboarding.apiKey.title,
-            style: SimpleTextStyles.title1.copyWith(color: colors.ink),
+            style: LmNarrativeTextStyles.narrativeHeadline.copyWith(
+              color: colors.ink,
+              fontSize: 28,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: SimpleSpacing.s2xs),
@@ -375,7 +395,10 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
           const SizedBox(height: SimpleSpacing.sXl),
           Text(
             t.onboarding.template.title,
-            style: SimpleTextStyles.title1.copyWith(color: colors.ink),
+            style: LmNarrativeTextStyles.narrativeHeadline.copyWith(
+              color: colors.ink,
+              fontSize: 28,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: SimpleSpacing.s2xs),
@@ -422,7 +445,10 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
           const SizedBox(height: SimpleSpacing.sXl),
           Text(
             t.onboarding.memory.title,
-            style: SimpleTextStyles.title1.copyWith(color: colors.ink),
+            style: LmNarrativeTextStyles.narrativeHeadline.copyWith(
+              color: colors.ink,
+              fontSize: 28,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: SimpleSpacing.s2xs),
@@ -465,7 +491,10 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
           const SizedBox(height: SimpleSpacing.sXl),
           Text(
             t.onboarding.ready.title,
-            style: SimpleTextStyles.display.copyWith(color: colors.ink),
+            style: LmNarrativeTextStyles.narrativeHeadline.copyWith(
+              color: colors.ink,
+              fontSize: 40,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: SimpleSpacing.sSm),
@@ -506,49 +535,64 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
         horizontal: SimpleSpacing.sLg,
         vertical: SimpleSpacing.sMd,
       ),
-      child: Row(
-        children: [
-          // 上一步
-          if (!isFirst)
-            TextButton(
-              onPressed: _prev,
-              child: Text(
-                t.onboarding.prev,
-                style: SimpleTextStyles.bodySm.copyWith(color: colors.muted),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+      child: Center(
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
+          child: Row(
+            children: [
+              // 上一步
+              Expanded(
+                child: isFirst
+                    ? const SizedBox()
+                    : Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          onPressed: _prev,
+                          child: Text(
+                            t.onboarding.prev,
+                            style: SimpleTextStyles.bodySm
+                                .copyWith(color: colors.muted),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
               ),
-            )
-          else
-            const SizedBox(width: 64),
-          const Spacer(),
-          // 下一步 / 开始使用
-          ElevatedButton(
-            onPressed: _next,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: colors.primary,
-              foregroundColor: colors.surface,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(
-                horizontal: SimpleSpacing.sXl,
-                vertical: SimpleSpacing.sMd,
+              const SizedBox(width: SimpleSpacing.sMd),
+              // 下一步 / 开始使用
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _next,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.primary,
+                    foregroundColor: colors.surface,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: SimpleSpacing.sLg,
+                      vertical: SimpleSpacing.sMd,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(
+                        context.lmUi.radius(LmCorner.xs),
+                      ),
+                    ),
+                  ),
+                  child: Text(
+                    isLast ? t.onboarding.done : t.onboarding.next,
+                    style: SimpleTextStyles.body.copyWith(
+                      color: colors.surface,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 2,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ),
-              shape: RoundedRectangleBorder(
-                borderRadius:
-                    BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
-              ),
-            ),
-            child: Text(
-              isLast ? t.onboarding.done : t.onboarding.next,
-              style: SimpleTextStyles.body.copyWith(
-                color: colors.surface,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -565,13 +609,19 @@ class _StepScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(
-        horizontal: SimpleSpacing.sLg,
-        vertical: SimpleSpacing.sMd,
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(
+            horizontal: SimpleSpacing.sLg,
+            vertical: SimpleSpacing.sMd,
+          ),
+          physics: const ClampingScrollPhysics(),
+          child: SizedBox(width: double.infinity, child: child),
+        ),
       ),
-      physics: const ClampingScrollPhysics(),
-      child: child,
     );
   }
 }
@@ -642,14 +692,8 @@ class _ModeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(SimpleSpacing.sLg),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
-        border: Border.all(color: colors.divider),
-      ),
+    return context.lmUi.card(
+      context,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -670,9 +714,9 @@ class _ModeCard extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: SimpleTextStyles.title2.copyWith(
+                  style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
                     color: colors.ink,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 22,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -712,14 +756,12 @@ class _PrimaryButton extends StatelessWidget {
     return OutlinedButton.icon(
       onPressed: onPressed,
       icon: Icon(icon, size: 16, color: colors.primary),
-      label: Flexible(
-        child: Text(
-          label,
-          style: SimpleTextStyles.bodySm
-              .copyWith(color: colors.primary, fontWeight: FontWeight.w600),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+      label: Text(
+        label,
+        style: SimpleTextStyles.bodySm
+            .copyWith(color: colors.primary, fontWeight: FontWeight.w600),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
       ),
       style: OutlinedButton.styleFrom(
         side: BorderSide(color: colors.primary, width: 1.5),

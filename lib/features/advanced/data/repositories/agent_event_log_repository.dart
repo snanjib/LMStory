@@ -61,10 +61,10 @@ class AgentEventLogRepository implements AgentEventLogStore {
             jsonEncode(event.data),
             if (event.surfaceOp == null)
               null
+            else if (event.surfaceOp == AgentSurfaceOpKind.append)
+              'append'
             else
-              event.surfaceOp == AgentSurfaceOpKind.append
-                  ? 'append'
-                  : 'replace',
+              'replace',
             event.replaceStart,
             event.replaceEnd,
             if (event.sourceEventSeqs.isEmpty)

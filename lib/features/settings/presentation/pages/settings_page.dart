@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_focus_order.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
@@ -14,6 +14,7 @@ import 'package:lmstory/features/settings/presentation/pages/director_settings_p
 import 'package:lmstory/features/settings/presentation/pages/general_settings_page.dart';
 import 'package:lmstory/features/settings/presentation/pages/intermediate_settings_page.dart';
 import 'package:lmstory/features/settings/presentation/widgets/adaptive_setting_card.dart';
+import 'package:lmstory/features/settings/presentation/widgets/settings_navigation_group.dart';
 import 'package:lmstory/features/templates/presentation/pages/template_management_page.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -39,7 +40,7 @@ class SettingsPage extends ConsumerWidget {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(title: t.settings.title),
+      appBar: context.lmUi.appBar(context, title: t.settings.title),
       // 单列内容页的 Tab 顺序显式声明（不靠「代码构造顺序碰巧对」）：
       // 页内次序由阅读顺序策略给出，区域本身则明确归入 content。
       body: LmFocusTraversal(
@@ -49,83 +50,108 @@ class SettingsPage extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.all(SimpleSpacing.sLg),
               children: [
-                AdaptiveSettingCard(
-                  icon: Icons.tune_outlined,
-                  title: t.settings.general.title,
-                  subtitle: t.settings.general.entrySubtitle,
-                  onTap: () =>
-                      _navigateTo(context, const GeneralSettingsPage()),
+                SettingsNavigationGroup(
+                  title: t.settings.navigationGroups.experience,
+                  children: [
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.tune_outlined,
+                      title: t.settings.general.title,
+                      subtitle: t.settings.general.entrySubtitle,
+                      onTap: () =>
+                          _navigateTo(context, const GeneralSettingsPage()),
+                    ),
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.chat_outlined,
+                      title: t.settings.chatSettings.title,
+                      subtitle: t.settings.chatSettings.entrySubtitle,
+                      onTap: () =>
+                          _navigateTo(context, const ChatSettingsPage()),
+                    ),
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.auto_stories_outlined,
+                      title: t.settings.intermediate.title,
+                      subtitle: t.settings.intermediate.entrySubtitle,
+                      onTap: () => _navigateTo(
+                        context,
+                        const IntermediateSettingsPage(),
+                      ),
+                    ),
+                    // 导演模式设置（导演设置体系 P2：自包含单页，入口开关随页迁入）
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.movie_filter_outlined,
+                      title: t.settings.director.title,
+                      // 简单模式下工具/预算分区被过滤，副标题同口径收缩
+                      subtitle:
+                          ref.watch(configLevelProvider) == ConfigLevel.simple
+                              ? t.settings.director.entrySubtitleSimple
+                              : t.settings.director.entrySubtitle,
+                      onTap: () => _navigateTo(
+                        context,
+                        const DirectorSettingsPage(),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                AdaptiveSettingCard(
-                  icon: Icons.chat_outlined,
-                  title: t.settings.chatSettings.title,
-                  subtitle: t.settings.chatSettings.entrySubtitle,
-                  onTap: () => _navigateTo(context, const ChatSettingsPage()),
+                const SizedBox(height: SimpleSpacing.sXl),
+                SettingsNavigationGroup(
+                  title: t.settings.navigationGroups.materials,
+                  children: [
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.description_outlined,
+                      title: t.settings.template.title,
+                      // 专用副标题键（原借用 filterAll 筛选文案）
+                      subtitle: t.settings.template.entrySubtitle,
+                      onTap: () =>
+                          _navigateTo(context, const TemplateManagementPage()),
+                    ),
+                    AdaptiveSettingCard(
+                      inline: true,
+                      // 换专属图标（原与故事模式设置撞车）
+                      icon: Icons.library_books_outlined,
+                      title: t.settings.resourceLibrary.title,
+                      subtitle: t.settings.resourceLibrary.entrySubtitle,
+                      onTap: () =>
+                          _navigateTo(context, const ResourceLibraryPage()),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                AdaptiveSettingCard(
-                  icon: Icons.auto_stories_outlined,
-                  title: t.settings.intermediate.title,
-                  subtitle: t.settings.intermediate.entrySubtitle,
-                  onTap: () => _navigateTo(
-                    context,
-                    const IntermediateSettingsPage(),
-                  ),
-                ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                // 导演模式设置（导演设置体系 P2：自包含单页，入口开关随页迁入）
-                AdaptiveSettingCard(
-                  icon: Icons.movie_filter_outlined,
-                  title: t.settings.director.title,
-                  subtitle: t.settings.director.entrySubtitle,
-                  onTap: () => _navigateTo(
-                    context,
-                    const DirectorSettingsPage(),
-                  ),
-                ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                AdaptiveSettingCard(
-                  icon: Icons.description_outlined,
-                  title: t.settings.template.title,
-                  // 专用副标题键（原借用 filterAll 筛选文案）
-                  subtitle: t.settings.template.entrySubtitle,
-                  onTap: () =>
-                      _navigateTo(context, const TemplateManagementPage()),
-                ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                AdaptiveSettingCard(
-                  // 换专属图标（原与故事模式设置撞车）
-                  icon: Icons.library_books_outlined,
-                  title: t.settings.resourceLibrary.title,
-                  subtitle: t.settings.resourceLibrary.entrySubtitle,
-                  onTap: () =>
-                      _navigateTo(context, const ResourceLibraryPage()),
-                ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                AdaptiveSettingCard(
-                  icon: Icons.storage_outlined,
-                  title: t.settings.data.title,
-                  // 专用副标题键（原借用 export 动作文案）
-                  subtitle: t.settings.data.entrySubtitle,
-                  onTap: () => _navigateTo(context, const DataManagementPage()),
-                ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                AdaptiveSettingCard(
-                  icon: Icons.bug_report_outlined,
-                  title: t.settings.diagnostics.title,
-                  subtitle: t.settings.diagnostics.entrySubtitle,
-                  onTap: () => _navigateTo(context, const DiagnosticsPage()),
-                ),
-                const SizedBox(height: SimpleSpacing.sMd),
-                // 帮助入口（2026-07-27 简化）：直接跳转 WikiHomePage（带搜索 +
-                // 8 章节， 订正：2026-07 新增导演模式章后为 8 章；
-                // 已完整覆盖原 HelpSettingsPage 的新手引导与故事模式原理 wiki）
-                AdaptiveSettingCard(
-                  icon: Icons.help_outline,
-                  title: t.help.title,
-                  subtitle: t.help.entrySubtitle,
-                  onTap: () => _navigateTo(context, const WikiHomePage()),
+                const SizedBox(height: SimpleSpacing.sXl),
+                SettingsNavigationGroup(
+                  title: t.settings.navigationGroups.support,
+                  children: [
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.storage_outlined,
+                      title: t.settings.data.title,
+                      // 专用副标题键（原借用 export 动作文案）
+                      subtitle: t.settings.data.entrySubtitle,
+                      onTap: () =>
+                          _navigateTo(context, const DataManagementPage()),
+                    ),
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.bug_report_outlined,
+                      title: t.settings.diagnostics.title,
+                      subtitle: t.settings.diagnostics.entrySubtitle,
+                      onTap: () =>
+                          _navigateTo(context, const DiagnosticsPage()),
+                    ),
+                    // 帮助入口（2026-07-27 简化）：直接跳转 WikiHomePage（带搜索 +
+                    // 8 章节， 订正：2026-07 新增导演模式章后为 8 章；
+                    // 已完整覆盖原 HelpSettingsPage 的新手引导与故事模式原理 wiki）
+                    AdaptiveSettingCard(
+                      inline: true,
+                      icon: Icons.help_outline,
+                      title: t.help.title,
+                      subtitle: t.help.entrySubtitle,
+                      onTap: () => _navigateTo(context, const WikiHomePage()),
+                    ),
+                  ],
                 ),
               ],
             ),

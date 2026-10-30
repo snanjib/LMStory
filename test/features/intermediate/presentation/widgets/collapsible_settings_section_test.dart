@@ -46,7 +46,10 @@ void main() {
 
       expect(find.text('温度滑块'), findsOneWidget);
       // 展开态箭头朝上
-      expect(find.byIcon(Icons.keyboard_arrow_up), findsOneWidget);
+      expect(
+        tester.widget<AnimatedRotation>(find.byType(AnimatedRotation)).turns,
+        0.5,
+      );
     });
 
     testWidgets('折叠时不渲染子内容，箭头朝下', (tester) async {

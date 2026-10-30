@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_radius.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -104,13 +105,7 @@ class _DirectorAnchorEditSheetState extends State<DirectorAnchorEditSheet> {
               ),
             ),
             const SizedBox(height: IntermediateSpacing.sMd),
-            Text(
-              t.advanced.anchorEdit.sheetTitle,
-              style: IntermediateTextStyles.title.copyWith(
-                color: colors.ink,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            PanelHeading(title: t.advanced.anchorEdit.sheetTitle),
             const SizedBox(height: IntermediateSpacing.sSm),
             Text(
               t.advanced.anchorEdit.sheetHint,

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
@@ -19,7 +18,7 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///
 /// **2026-07-24 双菜单→单菜单改造**：
 /// - 删除原"供应商 dropdown + 模型 dropdown"双 dropdown 设计
-/// - 改为单个 [IntermediateSettingCard] 入口，点击弹出
+/// - 改为单个 叙事设置卡（context.lmUi.settingCard）入口，点击弹出
 ///   [IntermediateModelPickerSheet]（modelType: embedding）
 /// - 切换前确认对话框通过 [IntermediateModelPickerSheet.onBeforeSelect] 钩子实现
 /// - 保留 stale 清理逻辑（供应商被删除后悬空引用清理）
@@ -285,7 +284,9 @@ class _IntermediateEmbeddingModelSectionState
       subtitle = t.settings.intermediate.embeddingModelNotConfigured;
     }
 
-    return IntermediateSettingCard(
+    return context.lmUi.settingCard(
+      context,
+      narrative: true,
       icon: Icons.account_tree_outlined,
       title: t.settings.intermediate.embeddingModel,
       subtitle: subtitle,

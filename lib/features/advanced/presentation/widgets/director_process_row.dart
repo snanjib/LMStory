@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
+import 'package:lmstory/core/theme/shared/components/lm_state_transition.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
@@ -67,19 +69,31 @@ class _DirectorProcessRowState extends State<DirectorProcessRow> {
             constraints: const BoxConstraints(minHeight: 40),
             child: Row(
               children: [
-                Icon(
-                  _expanded ? Icons.tungsten : Icons.tungsten_outlined,
-                  size: 14,
-                  color: iconColor,
+                LmStateTransition(
+                  stateKey: (widget.live, steps.last.status),
+                  child: widget.live
+                      ? LmActivityDots(color: colors.primary, dotSize: 4)
+                      : Icon(
+                          _expanded ? Icons.tungsten : Icons.tungsten_outlined,
+                          size: 14,
+                          color: iconColor,
+                        ),
                 ),
                 const SizedBox(width: IntermediateSpacing.sSm),
                 Expanded(
-                  child: Text(
-                    _headline(steps, widget.summary, widget.live, t),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: IntermediateTextStyles.caption.copyWith(
-                      color: colors.muted,
+                  child: LmStateTransition(
+                    stateKey: (
+                      widget.live,
+                      steps.last.callId,
+                      steps.last.status
+                    ),
+                    child: Text(
+                      _headline(steps, widget.summary, widget.live, t),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: IntermediateTextStyles.caption.copyWith(
+                        color: colors.muted,
+                      ),
                     ),
                   ),
                 ),

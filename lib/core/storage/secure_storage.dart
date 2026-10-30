@@ -4,7 +4,15 @@ import 'package:lmstory/core/utils/logger.dart';
 
 class SecureStorage {
   SecureStorage({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+      : _storage = storage ??
+            const FlutterSecureStorage(
+              // macOS 默认走 iOS 式数据保护钥匙串（kSecUseDataProtection
+              // Keychain=true），要求应用具备 keychain-access-groups 授权
+              // 与团队签名；本应用无签名基建（ad-hoc），实测 SecItem 报
+              // -34018。改走传统文件钥匙链（沙盒容器内、随应用存取），
+              // 不使用访问组共享与 iCloud 同步，无功能损失。
+              mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+            );
 
   final FlutterSecureStorage _storage;
   final _log = const Logger('SecureStorage');

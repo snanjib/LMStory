@@ -208,7 +208,9 @@ extension _ChatModePageMenus on _ChatModePageState {
   ///
   /// 数据口径与旧 token 徽章同源：已用 = 最近一次落库 tokensUsed +
   /// 草稿输入 token；满刻度 = chat 压缩触发线（availableWindow × 阈值）。
-  /// chat 不跟踪缓存命中/输出分解，对应行显示「—」。
+  /// 输出/缓存读取行消费最近一轮 usage 分项（控制器流式完成时留存），
+  /// 缺失时「—」+ 面板口径脚注；chat 的输入行是本地口径（tokensUsed
+  /// 为 totalTokens），命中率不做会话累计，恒「—」。
   /// 手动压缩复用 [_handleCompressHistory]（CompressResult 分态：成功弹
   /// 标题更新询问 / insufficient 专属文案 / 失败常驻卡片）。
   void _showContextUsageSheet() {
@@ -225,8 +227,10 @@ extension _ChatModePageMenus on _ChatModePageState {
               compactionTriggerTokens: state.compactionTriggerTokens,
               lastPromptTokens:
                   _lastContextTokens(state.messages) + _tokenCount,
-              lastCompletionTokens: null,
-              lastCacheReadTokens: null,
+              // 最近一轮输出/缓存读分项（ 上一轮完成后随 usage 留 state；
+              // null = 端点未回 usage / 重进会话未重新生成 →「—」+ 脚注）
+              lastCompletionTokens: state.lastCompletionTokens,
+              lastCacheReadTokens: state.lastCacheReadTokens,
               averageCacheHit: null,
               // 轮次口径走共享公式（nextTurn 计数器权威，NULL 回退推导）
               sessionRounds: resolveTurnNumber(

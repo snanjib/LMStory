@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
@@ -145,7 +144,8 @@ class _DefaultModelPickerSheetState
       child: Scaffold(
         // 琉璃下面层让位 GlassBottomSheet 工厂；经典保持原槽位零变化。
         backgroundColor: context.lmSheetFaceColor(context.lm.palette.bg),
-        appBar: SimpleAppBar(
+        appBar: context.lmUi.appBar(
+          context,
           title: widget.title ?? t.settings.chatSettings.defaultModel.select,
         ),
         body: isLoading
@@ -177,39 +177,16 @@ class _DefaultModelPickerSheetState
   }
 
   Widget _buildEmpty(BuildContext context, Translations t) {
-    final colors = context.lm.palette;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.smart_toy_outlined, size: 64, color: colors.faint),
-          const SizedBox(height: SimpleSpacing.sLg),
-          Text(
-            t.settings.chatSettings.defaultModel.empty,
-            style: SimpleTextStyles.caption,
-            textAlign: TextAlign.center,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: SimpleSpacing.sMd),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(context).pop();
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const ProviderListPage(),
-                ),
-              );
-            },
-            icon: const Icon(Icons.dns_outlined, size: 18),
-            label: Text(
-              t.settings.chatSettings.defaultModel.emptyAction,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
+    return context.lmUi.emptyState(
+      context,
+      title: t.settings.chatSettings.defaultModel.empty,
+      actionLabel: t.settings.chatSettings.defaultModel.emptyAction,
+      onAction: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const ProviderListPage()),
+        );
+      },
     );
   }
 

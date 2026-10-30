@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
 import 'package:lmstory/core/theme/shared/components/streaming_fade_text.dart';
 import 'package:lmstory/core/theme/shared/components/streaming_reveal_pacer.dart'
     show streamingRevealIdleSnap;
 import 'package:lmstory/core/theme/shared/components/streaming_text_fade.dart'
     show streamingFadeFirstObservationTailCodeUnits;
-import 'package:lmstory/core/theme/simple/components/simple_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_live_block.dart';

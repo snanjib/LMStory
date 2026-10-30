@@ -78,7 +78,10 @@ class FactualEntityTypeGroup extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: LmSpacing.sSm),
           child: Text(
             '$_typeLabel（${entities.length}）',
-            style: LmNarrativeTextStyles.label.copyWith(color: colors.muted),
+            style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+              fontSize: 20,
+              color: colors.ink,
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -206,8 +209,10 @@ class _FactualEntityCardState extends State<FactualEntityCard> {
                 children: [
                   Text(
                     e.primaryName,
-                    style: LmNarrativeTextStyles.label
-                        .copyWith(color: widget.colors.ink),
+                    style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+                      fontSize: 20,
+                      color: widget.colors.ink,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),

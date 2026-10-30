@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/intermediate_prompts_v2.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
@@ -421,7 +420,9 @@ class _IntermediateSuggestReplySettingsPageState
           ),
           child: _isLoadingPresets
               ? _loadingHint(colors, t)
-              : IntermediateSettingCard(
+              : context.lmUi.settingCard(
+                  context,
+                  narrative: true,
                   icon: Icons.smart_toy_outlined,
                   title: t.settings.intermediate.suggestReply.modelSection,
                   subtitle: subtitle,

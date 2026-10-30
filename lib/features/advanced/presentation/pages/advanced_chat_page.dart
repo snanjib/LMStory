@@ -7,16 +7,11 @@ import 'package:lmstory/core/config/advanced_config.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/embedding_missing_banner.dart';
-import 'package:lmstory/core/theme/intermediate/components/entry_transition.dart';
-import 'package:lmstory/core/theme/intermediate/components/input_toolbar.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_confirm_dialog.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_edit_dialog.dart';
-import 'package:lmstory/core/theme/intermediate/components/suggest_reply_overlay.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/widgets/model_config_banner.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
@@ -27,7 +22,10 @@ import 'package:lmstory/features/advanced/presentation/widgets/director_script_b
 import 'package:lmstory/features/advanced/presentation/widgets/director_session_settings_sheet.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
+import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
+import 'package:lmstory/features/resource_library/domain/services/resource_apply_service.dart';
+import 'package:lmstory/features/resource_library/domain/services/resource_projection_service.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/settings/presentation/pages/director_settings_page.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/font_size_selector_section.dart';
@@ -57,6 +55,7 @@ class AdvancedChatPage extends ConsumerStatefulWidget {
     this.scaffoldKey,
     this.drawer,
     this.showHamburgerMenu = false,
+    this.onBackToHome,
     this.onHamburgerPressed,
     this.onSessionDeleted,
     this.initialFocusMessageId,
@@ -67,6 +66,7 @@ class AdvancedChatPage extends ConsumerStatefulWidget {
 
   /// 是否显示汉堡菜单（移动端）
   final bool showHamburgerMenu;
+  final VoidCallback? onBackToHome;
 
   /// 汉堡菜单回调
   final VoidCallback? onHamburgerPressed;
@@ -107,6 +107,52 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   /// 按会话隔离的输入草稿（与对话/故事模式同款）
   final Map<String, String> _inputDrafts = {};
 
+  /// 输入防抖落库计时器（500ms 静默后写窄列；dispose 只取消不写）。
+  Timer? _draftDebounce;
+
+  /// 未发送草稿窄列持久化（fire-and-forget；空串=清空，发送后调用）。
+
+  /// 输入文本变化 → 防抖 500ms 落库（退出兜底主力；dispose 只取消）。
+  void _onDraftTextChanged(String text) {
+    _draftDebounce?.cancel();
+    final sessionId = widget.session.sessionId;
+    // lm-motion-exempt: 草稿落库去抖（交互节流，非过渡动效）
+    _draftDebounce = Timer(const Duration(milliseconds: 500), () {
+      _persistDraftColumn(sessionId, text);
+    });
+  }
+
+  void _persistDraftColumn(String sessionId, String text) {
+    // 同步+异步双兜底：持久化失败静默降级（草稿非关键路径，不炸页面）
+    unawaited(
+      () async {
+        try {
+          await ref
+              .read<ChatRepository>(chatRepositoryProvider)
+              .setSessionDraft(sessionId, text.isEmpty ? null : text);
+        } catch (_) {}
+      }(),
+    );
+  }
+
+  /// 跨重启恢复：页面级 Map 未命中时读库（输入框仍空才落，不覆盖新输入）。
+  Future<void> _restoreDraftFromDb(String sessionId) async {
+    final String? draft;
+    try {
+      draft = await ref
+          .read<ChatRepository>(chatRepositoryProvider)
+          .getSessionDraft(sessionId);
+    } catch (_) {
+      return; // 读库失败静默降级（不炸页面）
+    }
+    if (!mounted || draft == null || draft.isEmpty) return;
+    if (widget.session.sessionId != sessionId) return;
+    final current = _inputKey.currentState?.currentText ?? '';
+    if (current.isEmpty) {
+      _inputKey.currentState?.setText(draft);
+    }
+  }
+
   final GlobalKey<IntermediateChatInputState> _inputKey =
       GlobalKey<IntermediateChatInputState>();
 
@@ -122,12 +168,20 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   // initState 不重新调用，导致新会话消息不加载、UI 显示空状态。
 
   @override
+  void dispose() {
+    _draftDebounce?.cancel();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     _scheduleBottomAreaMeasurement();
     // 页面首次创建时检查是否需要回写草稿（如异常中断后重新进入）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _tryRestoreDraft();
+      // 跨重启恢复：控制器 userInput 无待恢复时读库（Map 冷启动恒空）
+      if (mounted) unawaited(_restoreDraftFromDb(widget.session.sessionId));
     });
     _loadPureReadingPreference();
   }
@@ -173,6 +227,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       } else {
         _inputDrafts.remove(oldWidget.session.sessionId);
       }
+      _draftDebounce?.cancel();
+      _persistDraftColumn(oldWidget.session.sessionId, oldText);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final state = ref.read(advancedChatControllerProvider(widget.session));
@@ -189,6 +245,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
             _inputKey.currentState?.setText(stashed);
           } else {
             _inputKey.currentState?.setText('');
+            // 跨重启恢复：同 State 会话内暂存未命中时读库
+            unawaited(_restoreDraftFromDb(widget.session.sessionId));
           }
         }
       });
@@ -278,12 +336,16 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                 insetPadding: EdgeInsets.fromLTRB(16, 0, 16, _bottomAreaHeight),
               ),
         ),
-        child: EntryTransition(child: _buildScaffold(context, state)),
+        child: context.lmUi
+            .entryTransition(context, child: _buildScaffold(context, state)),
       ),
     );
   }
 
   Widget _buildScaffold(BuildContext context, AdvancedChatState state) {
+    // 空态 GM 未配置引导（判定链同 resolveAdvancedGeneratingNamingConfig）。
+    // 解析期间不显示，避免配置完成折返时闪横幅。
+    final gmReady = ref.watch(directorGmReadyProvider(state.session));
     final colors = context.lm.palette;
     // 导演配置来源：advanced 段（"两个产品"零依赖，2026-08-27 导演设置体系）。
     // 配置未加载时 embedding 横幅不展示（与原 intermediateConfig 判空同构）。
@@ -319,14 +381,22 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       // 琉璃结构：透明底透出场地渐变；阅读/流式区零 blur（红线）。
       backgroundColor: context.scaffoldBgOf(colors.bg),
       appBar: AppBar(
-        leading: widget.showHamburgerMenu
+        leading: widget.onBackToHome != null
             ? IconButton(
                 //  语义缺口：复用框架本地化文案（不新增 i18n key）。
-                tooltip: MaterialLocalizations.of(context).openAppDrawerTooltip,
-                icon: const Icon(Icons.menu),
-                onPressed: widget.onHamburgerPressed,
+                tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                icon: const Icon(Icons.arrow_back),
+                onPressed: widget.onBackToHome,
               )
-            : null,
+            : widget.showHamburgerMenu
+                ? IconButton(
+                    //  语义缺口：复用框架本地化文案（不新增 i18n key）。
+                    tooltip:
+                        MaterialLocalizations.of(context).openAppDrawerTooltip,
+                    icon: const Icon(Icons.menu),
+                    onPressed: widget.onHamburgerPressed,
+                  )
+                : null,
         title: Text(
           state.session.title,
           style: IntermediateTextStyles.title.copyWith(color: colors.ink),
@@ -440,35 +510,78 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
               // 体验重构 ：ask_user 横幅（导演决策）与监督模式审批横幅。
               // 头部 muted 倒计时（超时值读 advanced.hitl 配置，0=一直等待）；
               // 每会话首张 HITL 横幅多一行首释解释。
-              if (state.agentAskPrompt != null)
-                DirectorAskBanner(
-                  prompt: state.agentAskPrompt!,
-                  onAnswer: controller.answerDirectorAsk,
-                  onSkip: () => controller.answerDirectorAsk(null),
-                  timeout: _askUserTimeout(advancedConfig),
-                  showIntro: !_hitlIntroShown,
-                  onIntroSeen: () {
-                    if (mounted) setState(() => _hitlIntroShown = true);
-                  },
-                ),
-              if (state.agentApprovalPrompt != null)
-                DirectorApprovalBanner(
-                  prompt: state.agentApprovalPrompt!,
-                  onResolve: controller.resolveDirectorApproval,
-                  timeout: Duration(
-                    minutes: advancedConfig?.hitl.approvalTimeoutMinutes ?? 5,
+              // 重排版：卡框统一由 viewport 提供（滚动
+              // 溢出提示+描边），选项改整行按钮后内容更高——限高从 55%/45%
+              // 放宽到 62%/50%，决策时刻以看清选项优先。
+              if (state.agentAskPrompt != null ||
+                  state.agentApprovalPrompt != null)
+                DirectorDecisionViewport(
+                  maxHeight: bodyMaxHeight * (keyboardOpen ? 0.50 : 0.62),
+                  accentColor: state.agentAskPrompt != null
+                      ? colors.primary
+                      : colors.warning,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (state.agentAskPrompt != null)
+                        DirectorAskBanner(
+                          prompt: state.agentAskPrompt!,
+                          onAnswer: controller.answerDirectorAsk,
+                          onSkip: () => controller.answerDirectorAsk(null),
+                          timeout: _askUserTimeout(advancedConfig),
+                          showIntro: !_hitlIntroShown,
+                          onIntroSeen: () {
+                            if (mounted) setState(() => _hitlIntroShown = true);
+                          },
+                          fontScale: fontScale,
+                        ),
+                      if (state.agentApprovalPrompt != null) ...[
+                        // 双横幅同现（罕见）：一张卡框内用分隔线区隔
+                        if (state.agentAskPrompt != null)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: IntermediateSpacing.sSm,
+                            ),
+                            child: Divider(
+                              height: 1,
+                              thickness: 0.5,
+                              color: colors.divider,
+                            ),
+                          ),
+                        DirectorApprovalBanner(
+                          prompt: state.agentApprovalPrompt!,
+                          onResolve: controller.resolveDirectorApproval,
+                          timeout: _approvalTimeout(advancedConfig),
+                          showIntro: !_hitlIntroShown,
+                          onIntroSeen: () {
+                            if (mounted) setState(() => _hitlIntroShown = true);
+                          },
+                        ),
+                      ],
+                    ],
                   ),
-                  showIntro: !_hitlIntroShown,
-                  onIntroSeen: () {
-                    if (mounted) setState(() => _hitlIntroShown = true);
-                  },
+                ),
+              // 空态 GM 未配置引导（发送前必配，置于嵌入横幅之上）
+              if (state.messages.isEmpty &&
+                  state.pendingUserMessage == null &&
+                  state.liveBlocks.isEmpty &&
+                  state.agentSteps.isEmpty &&
+                  !state.loadingHistory &&
+                  gmReady.value == false)
+                ModelConfigBanner(
+                  title: t.advanced.modelConfigBanner.title,
+                  message: t.advanced.modelConfigBanner.message,
+                  actionLabel: t.advanced.modelConfigBanner.configure,
+                  dismissTooltip: t.advanced.modelConfigBanner.dismiss,
+                  onConfigure: _goToGmConfig,
                 ),
               // 2026-07-21：未配置 embedding 模型时常驻提示 Banner
               if (advancedConfig != null &&
                   !_embeddingBannerDismissed &&
                   (advancedConfig.embeddingPresetId.isEmpty ||
                       advancedConfig.embeddingModelId.isEmpty))
-                EmbeddingMissingBanner(
+                context.lmUi.embeddingMissingBanner(
+                  context,
                   onConfigure: _goToEmbeddingSettings,
                   onDismiss: () =>
                       setState(() => _embeddingBannerDismissed = true),
@@ -524,7 +637,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                         padding: const EdgeInsets.only(
                           bottom: IntermediateSpacing.sMd,
                         ),
-                        child: SuggestReplyOverlay(
+                        child: context.lmUi.suggestReplyOverlay(
+                          context,
                           replies: state.suggestReplies,
                           isGenerating: state.isGeneratingSuggest,
                           isExpanded: state.suggestExpanded,
@@ -544,7 +658,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            InputToolbar(
+                            context.lmUi.inputToolbar(
+                              context,
                               onAddQuote: () => _handleInsertText('""', 1),
                               onAddParen: () => _handleInsertText('()', 1),
                               onSuggest: controller.generateSuggestReplies,
@@ -567,6 +682,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                               isManualCompacting: state.isManualCompacting,
                               isDirector: true,
                               onSend: _handleSend,
+                              onTextChanged: _onDraftTextChanged,
                               onCancel: controller.cancel,
                               sendKey: sendKey,
                               newlineKey: newlineKey,
@@ -613,7 +729,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                                   padding: const EdgeInsets.only(
                                     bottom: IntermediateSpacing.sMd,
                                   ),
-                                  child: SuggestReplyOverlay(
+                                  child: context.lmUi.suggestReplyOverlay(
+                                    context,
                                     replies: state.suggestReplies,
                                     isGenerating: state.isGeneratingSuggest,
                                     isExpanded: state.suggestExpanded,
@@ -637,7 +754,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              InputToolbar(
+                              context.lmUi.inputToolbar(
+                                context,
                                 onAddQuote: () => _handleInsertText('""', 1),
                                 onAddParen: () => _handleInsertText('()', 1),
                                 onSuggest: controller.generateSuggestReplies,
@@ -659,6 +777,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                                 isManualCompacting: state.isManualCompacting,
                                 isDirector: true,
                                 onSend: _handleSend,
+                                onTextChanged: _onDraftTextChanged,
                                 onCancel: controller.cancel,
                                 sendKey: sendKey,
                                 newlineKey: newlineKey,
@@ -679,9 +798,18 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   /// ask_user 挂起超时：advanced.hitl.ask_user_timeout_minutes，
   /// 0 = 永不超时（null，横幅显示「一直等待你的回复」），缺省 3 分钟。
+  /// P2 永等开关（approval_timeout_enabled，2026-10-15）同盖提问横幅：
+  /// 关闭时同样永不超时。钳制真源在 AdvancedHitlConfig（与 runner 同源）。
   Duration? _askUserTimeout(AdvancedConfig? config) {
-    final minutes = config?.hitl.askUserTimeoutMinutes ?? 3;
-    return minutes <= 0 ? null : Duration(minutes: minutes);
+    return config?.hitl.effectiveAskUserTimeout ?? const Duration(minutes: 3);
+  }
+
+  /// 审批挂起超时：与 runner 侧 completer.timeout 共用
+  /// AdvancedHitlConfig.effectiveApprovalTimeout 真源（修 ：此前
+  /// 页面直用原始配置值、runner 侧 0→5 钳制，两侧口径漂移；
+  /// P2 开关关闭 → null 永不超时）。
+  Duration? _approvalTimeout(AdvancedConfig? config) {
+    return config?.hitl.effectiveApprovalTimeout ?? const Duration(minutes: 5);
   }
 
   /// 系统裁决时刻的 3s 浮动提示（floating 规范）
@@ -748,6 +876,21 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     );
   }
 
+  /// 空态「导演主模型（GM）未配置」横幅「去配置」：直达导演设置页
+  /// （模型与生成区常驻置顶）。折返后失效判定 provider 重估。
+  Future<void> _goToGmConfig() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const DirectorSettingsPage()),
+    );
+    if (mounted) {
+      ref.invalidate(
+        directorGmReadyProvider(
+          ref.read(advancedChatControllerProvider(widget.session)).session,
+        ),
+      );
+    }
+  }
+
   // ──  Fork 动作回调处理 ──────────────────────────────────────────
 
   /// 2026-07-29 推荐回复：判断是否显示气泡浮层
@@ -792,10 +935,11 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     final currentState = ref.read(
       advancedChatControllerProvider(widget.session),
     );
-    if (currentState.pendingUserMessage != null) {
+    if (currentState.pendingUserMessage != null &&
+        currentState.phase != IntermediatePhase.failed) {
       final t = Translations.of(context);
-      final confirmed = await IntermediateConfirmDialog.show(
-        context: context,
+      final confirmed = await context.lmUi.confirmDialog(
+        context,
         title: t.advanced.chat.messageActions.overwritePendingTitle,
         content: t.advanced.chat.messageActions.overwritePendingConfirm,
         confirmLabel: t.common.confirm,
@@ -805,6 +949,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     await ref
         .read(advancedChatControllerProvider(widget.session).notifier)
         .sendMessage(userInput);
+    // 已发送即不再是草稿（清窄列；Map 由切走分支维护）
+    _persistDraftColumn(widget.session.sessionId, '');
   }
 
   /// 复制消息内容到剪贴板，并显示 SnackBar 反馈
@@ -861,7 +1007,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
     final allowResend = isPending || message.role == 'user';
 
-    final result = await IntermediateEditDialog.show(
+    final result = await context.lmUi.editDialog(
       context,
       initialContent: message.content ?? '',
       allowResend: allowResend,
@@ -898,8 +1044,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
         currentState.pendingUserMessage?.messageId == message.messageId;
 
     final t = Translations.of(context);
-    final confirmed = await IntermediateConfirmDialog.show(
-      context: context,
+    final confirmed = await context.lmUi.confirmDialog(
+      context,
       title: isPending
           ? t.advanced.chat.messageActions.deletePendingTitle
           : t.advanced.chat.messageActions.deleteTitle,
@@ -1001,8 +1147,11 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       prompt += s.lastPromptTokens!;
       cached += s.lastCacheReadTokens ?? 0;
     }
-    if (prompt == 0) return null;
-    return cached / prompt;
+    // 跨协议近似口径（与故事侧 averageCacheHit 同步）：Anthropic 的
+    // promptTokens 不含 cache-read，OpenAI 的含——分母统一用
+    // uncached + cached 输入 token，避免 OpenAI 下系统性低估。
+    if (prompt + cached == 0) return null;
+    return cached / (cached + prompt);
   }
 
   /// 上下文用量详情面板（sheet 内 Consumer watch，流式打字自动刷新）
@@ -1098,6 +1247,16 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 /// 仿 chatModeControllerProvider，按 ChatSession.family 创建。
 /// 导演依赖（事实层仓库 / durable 事件日志 / 压缩服务）只注入这里——
 /// 故事模式的 intermediateChatControllerProvider 不再构造任何导演依赖。
+/// 导演 GM 可解析性（空态配置引导横幅显隐判定）。
+///
+/// 判定链同 resolveAdvancedGeneratingNamingConfig：会话级→全局级
+/// generating 模型与 Key 任一缺位即 null。key 为当前会话对象。
+final directorGmReadyProvider =
+    FutureProvider.autoDispose.family<bool, ChatSession>((ref, session) async {
+  final resolver = ref.read(configurationResolverProvider);
+  return await resolver.resolveAdvancedGeneratingNamingConfig(session) != null;
+});
+
 final advancedChatControllerProvider = StateNotifierProvider.family<
     AdvancedChatController, AdvancedChatState, ChatSession>(
   (ref, session) {
@@ -1130,6 +1289,13 @@ final advancedChatControllerProvider = StateNotifierProvider.family<
       // v0.3 体验重构 ：durable 事件日志（崩溃恢复 + 过程审计）
       // 散建收口——统一读组合根 provider
       agentEventLogRepository: ref.read(agentEventLogRepositoryProvider),
+      // 向导「初始化你的角色」卡路径：物化时应用卡（服务无状态，即建即用）
+      resourceApplyService: ResourceApplyService(
+        resourceRepository: ref.read(resourceLibraryRepositoryProvider),
+        projectionService: ResourceProjectionService(
+          repository: ref.read(factualRepositoryProvider),
+        ),
+      ),
     );
   },
 );

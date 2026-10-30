@@ -4,13 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/model_registry/model_registry.dart';
-import 'package:lmstory/core/theme/simple/components/simple_chat_input.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
 import 'package:lmstory/features/settings/data/provider_templates.dart'
     show ProviderTemplates;
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/entities/display_preferences.dart';
+import 'package:lmstory/features/settings/domain/entities/input_keys.dart';
 import 'package:lmstory/features/settings/domain/entities/llm_protocol.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
@@ -31,6 +32,7 @@ class SettingsState {
     this.testResult,
     this.fetchModelsError,
     this.fontSize = 15,
+    this.contentWidthMode = LmContentWidthMode.fluid,
     this.autoCompaction = true,
     this.compactionThreshold = 0.6,
     this.defaultModelId,
@@ -39,6 +41,8 @@ class SettingsState {
     this.displayPreferences = const DisplayPreferences(),
     this.connectTimeoutSec = 15,
     this.receiveTimeoutSec = 30,
+    this.autoRetryMaxAttempts = 5,
+    this.autoRetryWaitBudgetSec = 90,
     this.defaultReasoningEffort,
     this.titleModelPresetId,
     this.titleModelModelId,
@@ -87,6 +91,10 @@ class SettingsState {
   /// 改造自原 `fontSizeIndex` (0/1/2 离散索引)——参考 ChatBox 连续 Slider。
   final int fontSize;
 
+  /// 内容宽度模式（通用设置-外观）：流式（随窗口放大，默认）/
+  /// 固定上限（超宽屏不拉长）。版心消费面经 LmContentWidthScope 下发。
+  final LmContentWidthMode contentWidthMode;
+
   /// 是否启用自动压缩
   final bool autoCompaction;
 
@@ -110,6 +118,12 @@ class SettingsState {
 
   /// 响应超时（秒）— 等待模型回复的最长时间（无数据接收超时）
   final int receiveTimeoutSec;
+
+  /// 自动重试次数上限（2026-10-15 批 E / P5：三模式共享底座，0-5）
+  final int autoRetryMaxAttempts;
+
+  /// 自动重试累计等待预算（秒；0 = 不限，P6）
+  final int autoRetryWaitBudgetSec;
 
   /// 默认思考预算档位（新会话的默认值，null = 未配置）
   ///
@@ -147,6 +161,7 @@ class SettingsState {
     Object? error = _sentinel,
     Object? testResult = _sentinel,
     int? fontSize,
+    LmContentWidthMode? contentWidthMode,
     bool? autoCompaction,
     double? compactionThreshold,
     String? defaultModelId,
@@ -155,6 +170,8 @@ class SettingsState {
     DisplayPreferences? displayPreferences,
     int? connectTimeoutSec,
     int? receiveTimeoutSec,
+    int? autoRetryMaxAttempts,
+    int? autoRetryWaitBudgetSec,
     Object? defaultReasoningEffort = _sentinel,
     Object? titleModelPresetId = _sentinel,
     Object? fetchModelsError = _sentinel,
@@ -182,6 +199,7 @@ class SettingsState {
             ? this.fetchModelsError
             : fetchModelsError as String?,
         fontSize: fontSize ?? this.fontSize,
+        contentWidthMode: contentWidthMode ?? this.contentWidthMode,
         autoCompaction: autoCompaction ?? this.autoCompaction,
         compactionThreshold: compactionThreshold ?? this.compactionThreshold,
         defaultModelId: defaultModelId ?? this.defaultModelId,
@@ -190,6 +208,9 @@ class SettingsState {
         displayPreferences: displayPreferences ?? this.displayPreferences,
         connectTimeoutSec: connectTimeoutSec ?? this.connectTimeoutSec,
         receiveTimeoutSec: receiveTimeoutSec ?? this.receiveTimeoutSec,
+        autoRetryMaxAttempts: autoRetryMaxAttempts ?? this.autoRetryMaxAttempts,
+        autoRetryWaitBudgetSec:
+            autoRetryWaitBudgetSec ?? this.autoRetryWaitBudgetSec,
         defaultReasoningEffort: defaultReasoningEffort == _sentinel
             ? this.defaultReasoningEffort
             : defaultReasoningEffort as ReasoningEffort?,
@@ -288,6 +309,11 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
       // 从用户覆盖中读取字体大小（int 12-22，默认 15，对标 ChatBox 连续 Slider）
       // 旧 key `general.font_size_index` (0/1/2 离散) 已废弃，dev 阶段覆盖式重建
       final fontSize = readOverride<num>('general.font_size')?.toInt() ?? 15;
+      final contentWidthMode =
+          switch (readOverride<String>('general.content_width_mode')) {
+        'capped' => LmContentWidthMode.capped,
+        _ => LmContentWidthMode.fluid,
+      };
       final autoCompaction =
           readOverride<bool>('broadcast_chat.auto_compaction') ?? true;
       final compactionThreshold =
@@ -362,6 +388,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
         defaultPresetId: defaultPresetId,
         isLoading: false,
         fontSize: fontSize,
+        contentWidthMode: contentWidthMode,
         autoCompaction: autoCompaction,
         compactionThreshold: compactionThreshold,
         defaultModelId: defaultModelId,
@@ -370,6 +397,14 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
         displayPreferences: displayPreferences,
         connectTimeoutSec: (connectTimeoutSec / 1000).round(),
         receiveTimeoutSec: (receiveTimeoutSec / 1000).round(),
+        autoRetryMaxAttempts: readOverride<int>(
+              'network.auto_retry_max_attempts',
+            ) ??
+            5,
+        autoRetryWaitBudgetSec:
+            ((readOverride<int>('network.auto_retry_wait_budget_ms') ?? 90000) /
+                    1000)
+                .round(),
         defaultReasoningEffort: defaultReasoningEffort,
         titleModelPresetId: titleModelPresetId,
         titleModelModelId: titleModelModelId,
@@ -769,6 +804,18 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     state = state.copyWith(fontSize: clamped);
   }
 
+  /// 设置内容宽度模式（流式/固定上限）
+  ///
+  /// 持久化到 `general.content_width_mode`；版心消费面经顶层
+  /// LmContentWidthScope 即时生效。
+  Future<void> setContentWidthMode(LmContentWidthMode mode) async {
+    await _settingsRepo.setUserOverride(
+      'general.content_width_mode',
+      mode.name,
+    );
+    state = state.copyWith(contentWidthMode: mode);
+  }
+
   /// 设置是否启用自动压缩
   // ignore: avoid_positional_boolean_parameters — 与其他 setter 签名保持一致
   Future<void> setAutoCompaction(bool enabled) async {
@@ -853,6 +900,24 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
       seconds * 1000,
     );
     state = state.copyWith(connectTimeoutSec: seconds);
+  }
+
+  /// 自动重试次数上限（0-5；2026-10-15 批 E / P5）
+  Future<void> setAutoRetryMaxAttempts(int attempts) async {
+    await _settingsRepo.setUserOverride(
+      'network.auto_retry_max_attempts',
+      attempts,
+    );
+    state = state.copyWith(autoRetryMaxAttempts: attempts);
+  }
+
+  /// 自动重试累计等待预算（秒；0 = 不限，P6）
+  Future<void> setAutoRetryWaitBudgetSec(int seconds) async {
+    await _settingsRepo.setUserOverride(
+      'network.auto_retry_wait_budget_ms',
+      seconds * 1000,
+    );
+    state = state.copyWith(autoRetryWaitBudgetSec: seconds);
   }
 
   /// 设置响应超时（秒）

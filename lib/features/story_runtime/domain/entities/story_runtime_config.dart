@@ -121,6 +121,11 @@ extension AdvancedStoryRuntime on AdvancedConfig {
 /// 本定值决定：检索预留 0、原文区下限动态（目标值沿用
 /// recentMinTokenTarget）、压缩阈值原样透传。
 extension DirectorContextBudgetPin on ContextBudget {
+  /// 触发线钳制域（导演 UI 滑杆范围；手改 user_overrides / 导入备份
+  /// 可写入域外值，钳死防轮前压缩饿死/触不到）。
+  static const double triggerFloor = 0.30;
+  static const double triggerCeil = 0.80;
+
   ContextBudget get directorPinned => ContextBudget(
         compactionTriggerRatio: compactionTriggerRatio,
         // 原文区下限走默认动态（null）；不变量由 story_runtime_config_test
@@ -129,4 +134,20 @@ extension DirectorContextBudgetPin on ContextBudget {
         retrievalRatio: 0,
         recentMinTokenTarget: recentMinTokenTarget,
       );
+
+  /// 触发线钳制 + 落到导演定值形态（单一真源）。
+  ///
+  /// 会话覆盖优先于全局；两者都过 [triggerFloor, triggerCeil] 钳制。
+  /// 输出与 [directorPinned] 同形态（检索预留 0、原文区下限动态），
+  /// 仅触发线替换为生效值——此前控制器内联第二份钳制副本与此处的
+  /// 定值各自为政，收敛到本方法防口径漂移。
+  ContextBudget directorClamped({required double? sessionOverride}) {
+    final effective = (sessionOverride ?? compactionTriggerRatio)
+        .clamp(triggerFloor, triggerCeil);
+    return ContextBudget(
+      compactionTriggerRatio: effective,
+      retrievalRatio: 0,
+      recentMinTokenTarget: recentMinTokenTarget,
+    );
+  }
 }

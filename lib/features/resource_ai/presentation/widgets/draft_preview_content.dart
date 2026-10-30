@@ -2,13 +2,12 @@
 ///
 /// 卡=分字段区块；书=书级元信息 + 词条卡片（标题/关键词/内容/常驻·触发
 /// 标记）。任何组件不渲染 rawJson 原文（用户看的是字段不是 JSON）。
-/// 长文本字段走 [SimpleMarkdownBody]（模型产出常含 markdown 列表/粗体）。
+/// 长文本字段走 SimpleMarkdownBody（模型产出常含 markdown 列表/粗体）。
 /// 本组件不自持滚动——嵌入会话设置面板的滚动视图使用。
 library;
 
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_markdown_body.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -136,7 +135,7 @@ class _FieldBlock extends StatelessWidget {
                   BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
             ),
             child: markdown
-                ? SimpleMarkdownBody(data: body)
+                ? context.lmUi.markdownBody(context, data: body)
                 : Text(body, style: SimpleTextStyles.body),
           ),
         ],
@@ -196,7 +195,7 @@ class _EntryCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: SimpleSpacing.s2xs),
-            SimpleMarkdownBody(data: entry.content),
+            context.lmUi.markdownBody(context, data: entry.content),
           ],
         ),
       ),

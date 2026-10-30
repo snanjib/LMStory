@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:lmstory/core/agent/agent_cancellation.dart';
 import 'package:lmstory/core/agent/agent_llm_gateway.dart';
 import 'package:lmstory/core/agent/agent_message.dart';
@@ -8,10 +7,11 @@ import 'package:lmstory/core/llm/context_overflow.dart';
 import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/llm/tool_calling/tool_call.dart';
 import 'package:lmstory/core/network/http_client.dart' show CancellationToken;
-import 'package:lmstory/core/network/retry_after.dart';
+import 'package:lmstory/core/network/retry_policy.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 import 'package:lmstory/features/settings/domain/entities/llm_protocol.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 
 /// LlmService → AgentLlmGateway 桥接（Data 层）
 ///
@@ -43,7 +43,7 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
         onToolArgDelta,
   }) async {
     // 已取消的轮不再发出请求（runner 在 step 边界也检查，此为防御短路）
-    cancellation.throwIfCancelled('LLM 请求前');
+    cancellation.throwIfCancelled('before_llm_request');
 
     final protocol = _parseProtocol(endpoint.protocol);
     final capabilities = ProviderToolCapabilities.resolve(
@@ -210,7 +210,23 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
     }
 
     if (hasError) {
-      throw streamError ?? const AgentLlmException('未知流错误');
+      throw streamError ??
+          AgentLlmException(t.common.errors.llmUnknownStreamError);
+    }
+
+    // EMPTY_RESPONSE（2026-10-15 批 D 归一）：200 但正文与工具调用全空
+    // ——免费站典型病（空 choices/空内容）。归一为可立即重试的语义码，
+    // 不再让「成功空响应」静默终态。thinking 不算交付内容（有 thinking
+    // 无正文无工具仍判空）。**finish_reason=length 除外**：推理烧完
+    // 输出预算的空正文是确定性再失败（重发同一请求仍截断），它有专属
+    // 诊断通道（预算耗尽失败信封），不进重试空转。
+    if (textBuffer.isEmpty &&
+        toolCalls.isEmpty &&
+        finishReason != 'length') {
+      throw AgentLlmException(
+        t.common.errors.llmEmptyResponse,
+        code: 'EMPTY_RESPONSE',
+      );
     }
 
     _logResponsePayload(
@@ -264,7 +280,10 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
     } catch (e) {
       // 非流式回退路径的未知异常同样包装为网关异常（runner 统一重试决策），
       // 并走 overflow 归一（中转站 400 多在此路径抛出）
-      throw _normalizeError('非流式请求失败：$e', fallbackRetryable: true);
+      throw _normalizeError(
+        t.common.errors.llmNonStreamFailed(detail: '$e'),
+        fallbackRetryable: true,
+      );
     }
 
     _logResponsePayload(
@@ -344,7 +363,9 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
   }
 
   AgentLlmException _wrapTransportError(Object e) {
-    if (e is AgentCancelledException) return const AgentLlmException('已取消');
+    if (e is AgentCancelledException) {
+      return AgentLlmException(t.common.errors.llmCancelled);
+    }
     if (e is AppHttpException) {
       final status = e.statusCode;
       final retryable = status == null || status >= 500 || status == 429;
@@ -362,7 +383,7 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
       );
     }
     if (e is TimeoutException) {
-      return const AgentLlmException('请求超时', code: 'timeout');
+      return AgentLlmException(t.common.errors.llmTimeout, code: 'timeout');
     }
     return _normalizeError(e.toString(), fallbackRetryable: true);
   }
@@ -407,28 +428,8 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
   static bool _isContextOverflow(String message, String? code) =>
       isContextOverflowText(message, code);
 
-  bool _isRetryableCode(String? code) {
-    if (code == null) return true;
-    switch (code) {
-      case 'STREAM_ERROR':
-      case 'timeout':
-      //  语义码：限流（尊重 retryAfter 冷却）与服务端错误可重试
-      case 'RATE_LIMIT':
-      case 'SERVER':
-      case '429':
-      case '500':
-      case '502':
-      case '503':
-      case '504':
-        return true;
-      //  语义码：鉴权失败/参数类 400 重发必然再败，不重试
-      case 'AUTH':
-      case 'BAD_REQUEST':
-        return false;
-      default:
-        // 4xx 参数/鉴权类不重试
-        final asInt = int.tryParse(code);
-        return asInt == null || asInt >= 500;
-    }
-  }
+  /// 判定委托共享 [RetryPolicy]（2026-10-15 批 D， 契约层落地）：
+  /// 判定表单源——新增 EMPTY_RESPONSE/FORMAT_ERROR 归一，三模式同表。
+  bool _isRetryableCode(String? code) =>
+      const RetryPolicy().isRetryable(code);
 }

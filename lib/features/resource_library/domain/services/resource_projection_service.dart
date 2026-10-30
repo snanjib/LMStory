@@ -48,21 +48,23 @@ class ResourceProjectionService {
     required String sessionId,
     required String cardId,
     required ParsedCharacterCard card,
+    required String defaultCharacterName,
+    required String duplicateErrorMessage,
+    String? defaultSettingName,
   }) {
     return _repository.runInTransaction(() async {
+      final primaryName =
+          card.name.trim().isNotEmpty ? card.name.trim() : defaultCharacterName;
+
       // 去重：同名【活跃】实体已存在 → 拒绝（DOC-15 §9.4 #2）。
       // （根治）：主名唯一索引已改 partial（WHERE is_archived=0），
       // 归档让名——撞归档名正常创建，仅活跃同名仍拒绝。
       final occupiedNames = await _loadOccupiedNames(sessionId);
-      if (occupiedNames.contains(card.name)) {
-        throw ResourceApplyException('已存在同名角色「${card.name}」，应用被拒绝');
+      if (occupiedNames.contains(primaryName)) {
+        throw ResourceApplyException(duplicateErrorMessage);
       }
 
       var count = 0;
-      // 名称为空的卡（存量行/手改库）投影出空名
-      // 实体——importance=5 达强制注入阈值且可重复创建。兜底「未命名角色」
-      // （对齐世界书路径 comment→'未命名设定' 兜底）。
-      final primaryName = card.name.isNotEmpty ? card.name : '未命名角色';
       final entity = FactualEntity(
         entityId: 'ent_${_uuid.v4()}',
         sessionId: sessionId,
@@ -99,7 +101,7 @@ class ResourceProjectionService {
         );
       }
 
-      occupiedNames.add(card.name);
+      occupiedNames.add(primaryName);
 
       // 内嵌世界书 → lore 实体（source=worldbook，sourceRef=cardId）
       for (final entry in card.embeddedEntries) {
@@ -109,6 +111,7 @@ class ResourceProjectionService {
           sourceRef: cardId,
           entry: entry,
           occupiedNames: occupiedNames,
+          defaultSettingName: defaultSettingName ?? defaultCharacterName,
         )) {
           count++;
         }
@@ -125,6 +128,7 @@ class ResourceProjectionService {
     required String sessionId,
     required String bookId,
     required List<NormalizedWorldEntry> entries,
+    required String defaultSettingName,
   }) {
     return _repository.runInTransaction(() async {
       var count = 0;
@@ -137,6 +141,7 @@ class ResourceProjectionService {
           sourceRef: bookId,
           entry: entry,
           occupiedNames: occupiedNames,
+          defaultSettingName: defaultSettingName,
         )) {
           count++;
         }
@@ -163,10 +168,11 @@ class ResourceProjectionService {
     required String sourceRef,
     required NormalizedWorldEntry entry,
     required Set<String> occupiedNames,
+    required String defaultSettingName,
   }) async {
     final primaryName = entry.keys.isNotEmpty
         ? entry.keys.first
-        : (entry.comment.isNotEmpty ? entry.comment : '未命名设定');
+        : (entry.comment.isNotEmpty ? entry.comment : defaultSettingName);
 
     // 去重：同名（主名或别名，活跃实体）已存在 → 跳过（不重复创建）；
     // 撞归档名不跳过（归档让名）

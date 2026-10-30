@@ -14,6 +14,17 @@ class ParsedCharacterCard {
     required this.personality,
     required this.specVersion,
     required this.embeddedEntries,
+    this.scenario = '',
+    this.firstMes = '',
+    this.alternateGreetings = const [],
+    this.mesExample = '',
+    this.tags = const [],
+    this.creatorNotes = '',
+    this.systemPrompt = '',
+    this.creator = '',
+    this.nickname = '',
+    this.age = '',
+    this.extraFields = const [],
   });
 
   /// 角色名 → 实体 primaryName
@@ -30,4 +41,49 @@ class ParsedCharacterCard {
 
   /// 内嵌世界书词条（character_book）→ `lore` 只读实体
   final List<NormalizedWorldEntry> embeddedEntries;
+
+  // ── 富字段（内容查看器消费；导入链不读取，缺省空值零影响）──
+
+  /// 场景（V2 scenario）
+  final String scenario;
+
+  /// 开场白（V2 first_mes）
+  final String firstMes;
+
+  /// 替代开场白（V2 alternate_greetings）
+  final List<String> alternateGreetings;
+
+  /// 对话示例（V2 mes_example）
+  final String mesExample;
+
+  /// 标签（V2 tags）
+  final List<String> tags;
+
+  /// 作者注（V2 creator_notes）
+  final String creatorNotes;
+
+  /// 系统提示（V2 system_prompt）
+  final String systemPrompt;
+
+  /// 作者（V2 creator）
+  final String creator;
+
+  /// 昵称（V3 nickname，数组形态合并为一行）
+  final String nickname;
+
+  /// 年龄（V3 age，数字形态转字符串）
+  final String age;
+
+  /// 未消费的字符串/字符串列表字段（内容查看器「其他字段」折叠组；
+  /// 复杂结构不入列——查看器不出原始 JSON）。
+  final List<CardExtraField> extraFields;
+}
+
+/// 卡上未消费的简单字段（查看器「其他字段」组行：原始键名+消毒值）。
+@immutable
+class CardExtraField {
+  const CardExtraField({required this.key, required this.value});
+
+  final String key;
+  final String value;
 }

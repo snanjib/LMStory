@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_markdown_body.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
@@ -230,7 +228,8 @@ List<Widget> buildCurrentRoundPanels({
       // 2026-07-29 修复：传入 thinkingContent，使回复完成后思考内容仍可见
       RepaintBoundary(
         // 回复气泡单独成层（idle/生成两分支结构一致，保 Key 复用不变量）
-        child: IntermediateMessageBubble(
+        child: context.lmUi.narrativeBubble(
+          context,
           key: const ValueKey('current-round-reply'),
           content: artifacts.replyText ?? '',
           isUser: false,
@@ -410,6 +409,10 @@ List<Widget> buildCurrentRoundPanels({
             generatedText: state.generatedText,
             failureContext: state.failureContext,
             foldDelayMs: generatingFoldDelayMs,
+            // 批 F：自动重试内联状态行（*Retry 期间显示第 k 次）
+            autoRetryCount: state.phase == IntermediatePhase.generatingRetry
+                ? state.retryCounts[IntermediatePhase.generating]
+                : null,
           ),
         ),
       ),
@@ -434,7 +437,8 @@ List<Widget> buildCurrentRoundPanels({
     panels.add(
       RepaintBoundary(
         // 流式回复期间的重绘只落在回复气泡自己的 layer
-        child: IntermediateMessageBubble(
+        child: context.lmUi.narrativeBubble(
+          context,
           key: const ValueKey('current-round-reply'),
           content: state.streamingReply!,
           isUser: false,
@@ -640,9 +644,10 @@ class _PartialManuscriptCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: IntermediateSpacing.sXs),
-            IntermediateMarkdownBody(
+            context.lmUi.markdownBody(
+              context,
+              narrative: true,
               data: text,
-              isUser: false,
               fontScale: fontScale,
             ),
           ],

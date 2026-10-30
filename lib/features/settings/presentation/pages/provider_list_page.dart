@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/api_url_resolver.dart';
@@ -81,7 +81,8 @@ class _ProviderListPageState extends ConsumerState<ProviderListPage> {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(
+      appBar: context.lmUi.appBar(
+        context,
         title: t.settings.provider.title,
         actions: [
           IconButton(
@@ -107,37 +108,16 @@ class _ProviderListPageState extends ConsumerState<ProviderListPage> {
     required Map<String, bool> apiKeyStatus,
   }) {
     final t = Translations.of(context);
-    final colors = context.lm.palette;
-
     if (isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
     if (presets.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.dns_outlined, size: 64, color: colors.faint),
-            const SizedBox(height: SimpleSpacing.sLg),
-            Text(
-              t.settings.provider.emptyList,
-              style: SimpleTextStyles.caption,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: SimpleSpacing.sLg),
-            FilledButton.icon(
-              onPressed: () => _showCreateDialog(context),
-              icon: const Icon(Icons.add, size: 18),
-              label: Text(
-                t.settings.provider.add,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+      return context.lmUi.emptyState(
+        context,
+        title: t.settings.provider.emptyList,
+        actionLabel: t.settings.provider.add,
+        onAction: () => _showCreateDialog(context),
       );
     }
 
@@ -244,91 +224,84 @@ class _ProviderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Translations.of(context);
     final colors = context.lm.palette;
-    return Container(
-      margin: const EdgeInsets.only(bottom: SimpleSpacing.sMd),
-      decoration: BoxDecoration(
-        color: colors.surfaceVariant,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-          child: Padding(
-            padding: const EdgeInsets.all(SimpleSpacing.sLg),
-            child: Row(
-              children: [
-                // 供应商图标
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: colors.primaryDim,
-                    borderRadius:
-                        BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: SimpleSpacing.sMd),
+      child: context.lmUi.card(
+        context,
+        onTap: onTap,
+        child: Row(
+          children: [
+            // 供应商图标
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: colors.primaryDim,
+                borderRadius:
+                    BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
+              ),
+              child: Icon(
+                Icons.dns_outlined,
+                color: colors.primary,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: SimpleSpacing.sMd),
+            // 供应商信息
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    preset.name,
+                    style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+                      color: colors.ink,
+                      fontSize: 24,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  child: Icon(
-                    Icons.dns_outlined,
-                    color: colors.primary,
-                    size: 20,
+                  const SizedBox(height: SimpleSpacing.s2xs),
+                  Text(
+                    // CF-X5：raw 模式持久化值带 raw: 前缀，列表展示
+                    /// 与详情页同法剥离（ApiUrlResolver.displayName）
+                    ApiUrlResolver.displayName(preset.baseUrl),
+                    style: SimpleTextStyles.caption,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                const SizedBox(width: SimpleSpacing.sMd),
-                // 供应商信息
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: SimpleSpacing.s2xs),
+                  Wrap(
+                    spacing: SimpleSpacing.sMd,
+                    runSpacing: SimpleSpacing.sSm,
                     children: [
-                      Text(
-                        preset.name,
-                        style: SimpleTextStyles.body.copyWith(
-                          fontWeight: FontWeight.w600,
+                      // API Key 状态
+                      _StatusDot(
+                        ok: hasApiKey,
+                        label: hasApiKey
+                            ? t.settings.provider.apiKeyStatus.set
+                            : t.settings.provider.apiKeyStatus.notSet,
+                        color: hasApiKey ? colors.success : colors.warning,
+                      ),
+                      // 模型数量
+                      _StatusDot(
+                        ok: preset.cachedModels.isNotEmpty,
+                        label: t.settings.provider.modelCount(
+                          n: preset.cachedModels.length,
+                          count: preset.cachedModels.length,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: SimpleSpacing.s2xs),
-                      Text(
-                        // CF-X5：raw 模式持久化值带 raw: 前缀，列表展示
-                        /// 与详情页同法剥离（ApiUrlResolver.displayName）
-                        ApiUrlResolver.displayName(preset.baseUrl),
-                        style: SimpleTextStyles.caption,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: SimpleSpacing.s2xs),
-                      Row(
-                        children: [
-                          // API Key 状态
-                          _StatusDot(
-                            ok: hasApiKey,
-                            label: hasApiKey
-                                ? t.settings.provider.apiKeyStatus.set
-                                : t.settings.provider.apiKeyStatus.notSet,
-                            color: hasApiKey ? colors.success : colors.warning,
-                          ),
-                          const SizedBox(width: SimpleSpacing.sMd),
-                          // 模型数量
-                          _StatusDot(
-                            ok: preset.cachedModels.isNotEmpty,
-                            label: t.settings.provider.modelCount(
-                              count: preset.cachedModels.length,
-                            ),
-                            color: preset.cachedModels.isNotEmpty
-                                ? colors.success
-                                : colors.faint,
-                          ),
-                        ],
+                        color: preset.cachedModels.isNotEmpty
+                            ? colors.success
+                            : colors.faint,
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(width: SimpleSpacing.sSm),
-                Icon(Icons.chevron_right, color: colors.faint, size: 20),
-              ],
+                ],
+              ),
             ),
-          ),
+            const SizedBox(width: SimpleSpacing.sSm),
+            Icon(Icons.chevron_right, color: colors.faint, size: 20),
+          ],
         ),
       ),
     );

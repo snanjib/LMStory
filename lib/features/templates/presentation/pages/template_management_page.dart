@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
+import 'package:lmstory/features/templates/presentation/support/template_l10n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 模板管理页面（设置子页面，含筛选/创建/编辑/删除/复制）
@@ -54,7 +55,8 @@ class _TemplateManagementPageState
 
     return Scaffold(
       backgroundColor: context.scaffoldBgOf(context.lm.palette.bg),
-      appBar: SimpleAppBar(
+      appBar: context.lmUi.appBar(
+        context,
         title: t.settings.template.title,
       ),
       body: LmMeasure(
@@ -105,33 +107,15 @@ class _TemplateManagementPageState
     bool isLoading,
     List<Template> templates,
   ) {
-    final colors = context.lm.palette;
-
     if (isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
     if (templates.isEmpty) {
       final t = Translations.of(context);
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.description_outlined,
-              size: 64,
-              color: colors.faint,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              t.settings.template.emptyList,
-              style: SimpleTextStyles.caption,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
+      return context.lmUi.emptyState(
+        context,
+        title: t.settings.template.emptyList,
       );
     }
 
@@ -322,12 +306,13 @@ class _TemplateManagementPageState
   }
 
   Future<void> _copyTemplate(Template template) async {
-    // TP13-3：副本名走 i18n（数据层默认中文 '(副本)' 绕过 slang，
-    // 英文 locale 上线后仍是中文）
+    // TP13-3：副本名走 i18n（数据层兜底为中立 '(Copy)'，UI 显式传参走 slang copyOf）
     final copied =
         await ref.read(settingsNotifierProvider.notifier).copyTemplate(
               template.templateId,
-              newName: t.settings.template.copyOf(name: template.name),
+              newName: t.settings.template.copyOf(
+                name: template.localizedName(t),
+              ),
             );
     _reportTemplateOpFailure(copied, t);
   }
@@ -340,7 +325,9 @@ class _TemplateManagementPageState
       builder: (ctx) => AlertDialog(
         title: Text(t.common.delete),
         content: Text(
-          t.settings.template.deleteConfirm(name: template.name),
+          t.settings.template.deleteConfirm(
+            name: template.localizedName(t),
+          ),
           maxLines: 5,
           overflow: TextOverflow.ellipsis,
         ),
@@ -437,45 +424,29 @@ class _TemplateCard extends StatelessWidget {
       TemplateKind.systemPrompt => t.settings.template.type.systemPrompt,
     };
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: context.lmUi.card(
+        context,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 第一行：名称 + 类型标签
-            Row(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    template.name,
-                    style: SimpleTextStyles.body.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                Text(
+                  kindLabel,
+                  style:
+                      SimpleTextStyles.overline.copyWith(color: colors.muted),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
+                const SizedBox(height: 4),
+                Text(
+                  template.localizedName(t),
+                  style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+                    color: colors.ink,
                   ),
-                  decoration: BoxDecoration(
-                    color: colors.divider,
-                    borderRadius:
-                        BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
-                  ),
-                  child: Text(
-                    kindLabel,
-                    style: SimpleTextStyles.overline.copyWith(
-                      color: colors.accent,
-                      fontSize: 11,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
@@ -483,27 +454,27 @@ class _TemplateCard extends StatelessWidget {
             // 内容预览
             Text(
               template.content,
-              style: SimpleTextStyles.caption,
+              style: SimpleTextStyles.bodySm.copyWith(color: colors.muted),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
             // 操作按钮
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 _ActionButton(
                   icon: Icons.edit_outlined,
                   label: t.common.edit,
                   onTap: onEdit,
                 ),
-                const SizedBox(width: 8),
                 _ActionButton(
                   icon: Icons.content_copy,
                   label: t.common.copy,
                   onTap: onCopy,
                 ),
                 if (onDelete != null) ...[
-                  const SizedBox(width: 8),
                   _ActionButton(
                     icon: Icons.delete_outline,
                     label: t.common.delete,
@@ -538,27 +509,13 @@ class _ActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
     final effectiveColor = color ?? colors.muted;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: effectiveColor),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(
-                label,
-                style:
-                    SimpleTextStyles.overline.copyWith(color: effectiveColor),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+    return TextButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: TextButton.styleFrom(
+        foregroundColor: effectiveColor,
+        minimumSize: const Size(44, 44),
       ),
     );
   }

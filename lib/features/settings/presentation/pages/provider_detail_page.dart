@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
+import 'package:lmstory/core/theme/shared/components/section_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
@@ -73,7 +74,7 @@ class _ProviderDetailPageState extends ConsumerState<ProviderDetailPage> {
       return Scaffold(
         backgroundColor:
             context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-        appBar: SimpleAppBar(title: t.settings.provider.title),
+        appBar: context.lmUi.appBar(context, title: t.settings.provider.title),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -82,7 +83,7 @@ class _ProviderDetailPageState extends ConsumerState<ProviderDetailPage> {
       return Scaffold(
         backgroundColor:
             context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-        appBar: SimpleAppBar(title: t.settings.provider.title),
+        appBar: context.lmUi.appBar(context, title: t.settings.provider.title),
         body: Center(
           child: Text(
             t.common.error,
@@ -99,7 +100,8 @@ class _ProviderDetailPageState extends ConsumerState<ProviderDetailPage> {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(
+      appBar: context.lmUi.appBar(
+        context,
         title: preset.name,
         actions: [
           // 基于模板创建的 preset（有 templateId）可重置为模板默认值
@@ -287,21 +289,10 @@ class _Section extends StatelessWidget {
   final String title;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.lm.palette;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: SimpleSpacing.sXs),
-      child: Text(
-        title,
-        style: SimpleTextStyles.body.copyWith(
-          fontWeight: FontWeight.w600,
-          color: colors.ink,
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: SimpleSpacing.sSm),
+        child: SectionHeading(title: title),
+      );
 }
 
 /// updatePreset 失败返回 null 且已把异常写入
@@ -1307,20 +1298,10 @@ class _ModelsSectionState extends ConsumerState<_ModelsSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Row(
-                children: [
-                  _Section(title: t.settings.provider.models),
-                  const SizedBox(width: SimpleSpacing.sXs),
-                  Text(
-                    '(${models.length})',
-                    style: SimpleTextStyles.caption,
-                  ),
-                ],
-              ),
-            ),
+        PanelHeading(
+          title: t.settings.provider.models,
+          subtitle: '(${models.length})',
+          actions: [
             // 多选模式开关（仅在有模型时可用）
             if (models.isNotEmpty)
               _IconAction(
@@ -1726,18 +1707,18 @@ class _ModelItem extends StatelessWidget {
                   const SizedBox(width: SimpleSpacing.sSm),
                 ],
                 Expanded(
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Flexible(
-                        child: Text(
-                          model.displayName ?? model.modelId,
-                          style: SimpleTextStyles.body,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      Text(
+                        model.displayName ?? model.modelId,
+                        style: SimpleTextStyles.body
+                            .copyWith(fontWeight: FontWeight.w600),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       if (model.capabilities.isNotEmpty) ...[
-                        const SizedBox(width: SimpleSpacing.sXs),
+                        const SizedBox(height: SimpleSpacing.sXs),
                         ModelCapabilityBadges(
                           capabilities: model.capabilities,
                           size: 13,
@@ -1754,7 +1735,10 @@ class _ModelItem extends StatelessWidget {
                 model.contextWindow != null ||
                 model.maxOutput != null) ...[
               const SizedBox(height: SimpleSpacing.sXs),
-              Row(
+              Wrap(
+                spacing: SimpleSpacing.sSm,
+                runSpacing: SimpleSpacing.sXs,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   if (model.contextWindow != null)
                     _metaChip(
@@ -1764,7 +1748,6 @@ class _ModelItem extends StatelessWidget {
                       formatTokenCount(model.contextWindow!),
                     ),
                   if (model.maxOutput != null) ...[
-                    const SizedBox(width: SimpleSpacing.sXs),
                     _metaChip(
                       context,
                       colors,
@@ -1772,7 +1755,6 @@ class _ModelItem extends StatelessWidget {
                       formatTokenCount(model.maxOutput!),
                     ),
                   ],
-                  const Spacer(),
                   // 多选模式下隐藏行内编辑/删除按钮（避免误操作）
                   if (!selectionMode) ...[
                     IconButton(
@@ -1783,7 +1765,8 @@ class _ModelItem extends StatelessWidget {
                       ),
                       onPressed: onEdit,
                       tooltip: t.common.edit,
-                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints(minWidth: 44, minHeight: 44),
                     ),
                     IconButton(
                       icon: Icon(
@@ -1794,7 +1777,8 @@ class _ModelItem extends StatelessWidget {
                       onPressed: onDelete,
                       tooltip:
                           MaterialLocalizations.of(context).deleteButtonTooltip,
-                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints(minWidth: 44, minHeight: 44),
                     ),
                   ],
                 ],

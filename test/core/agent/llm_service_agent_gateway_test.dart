@@ -193,7 +193,9 @@ void main() {
     });
 
     test('GLM 直连：注入 tool_stream 与串行 parallel', () async {
-      final service = _FakeLlmService(const [LlmStreamDone()]);
+      final service = _FakeLlmService(
+        const [LlmTextDelta('ok'), LlmStreamDone()],
+      );
       final gateway = LlmServiceAgentGateway(llmService: service);
 
       await gateway.completeStep(
@@ -425,7 +427,9 @@ void main() {
     });
 
     test('D3/D4 修复：双惩罚与思考档位透传进流式 LlmRequest', () async {
-      final service = _FakeLlmService(const [LlmStreamDone()]);
+      final service = _FakeLlmService(
+        const [LlmTextDelta('ok'), LlmStreamDone()],
+      );
       final gateway = LlmServiceAgentGateway(llmService: service);
 
       await gateway.completeStep(

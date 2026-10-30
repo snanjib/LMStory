@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:lmstory/core/theme/simple/components/simple_message_navigation.dart';
+import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_jump_to_latest_pill.dart';
 
@@ -59,7 +59,8 @@ class ChatMessageNavigationOverlay extends StatelessWidget {
     return Positioned(
       right: SimpleSpacing.sSm,
       bottom: SimpleSpacing.sMd,
-      child: SimpleMessageNavigation(
+      child: context.lmUi.messageNavigation(
+        context,
         visible: navigationVisible,
         onJumpToTop: onJumpToTop,
         onJumpToBottom: onJumpToBottom,

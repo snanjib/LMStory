@@ -22,10 +22,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 // ── 可配置 Stub ─────────────────────────────────────────────────────
 
 class _ConfigurableFailureLogRepo implements FailureLogRepository {
-  _ConfigurableFailureLogRepo({this.failures = const []});
+  _ConfigurableFailureLogRepo({this.failures = const [], int? totalCount})
+      : totalCount = totalCount ?? failures.length;
 
   List<FailureLogEntry> failures;
+
+  /// 表内真实总数（概览计数用；缺省与列表长度一致，可独立设置模拟
+  /// 「表滚动保留 200 条 vs 列表只载 50 条」的截断场景）
+  int totalCount;
   int clearAllCalls = 0;
+
+  @override
+  @override
+  Future<void> markRecovered(int logId) async {}
 
   @override
   Future<FailureLogEntry> insertLog({
@@ -37,6 +46,7 @@ class _ConfigurableFailureLogRepo implements FailureLogRepository {
     int? httpStatus,
     String? errorMessage,
     String? rawError,
+    String? outcome,
   }) async {
     return FailureLogEntry(
       id: 1,
@@ -61,9 +71,13 @@ class _ConfigurableFailureLogRepo implements FailureLogRepository {
       failures;
 
   @override
+  Future<int> countAll() async => totalCount;
+
+  @override
   Future<void> clearAll() async {
     clearAllCalls++;
     failures = const [];
+    totalCount = 0;
   }
 
   @override
@@ -120,7 +134,7 @@ void main() {
       // Stage 5 后页面有 5 个卡片，下方卡片在屏幕外，
       // 用 skipOffstage: false 验证骨架渲染（不验证可见性）
       expect(find.text('调试日志开关', skipOffstage: false), findsOneWidget);
-      //  轮轨迹入口卡加入后下方卡片被推出布局区（ListView 未布局
+      // 轮轨迹入口卡加入后下方卡片被推出布局区（ListView 未布局
       // ≠ offstage），改用滚动定位（与测试 2/3 同款做法）
       await tester.scrollUntilVisible(find.text('运行日志'), 200);
       expect(find.text('运行日志'), findsOneWidget);
@@ -218,6 +232,26 @@ void main() {
       await _pumpPage(tester, repo: repo);
 
       expect(find.textContaining('失败记录: 2 条'), findsOneWidget);
+    });
+
+    testWidgets('6b. 表内总数超列表截断（200 条）时概览显示真实总数', (tester) async {
+      final repo = _ConfigurableFailureLogRepo(
+        failures: List.generate(
+          50,
+          (i) => FailureLogEntry(
+            id: i,
+            sessionId: 's$i',
+            mode: 'intermediate',
+            errorCategory: 'network',
+            createdAt: DateTime(2026),
+          ),
+        ),
+        totalCount: 200,
+      );
+      await _pumpPage(tester, repo: repo);
+
+      // 概览计数取 countAll 真值，不再被列表 50 条截断失真
+      expect(find.textContaining('失败记录: 200 条'), findsOneWidget);
     });
   });
 
@@ -393,6 +427,101 @@ void main() {
 
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getBool('debug_log_keywords'), isFalse);
+    });
+  });
+
+  // ── 开发者暗门：连点解锁 / 重新上锁 / 计数时间窗 ────────────────────
+
+  group('DiagnosticsPage - 开发者暗门', () {
+    Finder versionLine() => find.textContaining('LMStory v');
+
+    /// 版本行在 ListView 尾部（懒布局，先滚动定位再连点）
+    Future<void> scrollToVersion(WidgetTester tester) async {
+      await tester.scrollUntilVisible(versionLine(), 200);
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> tapVersion(WidgetTester tester) async {
+      await tester.tap(versionLine(), warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    testWidgets('15. 版本行连点 7 次 → 解锁：持久化 + toast + 两卡出现', (tester) async {
+      await _pumpPage(tester);
+
+      // 锁定态：暗门卡不在树上（未解锁时卡片不插入）
+      expect(find.text('Agent Loop 自检', skipOffstage: false), findsNothing);
+
+      await scrollToVersion(tester);
+      for (var i = 0; i < 7; i++) {
+        await tapVersion(tester);
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('开发者工具已解锁'), findsOneWidget);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('diagnostics.dev_gate_unlocked'), isTrue);
+
+      // 两张开发者卡 + 再上锁行插入在上方，向上滚动定位验证
+      await tester.scrollUntilVisible(find.text('Agent Loop 自检'), -300);
+      expect(find.text('Agent Loop 自检'), findsOneWidget);
+      expect(find.text('Director Round Trace'), findsOneWidget);
+      expect(find.text('重新上锁开发者工具'), findsOneWidget);
+    });
+
+    testWidgets(
+        '16. 窗内连点不足 7 次（6 次）不解锁（时间窗逻辑由 DevGateTapCounter 单测钉死——widget 层假时钟不作用于 DateTime.now）',
+        (tester) async {
+      await _pumpPage(tester);
+      await scrollToVersion(tester);
+
+      for (var i = 0; i < 6; i++) {
+        await tapVersion(tester);
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('开发者工具已解锁'), findsNothing);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('diagnostics.dev_gate_unlocked'), isNull);
+    });
+
+    testWidgets('17. 解锁态点「重新上锁」→ 两卡收回 + 持久化 false + toast', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'diagnostics.dev_gate_unlocked': true,
+      });
+      await _pumpPage(tester);
+
+      // 再上锁行在两张暗门卡之下（懒布局）：从列表顶直滚定位
+      // （中转先滚「Agent Loop 自检」会把视口推到列表下部，目标反而在上方未建区）
+      final relock = find.text('重新上锁开发者工具');
+      await tester.scrollUntilVisible(relock, 200);
+      await tester.pumpAndSettle();
+      expect(relock, findsOneWidget);
+      await tester.tap(relock);
+      await tester.pumpAndSettle();
+
+      expect(find.text('开发者工具已上锁'), findsOneWidget);
+      expect(find.text('Agent Loop 自检', skipOffstage: false), findsNothing);
+      expect(
+        find.text('Director Round Trace', skipOffstage: false),
+        findsNothing,
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('diagnostics.dev_gate_unlocked'), isFalse);
+    });
+
+    testWidgets('18. 版本行显示 LMStory + 版本号形态（连点热区存在）', (tester) async {
+      await _pumpPage(tester);
+
+      await scrollToVersion(tester);
+      expect(versionLine(), findsOneWidget);
+      // 具体数字与 pubspec 的对账由 app_meta 守卫测试负责，
+      // 这里只钉「LMStory v」前缀形态。
+      expect(
+        (tester.widget(versionLine()) as Text).data,
+        startsWith('LMStory v'),
+      );
     });
   });
 }

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
+import 'package:lmstory/core/theme/shared/components/lm_state_transition.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
-import 'package:lmstory/core/theme/system/lm_radius.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -71,39 +74,67 @@ class SuggestReplyOverlay extends StatelessWidget {
     final colors = context.lm.palette;
     final t = Translations.of(context);
 
-    return Container(
-      // 浮层效果：elevation 阴影 + 圆角 + 提升层背景
-      decoration: BoxDecoration(
-        color: colors.surfaceElevated,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-        // 轻量阴影营造浮层感（不过度，符合 Restrained 策略）
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.4),
-            blurRadius: 12,
-            offset: const Offset(0, -2),
+    return LmArrival(
+      // 宽屏版心对齐——浮层与正文/工具栏同版心，不再通铺整窗。
+      // 正文列的阅读限宽是无条件的（>800 即收窄），浮层须同口径用
+      // 裸钳制而不是 LmMeasure 的 ≥1280 门，避免 800–1280 段错位。
+      child: Center(
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
+          child: Container(
+            // 浮层效果：elevation 阴影 + 圆角 + 提升层背景
+            decoration: BoxDecoration(
+              color: colors.surfaceElevated,
+              borderRadius:
+                  BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
+              // 轻量阴影营造浮层感（不过度，符合 Restrained 策略）
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  blurRadius: 12,
+                  offset: const Offset(0, -2),
+                ),
+              ],
+              border: Border.all(color: colors.divider, width: 0.5),
+            ),
+            // 限制最大高度，避免候选过多遮挡聊天区域
+            constraints: const BoxConstraints(maxHeight: 280),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildHeader(colors, t),
+                Flexible(
+                  child: Semantics(
+                    liveRegion: isGenerating || isFailed,
+                    child: LmStateTransition(
+                      stateKey: (
+                        isGenerating,
+                        isFailed,
+                        replies.isEmpty,
+                        isExpanded
+                      ),
+                      alignment: Alignment.topLeft,
+                      child: isGenerating
+                          ? _buildGeneratingState(colors, t)
+                          : (isFailed
+                              ? _buildFailedState(colors, t)
+                              : (replies.isEmpty
+                                  ? const SizedBox.shrink()
+                                  : (isExpanded
+                                      ? _buildExpandedList(colors, t)
+                                      : _buildCollapsedChip(
+                                          context,
+                                          colors,
+                                          t,
+                                        )))),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ],
-        border: Border.all(color: colors.divider, width: 0.5),
-      ),
-      // 限制最大高度，避免候选过多遮挡聊天区域
-      constraints: const BoxConstraints(maxHeight: 280),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildHeader(colors, t),
-          Flexible(
-            child: isGenerating
-                ? _buildGeneratingState(colors, t)
-                : (isFailed
-                    ? _buildFailedState(colors, t)
-                    : (replies.isEmpty
-                        ? const SizedBox.shrink()
-                        : (isExpanded
-                            ? _buildExpandedList(colors, t)
-                            : _buildCollapsedChip(colors, t)))),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -129,15 +160,12 @@ class SuggestReplyOverlay extends StatelessWidget {
             ),
           ),
           const SizedBox(width: LmSpacing.sXs),
-          Flexible(
+          Expanded(
             child: Text(
               t.intermediate.chat.suggestReply.title,
               style: LmNarrativeTextStyles.label.copyWith(color: colors.ink),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const Spacer(),
           // 折叠/展开按钮（仅在有候选时显示）
           if (replies.isNotEmpty && !isGenerating)
             IconButton(
@@ -152,8 +180,8 @@ class SuggestReplyOverlay extends StatelessWidget {
                   : t.intermediate.chat.suggestReply.expand,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(
-                minWidth: 32,
-                minHeight: 32,
+                minWidth: 44,
+                minHeight: 44,
               ),
             ),
           // 关闭按钮
@@ -163,7 +191,7 @@ class SuggestReplyOverlay extends StatelessWidget {
             onPressed: onClose,
             tooltip: t.intermediate.chat.suggestReply.close,
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
           ),
         ],
       ),
@@ -172,93 +200,90 @@ class SuggestReplyOverlay extends StatelessWidget {
 
   /// 生成中状态
   Widget _buildGeneratingState(LmPalette colors, Translations t) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: LmSpacing.sMd,
-        vertical: LmSpacing.sMd,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: colors.primary,
-            ),
-          ),
-          const SizedBox(width: LmSpacing.sSm),
-          Flexible(
-            child: Text(
-              t.intermediate.chat.suggestReply.generating,
-              style: LmNarrativeTextStyles.caption.copyWith(
-                color: colors.muted,
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: LmSpacing.sMd,
+          vertical: LmSpacing.sMd,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            LmActivityDots(color: colors.primary),
+            const SizedBox(width: LmSpacing.sSm),
+            Flexible(
+              child: Text(
+                t.intermediate.chat.suggestReply.generating,
+                style: LmNarrativeTextStyles.caption.copyWith(
+                  color: colors.muted,
+                ),
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
   /// 失败状态（生成失败时显示错误提示 + 重试按钮）
   Widget _buildFailedState(LmPalette colors, Translations t) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: LmSpacing.sMd,
-        vertical: LmSpacing.sMd,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.error_outline,
-            size: 14,
-            color: colors.error,
-          ),
-          const SizedBox(width: LmSpacing.sXs),
-          Flexible(
-            child: Text(
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: LmSpacing.sMd,
+          vertical: LmSpacing.sMd,
+        ),
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: LmSpacing.sSm,
+          runSpacing: LmSpacing.sXs,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 14,
+              color: colors.error,
+            ),
+            const SizedBox(width: LmSpacing.sXs),
+            Text(
               t.intermediate.chat.suggestReply.failed,
               style: LmNarrativeTextStyles.caption.copyWith(
                 color: colors.error,
               ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
             ),
-          ),
-          if (onRetry != null) ...[
-            const SizedBox(width: LmSpacing.sSm),
-            TextButton(
-              onPressed: onRetry,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: LmSpacing.sSm,
+            if (onRetry != null) ...[
+              const SizedBox(width: LmSpacing.sSm),
+              TextButton(
+                onPressed: onRetry,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: LmSpacing.sSm,
+                  ),
+                  minimumSize: const Size(44, 44),
                 ),
-                minimumSize: const Size(0, 28),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(
-                t.intermediate.chat.suggestReply.retry,
-                style: LmNarrativeTextStyles.caption.copyWith(
-                  color: colors.primary,
+                child: Text(
+                  t.intermediate.chat.suggestReply.retry,
+                  style: LmNarrativeTextStyles.caption.copyWith(
+                    color: colors.primary,
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 
   /// 折叠态：单行 chip 显示候选数量
-  Widget _buildCollapsedChip(LmPalette colors, Translations t) {
+  Widget _buildCollapsedChip(
+    BuildContext context,
+    LmPalette colors,
+    Translations t,
+  ) {
     return InkWell(
       onTap: onToggle,
-      borderRadius: BorderRadius.circular(LmRadius.rSm),
+      borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(
@@ -272,7 +297,7 @@ class SuggestReplyOverlay extends StatelessWidget {
         ),
         decoration: BoxDecoration(
           color: colors.primaryDim,
-          borderRadius: BorderRadius.circular(LmRadius.rSm),
+          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -307,29 +332,27 @@ class SuggestReplyOverlay extends StatelessWidget {
 
   /// 展开态：纵向排列所有候选气泡
   Widget _buildExpandedList(LmPalette colors, Translations t) {
-    return Flexible(
-      child: ListView.separated(
-        shrinkWrap: true,
-        padding: const EdgeInsets.only(
-          left: LmSpacing.sMd,
-          right: LmSpacing.sMd,
-          bottom: LmSpacing.sSm,
-        ),
-        itemCount: replies.length,
-        separatorBuilder: (_, __) => Divider(
-          height: 1,
-          color: colors.divider,
-        ),
-        itemBuilder: (context, index) {
-          final reply = replies[index];
-          return _SuggestReplyItem(
-            text: reply,
-            index: index,
-            onTap: () => onSelect(index),
-            colors: colors,
-          );
-        },
+    return ListView.separated(
+      shrinkWrap: true,
+      padding: const EdgeInsets.only(
+        left: LmSpacing.sMd,
+        right: LmSpacing.sMd,
+        bottom: LmSpacing.sSm,
       ),
+      itemCount: replies.length,
+      separatorBuilder: (_, __) => Divider(
+        height: 1,
+        color: colors.divider,
+      ),
+      itemBuilder: (context, index) {
+        final reply = replies[index];
+        return _SuggestReplyItem(
+          text: reply,
+          index: index,
+          onTap: () => onSelect(index),
+          colors: colors,
+        );
+      },
     );
   }
 }
@@ -354,6 +377,7 @@ class _SuggestReplyItem extends StatefulWidget {
 
 class _SuggestReplyItemState extends State<_SuggestReplyItem> {
   bool _isHovered = false;
+  bool _isFocused = false;
 
   @override
   Widget build(BuildContext context) {
@@ -362,15 +386,18 @@ class _SuggestReplyItemState extends State<_SuggestReplyItem> {
       onExit: (_) => setState(() => _isHovered = false),
       child: InkWell(
         onTap: widget.onTap,
+        onFocusChange: (focused) => setState(() => _isFocused = focused),
         borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
         child: AnimatedContainer(
-          duration: LmMotion.micro,
+          duration: LmMotion.durationFor(context, LmMotion.micro),
           padding: const EdgeInsets.symmetric(
             horizontal: LmSpacing.sSm,
             vertical: LmSpacing.sSm,
           ),
           decoration: BoxDecoration(
-            color: _isHovered ? widget.colors.primaryDim : Colors.transparent,
+            color: _isHovered || _isFocused
+                ? widget.colors.primaryDim
+                : Colors.transparent,
             borderRadius:
                 BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
           ),
@@ -379,8 +406,8 @@ class _SuggestReplyItemState extends State<_SuggestReplyItem> {
             children: [
               // 序号标记（琥珀金，呼应标题点）
               Container(
-                width: 18,
-                height: 18,
+                constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                padding: const EdgeInsets.all(LmSpacing.s2xs),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: widget.colors.primaryDim,
@@ -390,13 +417,13 @@ class _SuggestReplyItemState extends State<_SuggestReplyItem> {
                   '${widget.index + 1}',
                   style: LmNarrativeTextStyles.caption.copyWith(
                     color: widget.colors.primary,
-                    fontSize: 10,
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
               const SizedBox(width: LmSpacing.sSm),
-              // 候选文本（最多 3 行，溢出省略）
+              // 完整候选可在浮层内滚动阅读，选择后仍插入原文。
               Expanded(
                 child: Text(
                   widget.text,
@@ -404,8 +431,6 @@ class _SuggestReplyItemState extends State<_SuggestReplyItem> {
                     color: widget.colors.ink,
                     height: 1.4,
                   ),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.left,
                 ),
               ),

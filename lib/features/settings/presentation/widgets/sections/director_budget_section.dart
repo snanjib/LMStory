@@ -118,19 +118,29 @@ class DirectorBudgetSection extends ConsumerWidget {
                 ),
               ),
               directorSectionGap,
-              DirectorStepperRow(
-                label: b.approvalTimeout,
-                value: hitl?.approvalTimeoutMinutes ?? 5,
-                min: 1,
-                max: 30,
-                hint: b.approvalTimeoutHint,
-                onChanged: (v) => writeDirectorOverride(
-                  ref,
-                  'advanced.hitl.approval_timeout_minutes',
-                  v,
-                ),
+              // P2 永等开关：同盖审批与提问两类 HITL 横幅；
+              // 关闭 = 横幅永不超时一直等待（推翻 2026-08 旧口径，三道
+              // 兜底不变）；开启时下方两个超时 stepper 生效
+              _HitlTimeoutSwitchRow(
+                enabled: hitl?.approvalTimeoutEnabled ?? true,
+                minutes: hitl?.approvalTimeoutMinutes ?? 5,
               ),
               directorSectionGap,
+              if (hitl?.approvalTimeoutEnabled ?? true) ...[
+                DirectorStepperRow(
+                  label: b.approvalTimeout,
+                  value: hitl?.approvalTimeoutMinutes ?? 5,
+                  min: 1,
+                  max: 30,
+                  hint: b.approvalTimeoutHint,
+                  onChanged: (v) => writeDirectorOverride(
+                    ref,
+                    'advanced.hitl.approval_timeout_minutes',
+                    v,
+                  ),
+                ),
+                directorSectionGap,
+              ],
               DirectorStepperRow(
                 label: b.subagentMaxSteps,
                 value: subagent?.maxSteps ?? 6,
@@ -181,6 +191,59 @@ class DirectorBudgetSection extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// P2 永等开关行：文案仿 ZCode「提问自动继续」范式——
+/// 开 = 「X 分钟未响应自动拒绝」（X 引当前配置值），关 = 「一直等待」。
+class _HitlTimeoutSwitchRow extends ConsumerWidget {
+  const _HitlTimeoutSwitchRow({
+    required this.enabled,
+    required this.minutes,
+  });
+
+  final bool enabled;
+  final int minutes;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.lm.palette;
+    final t = Translations.of(context);
+    final b = t.settings.director.budget;
+
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                b.approvalTimeoutSwitch,
+                style: IntermediateTextStyles.caption
+                    .copyWith(color: colors.muted),
+              ),
+              Text(
+                enabled
+                    ? b.approvalTimeoutSwitchOn(minutes: minutes)
+                    : b.approvalTimeoutSwitchOff,
+                style: IntermediateTextStyles.captionSm.copyWith(
+                  color: colors.faint,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Switch(
+          value: enabled,
+          activeThumbColor: colors.primary,
+          onChanged: (v) => writeDirectorOverride(
+            ref,
+            'advanced.hitl.approval_timeout_enabled',
+            v,
           ),
         ),
       ],

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
 import 'package:lmstory/core/theme/system/palettes/classic/classic_palette.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -86,7 +86,7 @@ void main() {
       );
     });
 
-    testWidgets('4. 助手消息使用 surface 底色', (tester) async {
+    testWidgets('assistant prose reads directly on the page', (tester) async {
       await tester.pumpWidget(
         wrap(
           const IntermediateMessageBubble(
@@ -98,7 +98,7 @@ void main() {
 
       final container = tester.widget<Container>(find.byType(Container));
       final decoration = container.decoration as BoxDecoration?;
-      expect(decoration?.color, ClassicPaletteValues.dark.surface);
+      expect(decoration?.color, Colors.transparent);
     });
   });
 

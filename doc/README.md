@@ -18,11 +18,11 @@
 |---|---|
 | 对话模式（代码标识 `chat`） | 已实现 |
 | 故事模式（代码标识 `intermediate`） | 已实现 |
-| 导演模式（代码标识 `advanced`，产品名「导演模式」） | 已实现（实验性；设置页开关，默认关闭）。内核在 `lib/features/advanced/`，与故事模式共享 `lib/features/story_runtime/`；设计见 `doc/design/v0.3.0/` |
+| 导演模式（代码标识 `advanced`，产品名「导演模式」） | 已实现（设置页开关，默认开启）。内核在 `lib/features/advanced/`，与故事模式共享 `lib/features/story_runtime/`；设计见 `doc/design/v0.3.0/` |
 | 世界书/角色卡资源库（`lib/features/resource_library`） | 已实现；设置页入口，导入 SillyTavern 兼容 PNG 角色卡（V1/V2/V3）+ 纯 JSON 卡 + 世界书 JSON，应用到会话作只读种子（设计见 `doc/design/15_世界书与角色卡设计.md`） |
 | 独立 HUD 子系统 | 已废弃，不是后续交付项 |
 | `factual_memories` 单表、`state_snapshots`、HUD 专用 `update_world` 双写链路 | 随旧 HUD 蓝图一并废弃；当前事实层继续使用三表结构 |
-| 国际化 | slang 基础设施已实现；应用当前仅有简体中文资源，英文界面尚未实现 |
+| 国际化 | slang 基础设施已实现；zh-CN / en-US 双语资源，切换即时生效 |
 | 数据库 | `schemaVersion` 以 `lib/features/chat/data/database/app_database.dart` 为准；升级/修复采用保留数据的增量 `repairSchema` |
 
 ## 目录属性
@@ -67,6 +67,13 @@
 | `v0.3.0/导演模式长会话退化治理与圆环重嵌入设计.md` | 长会话退化治理（事件日志滚动保留、Recap 圆环重嵌入） |
 | `v0.3.0/AI建卡工具设计.md` | AI 建卡工具：对话式共创角色卡/世界书（草稿确认制、agent 循环下沉 `core/agent`） |
 | `v0.3.0/记忆库实体归并设计.md` | 记忆库实体归并（别名模型、归并预演与满限披露） |
+| `v0.4.0/外观体系v2设计.md` | 双轴外观体系 v2（结构轴 × 配色轴，八组合）：琉璃结构 × 波尔多配色定稿、语义色槽与装配口径 |
+| `v0.4.0/前端组件接口层_LmComponentKit架构设计.md` | LmComponentKit 组件接口层架构（业务依赖抽象组件接口，四结构各一套实现） |
+| `v0.4.0/前端组件接口层_实现约定.md` | 组件接口层现行实现约定（装配边界与运行行为，以 `lib/core/theme/` 为准） |
+| `v0.4.0/前端组件接口层_现状盘点.md` | 组件接口层设计输入的现状盘点（接口清单与 file:line 证据快照） |
+| `v0.4.0/奇观结构_Wonderous设计语言调研.md` | 漫游结构（wonder）设计语言调研：Wonderous 开源应用 token 级调研快照 |
+| `v0.4.0/棱角结构_Neubrutalism设计语言调研.md` | 印刻结构（brutal）设计语言调研：Neubrutalism token 级规格提取 |
+| `v0.4.0/concepts/README.md` | 外观体系概念图生成 prompt 清单（视觉设计复现用） |
 
 ## 提交前一致性检查
 

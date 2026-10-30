@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/history_panel_shell.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
@@ -19,7 +18,7 @@ import 'package:lmstory/i18n/strings.g.dart';
 /// - 完成：先展开 [foldDelayMs] 毫秒展示关键词列表（entities/events 分组），
 ///   然后自动折叠为单行 "▸ 关键词：N 个"；用户点击可重新展开/折叠
 /// - 失败：AnimatedOpacity + 灰度滤镜过渡到 0.4（300ms ease-out，DOC-06B §5.3）
-/// - 历史态（[artifacts] != null）：用 [HistoryPanelShell] 渲染，默认折叠、
+/// - 历史态（[artifacts] != null）：用 HistoryPanelShell 渲染，默认折叠、
 ///   muted 箭头、入场淡入、无自动折叠定时器、无失败态
 ///
 /// 与 GeneratePanel 同级样式（surfaceElevated 底、rMd 圆角、muted 箭头），
@@ -188,7 +187,7 @@ class _ExtractPanelState extends State<ExtractPanel> {
     );
   }
 
-  /// 历史态渲染：用 [HistoryPanelShell] 容器 + 关键词标签列表展开内容。
+  /// 历史态渲染：用 HistoryPanelShell 容器 + 关键词标签列表展开内容。
   Widget _buildHistory(BuildContext context) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
@@ -199,7 +198,8 @@ class _ExtractPanelState extends State<ExtractPanel> {
       count: keywords.length,
     );
 
-    return HistoryPanelShell(
+    return context.lmUi.historyPanelShell(
+      context,
       key: ValueKey('history-extract-${artifacts.turnNumber}'),
       summary: summary,
       animateEntrance: false,

@@ -210,6 +210,19 @@ abstract interface class StoryPersistenceService {
     required String assistantMessageId,
   });
 
+  /// 编辑助手消息正文：message 行与当前指针指向的变体行同事务更新。
+  ///
+  /// 所见=所存——只改 message 行时，切换器往返会把变体行的旧正文拷回
+  /// message 行，用户编辑被静默回退。同事务同步当前变体行（artifacts
+  /// 的 current_variant_index 所指）后切换往返不再回退；该轮无变体行
+  /// （从未重生成/未物化变体）时 UPDATE 影响 0 行，等价只改 message 行。
+  Future<bool> updateAssistantContentAndCurrentVariant({
+    required String sessionId,
+    required int turnNumber,
+    required String assistantMessageId,
+    required String newContent,
+  });
+
   /// 删除非当前变体（当前指针所指变体由调用方守卫不传入）
   Future<void> deleteMessageVariant({
     required String sessionId,

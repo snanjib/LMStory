@@ -203,6 +203,63 @@ void main() {
       expect(outcome.result.output, 'ok');
     });
 
+    test('批准批注（P1）：成功回执尾部追加信封，无批注零变化', () async {
+      final tool = _RecordingTool(
+        (inv, args) async => AgentToolResult.success(title: 'ok', output: '已暂存 2 处变更'),
+      );
+
+      // 有批注：尾部信封 + metadata 标记
+      final noted = await _run(
+        tool: tool,
+        approvalRequired: true,
+        approvalSeam: const _StaticSeam(
+          AgentApprovalGranted(feedback: '把表演和真性格区分开'),
+        ),
+      );
+      expect(noted.wasDenied, isFalse);
+      expect(noted.result.output, startsWith('已暂存 2 处变更'));
+      expect(
+        noted.result.output,
+        contains('\n——\n导演批注（随本次批准下发）：把表演和真性格区分开'),
+      );
+      expect(noted.result.metadata?['approvalFeedback'], isTrue);
+
+      // 无批注：与旧行为完全一致（P1「不填什么都不追加」）
+      final plain = await _run(
+        tool: tool,
+        approvalRequired: true,
+        approvalSeam: const _StaticSeam(AgentApprovalGranted()),
+      );
+      expect(plain.result.output, '已暂存 2 处变更');
+      expect(plain.result.metadata?['approvalFeedback'], isNull);
+
+      // 空白批注 = 无批注
+      final blank = await _run(
+        tool: tool,
+        approvalRequired: true,
+        approvalSeam: const _StaticSeam(AgentApprovalGranted(feedback: '   ')),
+      );
+      expect(blank.result.output, '已暂存 2 处变更');
+    });
+
+    test('批准批注：工具失败信封不追加（失败已有行动指引）', () async {
+      final tool = _RecordingTool(
+        (inv, args) async =>
+            AgentToolResult.failure(title: '失败', output: '实体不存在'),
+      );
+
+      final outcome = await _run(
+        tool: tool,
+        approvalRequired: true,
+        approvalSeam: const _StaticSeam(
+          AgentApprovalGranted(feedback: '下次注意'),
+        ),
+      );
+
+      expect(outcome.result.isError, isTrue);
+      expect(outcome.result.output, isNot(contains('导演批注')));
+    });
+
     test('工具体抛异常：捕获为可操作失败信封，不中断', () async {
       final tool = _RecordingTool((inv, args) async {
         throw StateError('db locked');

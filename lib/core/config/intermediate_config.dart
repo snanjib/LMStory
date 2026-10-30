@@ -450,24 +450,25 @@ class ContextBudget {
 /// 语义：`*_max_retries: 2` = 首次尝试 + 2 次重试 = 共 3 次。
 /// Schema 依据：DOC-09B §10.1、DOC-09A-2 §6.2 重试语义。
 class RetryConfig {
+  /// 默认 5（2026-10-15 批 E / P5 ：三模式统一默认自动重试 5 次——
+  /// 进度透明化后高默认=知情自决；阶段键保留为**阶段粒度覆盖项**，
+  /// 退避/判定/预算读共享 RetryPolicy（lib/core/network/retry_policy.dart）
   const RetryConfig({
-    this.generatingMaxRetries = 2,
-    this.extractingMaxRetries = 2,
-    this.retrievalMaxRetries = 1,
-    this.reviewingMaxRetries = 2,
-    this.summarizingMaxRetries = 2,
-    this.jsonFormatRetry = 1,
-    this.streamInterruptRetry = 1,
+    this.generatingMaxRetries = 5,
+    this.extractingMaxRetries = 5,
+    this.retrievalMaxRetries = 5,
+    this.reviewingMaxRetries = 5,
+    this.summarizingMaxRetries = 5,
+    this.streamInterruptRetry = 5,
   });
 
   factory RetryConfig.fromJson(Map<String, dynamic> json) => RetryConfig(
-        generatingMaxRetries: json['generating_max_retries'] as int? ?? 2,
-        extractingMaxRetries: json['extracting_max_retries'] as int? ?? 2,
-        retrievalMaxRetries: json['retrieval_max_retries'] as int? ?? 1,
-        reviewingMaxRetries: json['reviewing_max_retries'] as int? ?? 2,
-        summarizingMaxRetries: json['summarizing_max_retries'] as int? ?? 2,
-        jsonFormatRetry: json['json_format_retry'] as int? ?? 1,
-        streamInterruptRetry: json['stream_interrupt_retry'] as int? ?? 1,
+        generatingMaxRetries: json['generating_max_retries'] as int? ?? 5,
+        extractingMaxRetries: json['extracting_max_retries'] as int? ?? 5,
+        retrievalMaxRetries: json['retrieval_max_retries'] as int? ?? 5,
+        reviewingMaxRetries: json['reviewing_max_retries'] as int? ?? 5,
+        summarizingMaxRetries: json['summarizing_max_retries'] as int? ?? 5,
+        streamInterruptRetry: json['stream_interrupt_retry'] as int? ?? 5,
       );
 
   /// 生成失败后额外重试次数
@@ -491,10 +492,10 @@ class RetryConfig {
   /// 解析失败时按此值重试。compact 降级场景仍走 summarizing，同样适用。
   final int summarizingMaxRetries;
 
-  /// JSON 格式错误额外重试次数
-  final int jsonFormatRetry;
-
   /// 流式中断额外重试次数
+  ///
+  /// （json_format_retry 死键已删：2026-10-15 批 E / P9 ，全库无消费者；
+  /// 格式错误由 extracting/summarizing 的语义化判定与共享策略覆盖）
   final int streamInterruptRetry;
 }
 

@@ -2,12 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/history_panel_shell.dart';
-import 'package:lmstory/core/theme/intermediate/components/memory_detail_dialog.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/memory_detail_dialog.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/story_phase_models.dart';
@@ -21,7 +20,7 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///   importance 评分 + tags 标签列表），然后自动折叠为单行
 ///   "▸ 摘要已生成"；用户点击可重新展开/折叠
 /// - 失败：AnimatedOpacity + 灰度滤镜过渡到 0.4（300ms ease-out，DOC-06B §5.3）
-/// - 历史态（[artifacts] != null）：用 [HistoryPanelShell] 渲染，默认折叠、
+/// - 历史态（[artifacts] != null）：用 HistoryPanelShell 渲染，默认折叠、
 ///   muted 箭头、入场淡入、无自动折叠定时器、无失败态
 ///
 /// 与 ExtractPanel 同级样式（surfaceElevated 底、rMd 圆角、muted 箭头），
@@ -196,7 +195,7 @@ class _SummarizePanelState extends State<SummarizePanel> {
     );
   }
 
-  /// 历史态渲染：用 [HistoryPanelShell] 容器 + 摘要详情展开内容。
+  /// 历史态渲染：用 HistoryPanelShell 容器 + 摘要详情展开内容。
   Widget _buildHistory(BuildContext context) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
@@ -206,7 +205,8 @@ class _SummarizePanelState extends State<SummarizePanel> {
     );
     final eventSummary = artifacts.eventSummary;
 
-    return HistoryPanelShell(
+    return context.lmUi.historyPanelShell(
+      context,
       key: ValueKey('history-summarize-${artifacts.turnNumber}'),
       summary: summary,
       animateEntrance: false,
@@ -232,7 +232,9 @@ class _SummarizePanelState extends State<SummarizePanel> {
             summary: summary,
           ),
           child: Text(
-            summary.displayText,
+            summary.formatDisplayText(
+              emptyPlaceholder: t.intermediate.chat.memoryDetail.empty,
+            ),
             style: IntermediateTextStyles.narrativeBody.copyWith(
               color: colors.ink,
             ),
@@ -402,7 +404,9 @@ class _SummarizePanelState extends State<SummarizePanel> {
             summary: summary,
           ),
           child: Text(
-            summary.displayText,
+            summary.formatDisplayText(
+              emptyPlaceholder: t.intermediate.chat.memoryDetail.empty,
+            ),
             style: IntermediateTextStyles.narrativeBody.copyWith(
               color: colors.ink,
             ),

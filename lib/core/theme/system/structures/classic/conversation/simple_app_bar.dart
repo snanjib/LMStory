@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/theme/system/lm_ui_text_styles.dart';
 
 /// Simple mode app bar — PreferredSizeWidget.
 ///
-/// Flat, no elevation. Title left-aligned with [LmUiTextStyles.title2].
+/// Flat, no elevation. A serif title connects utility pages to the story.
 /// Optional [actions] row on the right.
 class SimpleAppBar extends StatelessWidget implements PreferredSizeWidget {
   const SimpleAppBar({
@@ -37,7 +38,11 @@ class SimpleAppBar extends StatelessWidget implements PreferredSizeWidget {
         children: [
           Text(
             title,
-            style: LmUiTextStyles.title2,
+            style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+              fontSize: 22,
+              height: 1.2,
+              color: colors.ink,
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),

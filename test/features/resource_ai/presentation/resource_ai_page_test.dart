@@ -10,7 +10,7 @@ import 'package:lmstory/core/agent/agent_runner.dart';
 import 'package:lmstory/core/agent/agent_skill_registry.dart';
 import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/config/resource_ai_config.dart';
-import 'package:lmstory/core/theme/simple/components/simple_markdown_body.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_markdown_body.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
 import 'package:lmstory/features/resource_ai/data/resource_ai_save_service.dart';
 import 'package:lmstory/features/resource_ai/domain/entities/draft_entities.dart';

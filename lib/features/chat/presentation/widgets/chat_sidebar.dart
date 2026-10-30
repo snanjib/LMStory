@@ -279,12 +279,12 @@ class _ChatSidebarState extends ConsumerState<ChatSidebar> {
   Future<void> _toggleStar(ChatSession session) async {
     try {
       final chatRepo = ref.read<ChatRepository>(chatRepositoryProvider);
-      // 收藏先读后写——列表缓存对象的元数据列是
-      // 上次加载快照，直接全列回写会倒灌旧值；写前重读保证元数据新鲜
-      //（收藏窄列接口待接口演进，见 01 册第六节改进项）。
+      // 窄列翻转：只写 is_starred 一列，不重读不回写其余列——重读到
+      // 写入的窗口里自动命名等并发写不会被倒灌旧值。
       final fresh = await chatRepo.getSession(session.sessionId);
-      await chatRepo.updateSession(
-        fresh.copyWith(isStarred: !fresh.isStarred),
+      await chatRepo.setSessionStarred(
+        session.sessionId,
+        starred: !fresh.isStarred,
       );
       await _refreshSessions();
       widget.onSessionUpdated?.call();
@@ -560,7 +560,6 @@ class _ChatSidebarState extends ConsumerState<ChatSidebar> {
         style: SimpleTextStyles.bodySm.copyWith(color: colors.ink),
         decoration: InputDecoration(
           hintText: t.chat.sidebar.searchHint,
-          hintStyle: SimpleTextStyles.bodySm.copyWith(color: colors.faint),
           prefixIcon: Icon(Icons.search, size: 16, color: colors.muted),
           suffixIcon: _searchQuery.isNotEmpty
               ? Semantics(

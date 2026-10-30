@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_session_stats.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/agent_loop_diagnostics_controller.dart';
@@ -41,67 +43,78 @@ class _AgentLoopDiagnosticsPageState
     final colors = context.lm.palette;
 
     return Scaffold(
-      appBar: SimpleAppBar(title: t.settings.diagnostics.agentLoop.title),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(SimpleSpacing.sLg),
-            child: _InfoCard(
-              colors: colors,
-              modelLabel: state.modelLabel,
-              resolveError: state.resolveError,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: SimpleSpacing.sLg,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: state.isRunning || state.resolveError != null
-                        ? null
-                        : () => ref
-                            .read(
-                              agentLoopDiagnosticsControllerProvider.notifier,
-                            )
-                            .run(),
-                    icon: const Icon(Icons.play_arrow),
-                    label: Text(t.settings.diagnostics.agentLoop.run),
+      appBar: context.lmUi
+          .appBar(context, title: t.settings.diagnostics.agentLoop.title),
+      body: LmMeasure(
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(SimpleSpacing.sLg),
+                    child: _InfoCard(
+                      colors: colors,
+                      modelLabel: state.modelLabel,
+                      resolveError: state.resolveError,
+                    ),
                   ),
-                ),
-                const SizedBox(width: SimpleSpacing.sMd),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: state.isRunning
-                        ? () => ref
-                            .read(
-                              agentLoopDiagnosticsControllerProvider.notifier,
-                            )
-                            .cancel()
-                        : null,
-                    icon: const Icon(Icons.stop),
-                    label: Text(t.settings.diagnostics.agentLoop.cancel),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: SimpleSpacing.sLg,
+                    ),
+                    child: Wrap(
+                      spacing: SimpleSpacing.sSm,
+                      runSpacing: SimpleSpacing.sXs,
+                      children: [
+                        FilledButton.icon(
+                          onPressed:
+                              state.isRunning || state.resolveError != null
+                                  ? null
+                                  : () => ref
+                                      .read(
+                                        agentLoopDiagnosticsControllerProvider
+                                            .notifier,
+                                      )
+                                      .run(),
+                          icon: const Icon(Icons.play_arrow),
+                          label: Text(t.settings.diagnostics.agentLoop.run),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: state.isRunning
+                              ? () => ref
+                                  .read(
+                                    agentLoopDiagnosticsControllerProvider
+                                        .notifier,
+                                  )
+                                  .cancel()
+                              : null,
+                          icon: const Icon(Icons.stop),
+                          label: Text(t.settings.diagnostics.agentLoop.cancel),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          if (state.summary != null)
-            Padding(
-              padding: const EdgeInsets.all(SimpleSpacing.sLg),
-              child: _SummaryCard(
-                colors: colors,
-                summary: state.summary!,
+                  if (state.summary != null)
+                    Padding(
+                      padding: const EdgeInsets.all(SimpleSpacing.sLg),
+                      child: _SummaryCard(
+                        colors: colors,
+                        summary: state.summary!,
+                      ),
+                    ),
+                  // 会话级聚合卡（durable 事件流懒计算；状态文案入 slang，
+                  // 密集遥测统计行保留英文字面量）
+                  const _SessionAggregateCard(),
+                ],
               ),
             ),
-          // 会话级聚合卡（durable 事件流懒计算；状态文案入 slang，
-          // 密集遥测统计行保留英文字面量）
-          const _SessionAggregateCard(),
-          Expanded(
-            child: state.entries.isEmpty
-                ? Center(
+            if (state.entries.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(SimpleSpacing.sLg),
+                  child: Center(
                     child: Text(
                       state.isRunning
                           ? t.settings.diagnostics.agentLoop.running
@@ -109,15 +122,20 @@ class _AgentLoopDiagnosticsPageState
                       style:
                           SimpleTextStyles.bodySm.copyWith(color: colors.muted),
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(SimpleSpacing.sLg),
-                    itemCount: state.entries.length,
-                    itemBuilder: (context, index) =>
-                        _EventRow(colors: colors, entry: state.entries[index]),
                   ),
-          ),
-        ],
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.all(SimpleSpacing.sLg),
+                sliver: SliverList.builder(
+                  itemCount: state.entries.length,
+                  itemBuilder: (context, index) =>
+                      _EventRow(colors: colors, entry: state.entries[index]),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -137,21 +155,13 @@ class _InfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Translations.of(context);
-    return Container(
-      width: double.infinity,
+    return context.lmUi.card(
+      context,
       padding: const EdgeInsets.all(SimpleSpacing.sMd),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-        border: Border.all(color: colors.divider),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            t.settings.diagnostics.agentLoop.descTitle,
-            style: SimpleTextStyles.title3,
-          ),
+          PanelHeading(title: t.settings.diagnostics.agentLoop.descTitle),
           const SizedBox(height: SimpleSpacing.sXs),
           Text(
             t.settings.diagnostics.agentLoop.desc,
@@ -279,20 +289,14 @@ class _SessionAggregateCardState extends ConsumerState<_SessionAggregateCard> {
         SimpleSpacing.sLg,
         SimpleSpacing.sSm,
       ),
-      child: Container(
-        width: double.infinity,
+      child: context.lmUi.card(
+        context,
         padding: const EdgeInsets.all(SimpleSpacing.sMd),
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-          border: Border.all(color: colors.divider),
-        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              t.settings.diagnostics.agentLoop.sessionAggregate,
-              style: SimpleTextStyles.title3,
+            PanelHeading(
+              title: t.settings.diagnostics.agentLoop.sessionAggregate,
             ),
             const SizedBox(height: SimpleSpacing.sXs),
             if (sessions == null)
@@ -308,6 +312,10 @@ class _SessionAggregateCardState extends ConsumerState<_SessionAggregateCard> {
             else
               DropdownButton<ChatSession>(
                 isExpanded: true,
+                itemHeight: null,
+                style: DefaultTextStyle.of(context).style.merge(
+                      LmNarrativeTextStyles.bodyUi.copyWith(color: colors.ink),
+                    ),
                 value: _selected != null && sessions.contains(_selected)
                     ? _selected
                     : null,
@@ -458,8 +466,9 @@ class _EventRow extends StatelessWidget {
             Text(
               entry.detail!,
               style: styles.copyWith(
-                fontFamily: 'monospace',
-                fontSize: 11,
+                fontFamily: 'LMMono',
+                fontSize: 13,
+                height: 1.6,
                 color: colors.muted,
               ),
               maxLines: 3,

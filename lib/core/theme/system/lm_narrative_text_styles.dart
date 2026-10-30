@@ -54,6 +54,16 @@ class LmNarrativeTextStyles {
     letterSpacing: -0.01,
   );
 
+  /// Story titles and character names carry the page's visual identity.
+  static const TextStyle narrativeHeadline = TextStyle(
+    fontFamily: serifFamily,
+    fontFamilyFallback: [serifScFamily],
+    fontSize: 32,
+    fontWeight: FontWeight.w500,
+    height: 1.3,
+    letterSpacing: -0.5,
+  );
+
   // ── 无衬线（UI 元素，Inter）──────────────────────────────────────
   // Inter 已在 pubspec.yaml 打包，直接用 const TextStyle 引用。
 

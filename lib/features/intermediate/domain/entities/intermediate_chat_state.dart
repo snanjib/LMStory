@@ -108,6 +108,9 @@ class IntermediateChatState {
     this.lastPromptTokens,
     this.lastCompletionTokens,
     this.lastCacheReadTokens,
+    // 上方 last* 分项是否为本地估算兜底（端点未回 usage 时控制器以
+    // tiktoken 估算写入）。仅影响面板「≈」标注，不参与命中率累计。
+    this.lastUsageIsEstimated = false,
     // 会话累计 prompt/缓存读 token（averageCacheHit 的分子分母；同不持久化）
     this.contextPromptTokensTotal = 0,
     this.contextCacheReadTokensTotal = 0,
@@ -357,6 +360,10 @@ class IntermediateChatState {
   final int? lastCompletionTokens;
   final int? lastCacheReadTokens;
 
+  /// 最近一轮分项是否为本地估算值（见构造器注释；随 last* 同生命周期，
+  /// 不持久化）
+  final bool lastUsageIsEstimated;
+
   /// 会话累计 prompt token（缓存命中率分母；，不持久化）
   final int contextPromptTokensTotal;
 
@@ -437,6 +444,7 @@ class IntermediateChatState {
     Object? lastPromptTokens = _sentinel,
     Object? lastCompletionTokens = _sentinel,
     Object? lastCacheReadTokens = _sentinel,
+    bool? lastUsageIsEstimated,
     int? contextPromptTokensTotal,
     int? contextCacheReadTokensTotal,
     // 手动压缩三字段 sentinel 化（同源坑：流式回调只传 delta
@@ -540,6 +548,8 @@ class IntermediateChatState {
       lastCacheReadTokens: identical(lastCacheReadTokens, _sentinel)
           ? this.lastCacheReadTokens
           : lastCacheReadTokens as int?,
+      lastUsageIsEstimated:
+          lastUsageIsEstimated ?? this.lastUsageIsEstimated,
       contextPromptTokensTotal:
           contextPromptTokensTotal ?? this.contextPromptTokensTotal,
       contextCacheReadTokensTotal:

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/features/settings/presentation/pages/intermediate_settings_page.dart'
     show IntermediateSettingsPage;
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_generation_section.dart';
@@ -49,6 +51,9 @@ class IntermediateGenerationSettingsPage extends StatelessWidget {
           padding: const EdgeInsets.all(IntermediateSpacing.sLg),
           children: const [
             IntermediateGenerationSection(),
+            AdvancedLevelHint(
+              surfaceId: ConfigVisibilitySurfaces.storyGeneration,
+            ),
           ],
         ),
       ),

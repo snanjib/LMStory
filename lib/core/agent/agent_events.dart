@@ -58,9 +58,12 @@ sealed class AgentRunEvent {
 
 /// 轮开始
 class AgentTurnStarted extends AgentRunEvent {
-  AgentTurnStarted({required this.maxSteps, super.at});
+  AgentTurnStarted({required this.maxSteps, this.resumed = false, super.at});
 
   final int maxSteps;
+
+  /// 是否为失败后续跑（携带续跑种子）；durable 层落 turn/begin 标记用
+  final bool resumed;
 }
 
 /// step 开始（一次模型请求）
@@ -79,13 +82,25 @@ class AgentStepStarted extends AgentRunEvent {
 /// 在等待开始前发出；等待结束后的 [AgentStepStarted]（attempt 递增）
 /// 标志等待结束。UI 倒计时以本事件到达时刻为锚（防时钟偏差）。
 class AgentRetryScheduled extends AgentRunEvent {
-  AgentRetryScheduled({required this.waitMs, required this.attempt, super.at});
+  AgentRetryScheduled({
+    required this.waitMs,
+    required this.attempt,
+    this.maxAttempts,
+    this.cause,
+    super.at,
+  });
 
   /// 距重试的等待毫秒数（Retry-After 优先 / 指数退避 ± jitter）
   final int waitMs;
 
   /// 等待结束后将开始的尝试序号（与 AgentStepStarted.attempt 对齐）
   final int attempt;
+
+  /// 重试总预算（2026-10-15 批 F：让用户知道还要等多久；null = 未知/旧值）
+  final int? maxAttempts;
+
+  /// 归一语义码（人话原因由 UI 层经 RetryWaitReason 映射；null = 未知）
+  final String? cause;
 }
 
 /// 正文文本增量
@@ -212,6 +227,9 @@ abstract final class AgentInjectedMessageKinds {
   static const String penReminder = 'pen_reminder';
 
   // ====================  轮首补账（尾部装配面落日志）====================
+
+  /// turn1 开篇角色提示（向导「初始化你的角色」自由描述路径）
+  static const String characterInit = 'character_init';
 
   /// turn1 能力提示
   static const String firstTurnHint = 'first_turn_hint';

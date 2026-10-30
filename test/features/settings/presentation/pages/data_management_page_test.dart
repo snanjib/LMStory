@@ -325,6 +325,62 @@ void main() {
       reason: '导入结束后进度弹层必须自动撤除',
     );
   });
+
+  testWidgets('导入同步失败（坏 JSON）→ 进度弹层不得滞留（迟到关闭兜底）', (
+    tester,
+  ) async {
+    // importBackup 首句 jsonDecode 同步抛出：错误经微任务在弹层 builder
+    // 首帧执行前送达，撤除回调尚未挂上——若无迟到关闭兜底，不可关闭
+    // 弹层会构建后永久滞留（只能重启应用）。
+    SharedPreferences.setMockInitialValues({});
+    final prefs = Preferences(prefs: await SharedPreferences.getInstance());
+    final failService = _SyncFailImportService(
+      chatRepository: _StubChatRepo(),
+      presetRepository: _StubPresetRepo(),
+      settingsRepository: _StubSettingsRepo(),
+      backupRepository: _StubBackupRepo(),
+    );
+    await tester.pumpWidget(
+      wrap(
+        ProviderScope(
+          overrides: [
+            configLevelProvider.overrideWith(
+              (ref) =>
+                  ConfigLevelNotifier(prefs, initialValue: ConfigLevel.simple),
+            ),
+            templateRepositoryProvider.overrideWithValue(_StubTemplateRepo()),
+            dataManagementServiceProvider.overrideWith((ref) => failService),
+            autoBackupManagerProvider.overrideWith(
+              (ref) => AutoBackupManager(
+                dataManagementService: ref.read(dataManagementServiceProvider),
+                settingsRepository: _StubSettingsRepo(),
+                chatRepository: _StubChatRepo(),
+              ),
+            ),
+          ],
+          child: const DataManagementPage(
+            initialImportContent:
+                '{"version":3,"exportedAt":"2026-09-25T00:00:00Z",'
+                '"sessions":[]}',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text(t.common.confirm));
+    await tester.pump();
+    // builder 帧 + 迟到 pop 的 postFrame 帧
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.text(t.settings.data.importing),
+      findsNothing,
+      reason: '同步失败路径的进度弹层必须自动撤除，不可关闭弹层永挂=只能重启',
+    );
+  });
 }
 
 /// 导入挂起服务：importBackup 在闸门上等待，测试据此断言进度弹层
@@ -365,6 +421,27 @@ class _StubSettingsRepo implements SettingsRepository {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName}');
+}
+
+/// 同步失败导入服务：模拟坏 JSON 在首个 await 前（jsonDecode）抛出，
+/// 错误经微任务先于进度弹层首帧送达的窄窗口。
+class _SyncFailImportService extends DataManagementService {
+  _SyncFailImportService({
+    required super.chatRepository,
+    required super.presetRepository,
+    required super.settingsRepository,
+    required super.backupRepository,
+  });
+
+  @override
+  Future<ImportResult> importBackup(
+    String jsonContent,
+    ImportMode mode, {
+    Future<void> Function()? preImportSnapshot,
+    bool importApiKeys = false,
+  }) async {
+    throw const FormatException('invalid backup json');
+  }
 }
 
 class _StubPresetRepo implements ApiPresetRepository {

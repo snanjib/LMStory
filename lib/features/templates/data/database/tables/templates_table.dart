@@ -13,6 +13,10 @@ class TemplatesTable extends Table {
   // 旧值 'consolidation'/'suggestReply' 行保留但被仓库过滤（CF-7）
   TextColumn get kind => text()();
   TextColumn get content => text()();
+  // 英文名/正文（内置模板双语，schemaVersion 53 新增）。
+  // NULL = 无英文版，显示与运行时消费回退基础值（中文）。
+  TextColumn get nameEn => text().nullable()();
+  TextColumn get contentEn => text().nullable()();
   BoolColumn get isBuiltIn => boolean().withDefault(const Constant(false))();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();

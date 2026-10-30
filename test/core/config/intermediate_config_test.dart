@@ -22,7 +22,6 @@ void main() {
           'retrieval_max_retries': 2,
           'reviewing_max_retries': 3,
           'summarizing_max_retries': 3,
-          'json_format_retry': 2,
           'stream_interrupt_retry': 2,
         },
         'embedding': {
@@ -67,7 +66,6 @@ void main() {
       expect(config.retry.retrievalMaxRetries, 2);
       expect(config.retry.reviewingMaxRetries, 3);
       expect(config.retry.summarizingMaxRetries, 3);
-      expect(config.retry.jsonFormatRetry, 2);
       expect(config.retry.streamInterruptRetry, 2);
 
       // embedding
@@ -110,13 +108,12 @@ void main() {
       expect(config.generation.maxTokens, 8192);
 
       // retry 默认值
-      expect(config.retry.generatingMaxRetries, 2);
-      expect(config.retry.extractingMaxRetries, 2);
-      expect(config.retry.retrievalMaxRetries, 1);
-      expect(config.retry.reviewingMaxRetries, 2);
-      expect(config.retry.summarizingMaxRetries, 2);
-      expect(config.retry.jsonFormatRetry, 1);
-      expect(config.retry.streamInterruptRetry, 1);
+      expect(config.retry.generatingMaxRetries, 5); // P5 上调后默认
+      expect(config.retry.extractingMaxRetries, 5);
+      expect(config.retry.retrievalMaxRetries, 5);
+      expect(config.retry.reviewingMaxRetries, 5);
+      expect(config.retry.summarizingMaxRetries, 5);
+      expect(config.retry.streamInterruptRetry, 5);
 
       // embedding 默认值
       expect(config.embedding.timeoutMs, 5000);
@@ -148,7 +145,7 @@ void main() {
 
       expect(config.retrieval.topK, 8);
       expect(config.retrieval.fts5Weight, 0.5); // 默认
-      expect(config.retry.generatingMaxRetries, 2); // 默认
+      expect(config.retry.generatingMaxRetries, 5); // 默认（P5 上调）
       expect(config.embedding.timeoutMs, 5000); // 默认
       expect(config.stream.jsonFallback, true); // 默认 true
       expect(config.stream.injectResponseFormat, true); // 默认 true
@@ -255,13 +252,12 @@ void main() {
   group('RetryConfig', () {
     test('默认 extractingMaxRetries/summarizingMaxRetries 为 2（四步重构）', () {
       const config = RetryConfig();
-      expect(config.generatingMaxRetries, 2);
-      expect(config.extractingMaxRetries, 2);
-      expect(config.retrievalMaxRetries, 1);
-      expect(config.reviewingMaxRetries, 2);
-      expect(config.summarizingMaxRetries, 2);
-      expect(config.jsonFormatRetry, 1);
-      expect(config.streamInterruptRetry, 1);
+      expect(config.generatingMaxRetries, 5); // P5 上调后默认
+      expect(config.extractingMaxRetries, 5);
+      expect(config.retrievalMaxRetries, 5);
+      expect(config.reviewingMaxRetries, 5);
+      expect(config.summarizingMaxRetries, 5);
+      expect(config.streamInterruptRetry, 5);
     });
 
     test('fromJson 正确解析 extracting/summarizing 重试覆盖', () {
@@ -271,15 +267,15 @@ void main() {
       });
       expect(config.extractingMaxRetries, 5);
       expect(config.summarizingMaxRetries, 4);
-      // 未提供的字段回落默认
-      expect(config.generatingMaxRetries, 2);
-      expect(config.reviewingMaxRetries, 2);
+      // 未提供的字段回落默认（P5 上调后 5）
+      expect(config.generatingMaxRetries, 5);
+      expect(config.reviewingMaxRetries, 5);
     });
 
     test('fromJson 空对象全部回落默认', () {
       final config = RetryConfig.fromJson({});
-      expect(config.extractingMaxRetries, 2);
-      expect(config.summarizingMaxRetries, 2);
+      expect(config.extractingMaxRetries, 5); // P5 上调后默认
+      expect(config.summarizingMaxRetries, 5);
     });
   });
 

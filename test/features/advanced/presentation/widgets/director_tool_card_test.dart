@@ -4,6 +4,7 @@ import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_tool_card.dart';
 import 'package:lmstory/i18n/strings.g.dart';
+import 'package:lmstory/i18n/strings_en_US.g.dart';
 
 /// DirectorToolCard 组件测试（体验重构 ：剧场语言为表、CLI 为里）
 ///
@@ -159,6 +160,53 @@ void main() {
       expect(
         AgentWorkStep.fromJson({'toolName': 'x', 'status': 'future'}).status,
         AgentStepStatus.done,
+      );
+    });
+
+    testWidgets('8. 崩溃恢复占位标题与输出映射为统一占位文案', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          const DirectorToolCard(
+            step: AgentWorkStep(
+              toolName: 'read_story',
+              title: 'Interrupted',
+              output: '（应用中断，未执行…）',
+              status: AgentStepStatus.error,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('回读原文 · 中断占位'), findsOneWidget);
+      await tester.tap(find.text('回读原文 · 中断占位'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('（应用中断，未执行；如仍需要请在后续轮次重试）'),
+        findsOneWidget,
+      );
+    });
+
+    test('9. en 语言包下崩溃恢复与中断占位映射为英文占位文案', () {
+      final en = TranslationsEnUs();
+      expect(
+        DirectorToolCard.localizedTitle('中断占位', en),
+        'Interrupted',
+      );
+      expect(
+        DirectorToolCard.localizedTitle('占位补齐', en),
+        'Interrupted',
+      );
+      expect(
+        DirectorToolCard.localizedTitle('Interrupted', en),
+        'Interrupted',
+      );
+      expect(
+        DirectorToolCard.localizedOutput('（应用中断，未执行…）', en),
+        '(Application interrupted, not executed; please retry in subsequent turns if still needed)',
+      );
+      expect(
+        DirectorToolCard.localizedOutput('（本轮已中断，未执行）', en),
+        '(Application interrupted, not executed; please retry in subsequent turns if still needed)',
       );
     });
   });

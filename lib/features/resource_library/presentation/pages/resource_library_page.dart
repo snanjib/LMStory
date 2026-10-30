@@ -7,11 +7,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
+import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
+import 'package:lmstory/core/theme/shared/components/lm_interactive_motion.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
+import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/file_reader.dart'
     if (dart.library.html) 'package:lmstory/core/utils/file_reader_web.dart';
 import 'package:lmstory/features/resource_ai/domain/entities/draft_entities.dart';
@@ -331,10 +335,11 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
       backgroundColor: context.scaffoldBgOf(
         Theme.of(context).scaffoldBackgroundColor,
       ),
-      appBar: SimpleAppBar(title: t.settings.resourceLibrary.title),
+      appBar:
+          context.lmUi.appBar(context, title: t.settings.resourceLibrary.title),
       // 加载 / 错误（含重试）/ 内容三态
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: LmActivityDots(label: t.common.loading))
           : _errorMessage != null
               ? Center(
                   child: Column(
@@ -360,106 +365,103 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
                     ],
                   ),
                 )
-              : LmMeasure(
-                  maxWidth: LmLayout.listMeasure,
-                  child: ListView(
-                    padding: const EdgeInsets.all(SimpleSpacing.sLg),
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
+              : LmArrival(
+                  child: LmMeasure(
+                    maxWidth: LmLayout.listMeasure,
+                    child: ListView(
+                      padding: const EdgeInsets.all(SimpleSpacing.sLg),
+                      children: [
+                        Wrap(
+                          spacing: SimpleSpacing.sSm,
+                          runSpacing: SimpleSpacing.sSm,
+                          children: [
+                            OutlinedButton.icon(
                               icon: const Icon(Icons.badge_outlined),
                               label:
                                   Text(t.settings.resourceLibrary.importCard),
                               onPressed: _importCard,
                             ),
-                          ),
-                          const SizedBox(width: SimpleSpacing.sMd),
-                          Expanded(
-                            child: OutlinedButton.icon(
+                            OutlinedButton.icon(
                               icon: const Icon(Icons.data_object_outlined),
-                              // F9 修复：纯 JSON 角色卡应用内入口——
-                              // 此前只能靠移动端分享进入，Wiki 却宣称支持
                               label: Text(
                                 t.settings.resourceLibrary.importCardJson,
                               ),
                               onPressed: _importCardJson,
                             ),
-                          ),
-                          const SizedBox(width: SimpleSpacing.sMd),
-                          Expanded(
-                            child: OutlinedButton.icon(
+                            OutlinedButton.icon(
                               icon: const Icon(Icons.auto_stories_outlined),
                               label:
                                   Text(t.settings.resourceLibrary.importBook),
                               onPressed: _importBook,
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: SimpleSpacing.sMd),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton.tonalIcon(
+                          ],
+                        ),
+                        const SizedBox(height: SimpleSpacing.sSm),
+                        Wrap(
+                          spacing: SimpleSpacing.sSm,
+                          runSpacing: SimpleSpacing.sSm,
+                          children: [
+                            FilledButton.tonalIcon(
                               icon: const Icon(Icons.auto_awesome_outlined),
-                              label: Text(
-                                t.settings.resourceLibrary.aiCreateCard,
-                              ),
+                              label:
+                                  Text(t.settings.resourceLibrary.aiCreateCard),
                               onPressed: () =>
                                   _openAiCreate(DraftKind.characterCard),
                             ),
-                          ),
-                          const SizedBox(width: SimpleSpacing.sMd),
-                          Expanded(
-                            child: FilledButton.tonalIcon(
+                            FilledButton.tonalIcon(
                               icon: const Icon(Icons.auto_awesome_outlined),
-                              label: Text(
-                                t.settings.resourceLibrary.aiCreateBook,
-                              ),
+                              label:
+                                  Text(t.settings.resourceLibrary.aiCreateBook),
                               onPressed: () =>
                                   _openAiCreate(DraftKind.worldbook),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: SimpleSpacing.sLg),
-                      _sectionTitle(t.settings.resourceLibrary.cardsSection),
-                      if (_cards.isEmpty)
-                        Text(t.settings.resourceLibrary.emptyList)
-                      else
-                        ..._cards.map(
-                          (c) => _tile(
-                            title: c.name,
-                            subtitle: c.sourceFormat ?? 'json',
-                            onTap: () => showCardContentSheet(
-                              context,
-                              name: c.name,
-                              rawJson: c.rawJson,
-                            ),
-                            onEdit: () => _openAiEditCard(c),
-                            onDelete: () => _deleteCard(c),
-                          ),
+                          ],
                         ),
-                      const SizedBox(height: SimpleSpacing.sLg),
-                      _sectionTitle(t.settings.resourceLibrary.booksSection),
-                      if (_books.isEmpty)
-                        Text(t.settings.resourceLibrary.emptyList)
-                      else
-                        ..._books.map(
-                          (b) => _tile(
-                            title: b.name,
-                            onTap: () => showBookContentSheet(
-                              context,
-                              name: b.name,
-                              rawJson: b.rawJson,
-                            ),
-                            onEdit: () => _openAiEditBook(b),
-                            onDelete: () => _deleteBook(b),
+                        const SizedBox(height: SimpleSpacing.sLg),
+                        _sectionTitle(t.settings.resourceLibrary.cardsSection),
+                        if (_cards.isEmpty)
+                          Text(t.settings.resourceLibrary.emptyList)
+                        else
+                          _collection(
+                            _cards
+                                .map(
+                                  (c) => _tile(
+                                    title: c.name,
+                                    subtitle: c.sourceFormat ?? 'json',
+                                    onTap: () => showCardContentSheet(
+                                      context,
+                                      name: c.name,
+                                      rawJson: c.rawJson,
+                                    ),
+                                    onEdit: () => _openAiEditCard(c),
+                                    onDelete: () => _deleteCard(c),
+                                  ),
+                                )
+                                .toList(),
                           ),
-                        ),
-                    ],
+                        const SizedBox(height: SimpleSpacing.sLg),
+                        _sectionTitle(t.settings.resourceLibrary.booksSection),
+                        if (_books.isEmpty)
+                          Text(t.settings.resourceLibrary.emptyList)
+                        else
+                          _collection(
+                            _books
+                                .map(
+                                  (b) => _tile(
+                                    title: b.name,
+                                    onTap: () => showBookContentSheet(
+                                      context,
+                                      name: b.name,
+                                      rawJson: b.rawJson,
+                                    ),
+                                    onEdit: () => _openAiEditBook(b),
+                                    onDelete: () => _deleteBook(b),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
     );
@@ -468,7 +470,34 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
   Widget _sectionTitle(String title) {
     return Padding(
       padding: const EdgeInsets.only(bottom: SimpleSpacing.sMd),
-      child: Text(title, style: SimpleTextStyles.title3),
+      child: Text(
+        title,
+        style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+          color: context.lm.palette.ink,
+        ),
+      ),
+    );
+  }
+
+  Widget _collection(List<Widget> entries) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns =
+            constraints.maxWidth >= LmLayout.resourceColumnsMinWidth &&
+                    MediaQuery.textScalerOf(context).scale(1) <= 1.3
+                ? 2
+                : 1;
+        final width =
+            (constraints.maxWidth - (columns - 1) * SimpleSpacing.sMd) /
+                columns;
+        return Wrap(
+          spacing: SimpleSpacing.sMd,
+          runSpacing: SimpleSpacing.sMd,
+          children: [
+            for (final entry in entries) SizedBox(width: width, child: entry),
+          ],
+        );
+      },
     );
   }
 
@@ -479,27 +508,57 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
     VoidCallback? onTap,
     VoidCallback? onEdit,
   }) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      onTap: onTap,
-      title: Text(title),
-      subtitle: subtitle == null ? null : Text(subtitle),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (onEdit != null)
-            IconButton(
-              tooltip: Translations.of(context).settings.resourceLibrary.aiEdit,
-              icon: const Icon(Icons.edit_outlined),
-              onPressed: onEdit,
+    final colors = context.lm.palette;
+    return LmInteractiveMotion(
+      child: context.lmUi.card(
+        context,
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              title,
+              style: LmNarrativeTextStyles.narrativeDisplay
+                  .copyWith(color: colors.ink),
             ),
-          IconButton(
-            //  语义缺口：复用 common.delete（不新增 i18n key）。
-            tooltip: Translations.of(context).common.delete,
-            icon: const Icon(Icons.delete_outline),
-            onPressed: onDelete,
-          ),
-        ],
+            if (subtitle != null) ...[
+              const SizedBox(height: SimpleSpacing.sXs),
+              Text(
+                subtitle,
+                style:
+                    LmNarrativeTextStyles.caption.copyWith(color: colors.muted),
+              ),
+            ],
+            const SizedBox(height: SimpleSpacing.sMd),
+            Divider(height: 1, color: colors.divider),
+            const SizedBox(height: SimpleSpacing.sXs),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Icon(Icons.arrow_forward, size: 20, color: colors.muted),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (onEdit != null)
+                      IconButton(
+                        tooltip: Translations.of(context)
+                            .settings
+                            .resourceLibrary
+                            .aiEdit,
+                        icon: const Icon(Icons.edit_outlined),
+                        onPressed: onEdit,
+                      ),
+                    IconButton(
+                      tooltip: Translations.of(context).common.delete,
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: onDelete,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

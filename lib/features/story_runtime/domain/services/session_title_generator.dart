@@ -117,10 +117,15 @@ class SessionTitleGenerator {
   /// Fallback：截取第一条用户消息前 20 字符作为标题。
   ///
   /// 当 [generate] 返回 null 或失败时使用。
-  static String fallbackTitle(String userMessage) {
+  /// [defaultTitle] 为全空时的兜底名（由 UI/控制器层传入 i18n 资源，
+  /// 域层不直接依赖 slang，必须显式传入避免空标题）。
+  static String fallbackTitle(
+    String userMessage, {
+    required String defaultTitle,
+  }) {
     var title =
         userMessage.length > 20 ? userMessage.substring(0, 20) : userMessage;
     title = title.replaceAll(RegExp(r'[\n\r]'), ' ').trim();
-    return title.isEmpty ? '新建会话' : title;
+    return title.isEmpty ? defaultTitle : title;
   }
 }

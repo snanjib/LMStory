@@ -3,9 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/auto_compaction_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/chat_default_model_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/display_preferences_section.dart';
@@ -54,7 +54,8 @@ class ChatSettingsPage extends ConsumerWidget {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(title: t.settings.chatSettings.title),
+      appBar:
+          context.lmUi.appBar(context, title: t.settings.chatSettings.title),
       body: LmMeasure(
         child: ListView(
           padding: const EdgeInsets.all(SimpleSpacing.sLg),
@@ -63,6 +64,9 @@ class ChatSettingsPage extends ConsumerWidget {
               if (i > 0) const SizedBox(height: SimpleSpacing.sMd),
               sections[i],
             ],
+            const AdvancedLevelHint(
+              surfaceId: ConfigVisibilitySurfaces.chatSettings,
+            ),
           ],
         ),
       ),

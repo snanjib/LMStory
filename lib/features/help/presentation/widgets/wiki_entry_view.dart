@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_card.dart';
+import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_data.dart';
 
 /// Wiki 条目视图：可点击卡片进入对应 wiki 子页。
@@ -10,7 +10,8 @@ class WikiEntryView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SimpleSettingCard(
+    return context.lmUi.settingCard(
+      context,
       icon: entry.icon,
       title: entry.title,
       subtitle: entry.subtitle,

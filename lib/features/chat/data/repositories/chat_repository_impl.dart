@@ -140,6 +140,31 @@ class ChatRepositoryImpl implements ChatRepository {
   }
 
   @override
+  Future<String?> getSessionDraft(String sessionId) async {
+    final row = await (_database.select(_database.chatSessionsTable)
+          ..where((t) => t.sessionId.equals(sessionId)))
+        .getSingleOrNull();
+    return row?.draftInput;
+  }
+
+  @override
+  Future<void> setSessionDraft(String sessionId, String? draft) async {
+    await (_database.update(_database.chatSessionsTable)
+          ..where((t) => t.sessionId.equals(sessionId)))
+        .write(ChatSessionsTableCompanion(draftInput: Value(draft)));
+  }
+
+  @override
+  Future<void> setSessionStarred(
+    String sessionId, {
+    required bool starred,
+  }) async {
+    await (_database.update(_database.chatSessionsTable)
+          ..where((t) => t.sessionId.equals(sessionId)))
+        .write(ChatSessionsTableCompanion(isStarred: Value(starred)));
+  }
+
+  @override
   Future<ChatSession> updateSession(ChatSession session) async {
     await (_database.update(_database.chatSessionsTable)
           ..where((t) => t.sessionId.equals(session.sessionId)))
@@ -194,6 +219,9 @@ class ChatRepositoryImpl implements ChatRepository {
         nextTurn: Value(session.nextTurn),
         // 检索松紧度快照 JSON（repairSchema 开库补列）
         retrievalOverrides: Value(session.retrievalOverrides),
+        // 向导「初始化你的角色」两列（repairSchema 开库补列）
+        characterInitPrompt: Value(session.characterInitPrompt),
+        characterInitCardId: Value(session.characterInitCardId),
       ),
     );
 
@@ -476,6 +504,10 @@ class ChatRepositoryImpl implements ChatRepository {
               narrativePacing: Value(sourceSession.narrativePacing),
               nextTurn: Value(sourceSession.nextTurn),
               retrievalOverrides: Value(sourceSession.retrievalOverrides),
+              // 向导「初始化你的角色」两列随会话复制（草稿副本的第 1 轮
+              // 仍按一次性语义注入）
+              characterInitPrompt: Value(sourceSession.characterInitPrompt),
+              characterInitCardId: Value(sourceSession.characterInitCardId),
               // CH-3b：见上
               sortOrder: Value(sortOrder),
             ),
@@ -626,6 +658,8 @@ class ChatRepositoryImpl implements ChatRepository {
         narrativePacing: sourceSession.narrativePacing,
         nextTurn: sourceSession.nextTurn,
         retrievalOverrides: sourceSession.retrievalOverrides,
+        characterInitPrompt: sourceSession.characterInitPrompt,
+        characterInitCardId: sourceSession.characterInitCardId,
         // CH-3b：返回实体携带实际落库的排序值
         sortOrder: sortOrder,
       );
@@ -1653,6 +1687,9 @@ class ChatRepositoryImpl implements ChatRepository {
       nextTurn: row.nextTurn,
       // 检索松紧度快照 JSON
       retrievalOverrides: row.retrievalOverrides,
+      // 向导「初始化你的角色」两列
+      characterInitPrompt: row.characterInitPrompt,
+      characterInitCardId: row.characterInitCardId,
     );
   }
 

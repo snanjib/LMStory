@@ -84,6 +84,13 @@ class ChatSessionsTable extends Table {
   /// 阶段由 LLM 输出并更新。null 表示尚未建立叙事时间（首轮或重置后）。
   TextColumn get currentNarrativeTime => text().nullable()();
 
+  /// 未发送输入草稿（schemaVersion 52，2026-10-04 新增）
+  ///
+  /// 跨重启的会话输入框暂存：切走会话/页面 dispose 时写入，进入会话
+  /// 恢复，发送时清空。null = 无草稿。真实会话行专用——草稿会话
+  ///（__draft_* 前缀）未物化无行，写入自然 no-op。
+  TextColumn get draftInput => text().nullable()();
+
   // ── 推荐回复会话级配置（schemaVersion ≥ 30，2026-07-29 新增）
   //
   // 推荐回复功能：点击按钮后调用 LLM 生成 3 条候选用户回复，
@@ -131,4 +138,15 @@ class ChatSessionsTable extends Table {
   // 选中即写入、与档位预设互不影响；NULL = 存量会话未物化，消费方
   // 回落内置默认值）。经 repairSchema 开库补列（纯增量，无版本 bump）。
   TextColumn get retrievalOverrides => text().nullable()();
+
+  // 导演向导「初始化你的角色」（自由描述路径）：开篇角色设定的原文。
+  // 只在第 1 轮尾部注入一次性提示（firstTurnCharacterInitHint），
+  // 之后角色由正文+事实层承载，不再注入；NULL = 未启用。
+  // 经 repairSchema 开库补列（纯增量，无版本 bump）。
+  TextColumn get characterInitPrompt => text().nullable()();
+
+  // 导演向导「初始化你的角色」（角色卡路径）：物化时应用卡（资料通道
+  // 建基线实体），本列留档所选卡 id（供排查/重放，运行时不消费）。
+  // NULL = 未启用。经 repairSchema 开库补列（纯增量，无版本 bump）。
+  TextColumn get characterInitCardId => text().nullable()();
 }

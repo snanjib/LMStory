@@ -55,6 +55,15 @@ class HomeLayoutDiagram extends StatelessWidget {
           ),
           _SectionDivider(color: colors.faint),
 
+          // 区域 2b：继续故事卡（有故事/导演会话时显示，条件显示）
+          _ConditionalBlock(
+            icon: Icons.auto_stories,
+            label: t.help.homeOverview.diagramContinueLabel,
+            desc: t.help.homeOverview.diagramContinueDesc,
+            borderColor: colors.accent,
+          ),
+          _SectionDivider(color: colors.faint),
+
           // 区域 3：双卡入口（模式切换，横向 2 个小卡片）
           _EntryCardsBlock(t: t),
           _SectionDivider(color: colors.faint),

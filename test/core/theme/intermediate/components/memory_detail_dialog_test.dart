@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/intermediate/components/memory_detail_dialog.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/memory_detail_dialog.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';

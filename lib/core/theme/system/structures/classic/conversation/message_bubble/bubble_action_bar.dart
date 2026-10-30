@@ -76,11 +76,12 @@ class _BubbleMessageActionsState extends State<BubbleMessageActions> {
         },
         child: AnimatedOpacity(
           opacity: 1,
-          duration: LmMotion.fast,
+          duration: LmMotion.durationFor(context, LmMotion.fast),
           child: Padding(
             padding: const EdgeInsets.only(top: LmSpacing.s2xs),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+            child: Wrap(
+              spacing: LmSpacing.s2xs,
+              runSpacing: LmSpacing.s2xs,
               children: [
                 // Regenerate button (assistant messages)
                 if (!widget.isUser && widget.onRegenerate != null) ...[
@@ -91,7 +92,6 @@ class _BubbleMessageActionsState extends State<BubbleMessageActions> {
                     tooltip: t.chat.regenerate,
                     onTap: widget.onRegenerate!,
                   ),
-                  const SizedBox(width: LmSpacing.s2xs),
                 ],
                 // Continue generating button (user messages)
                 if (widget.isUser && widget.onContinueGenerating != null) ...[
@@ -102,7 +102,6 @@ class _BubbleMessageActionsState extends State<BubbleMessageActions> {
                     tooltip: t.chat.continueGenerating,
                     onTap: widget.onContinueGenerating!,
                   ),
-                  const SizedBox(width: LmSpacing.s2xs),
                 ],
                 // Quote button
                 if (widget.onQuote != null) ...[
@@ -113,7 +112,6 @@ class _BubbleMessageActionsState extends State<BubbleMessageActions> {
                     tooltip: t.chat.messageActions.quote,
                     onTap: widget.onQuote!,
                   ),
-                  const SizedBox(width: LmSpacing.s2xs),
                 ],
                 if (widget.onCopy != null)
                   _ActionButton(
@@ -136,9 +134,6 @@ class _BubbleMessageActionsState extends State<BubbleMessageActions> {
                     },
                   ),
                 if (widget.onEdit != null) ...[
-                  SizedBox(
-                    width: widget.onCopy != null ? LmSpacing.s2xs : 0,
-                  ),
                   _ActionButton(
                     icon: Icons.edit_outlined,
                     size: 14,
@@ -148,11 +143,6 @@ class _BubbleMessageActionsState extends State<BubbleMessageActions> {
                   ),
                 ],
                 if (widget.onDelete != null) ...[
-                  SizedBox(
-                    width: (widget.onCopy != null || widget.onEdit != null)
-                        ? LmSpacing.s2xs
-                        : 0,
-                  ),
                   _ActionButton(
                     icon: Icons.delete_outline,
                     size: 14,

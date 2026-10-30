@@ -6,7 +6,7 @@ import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/chat/data/datasources/llm_remote_datasource.dart';
@@ -275,6 +275,14 @@ Future<void> _pumpPage(
   ChatRepository? chatRepository,
   void Function(IntermediateChatController controller)? onCreated,
 }) async {
+  // Callback wiring uses a viewport that can expose the short conversation.
+  // Compact reading and navigation are covered by the body layout tests.
+  if (chatRepository is _FakeChatRepositoryWithMessages) {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+  }
   await tester.pumpWidget(
     ProviderScope(
       overrides: [

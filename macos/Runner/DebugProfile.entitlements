@@ -10,5 +10,8 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- 沙盒下唤出系统开/存面板并读写用户选定文件（存档导入导出、资源卡导入、日志导出） -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 </dict>
 </plist>

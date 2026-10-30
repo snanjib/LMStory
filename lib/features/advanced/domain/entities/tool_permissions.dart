@@ -46,7 +46,14 @@ class ToolPermissions {
     'finish_round': 'allow',
   };
 
-  /// 求值：内置默认 allow → 全局 → 会话（逐工具后写优先）
+  /// 求值：会话未设置（NULL）= 监督关；已设置时快照全量生效、
+  /// 未提名工具回落全局。
+  ///
+  /// - 会话 NULL：全工具按内置默认 allow 运行（不继承全局监督约束——
+  ///   运行时无 ask/deny，不弹审批横幅；与设置面板「未设置=关」的
+  ///   读侧口径对齐）。
+  /// - 会话非 NULL（含全 allow 快照）：逐工具 后写优先，
+  ///   快照未提名的工具回落全局。
   ///
   /// `finish_round`（提交本轮）锁死 allow——
   /// 它是每轮正文唯一交付通道，历史会话/全局配置里存的 deny/ask 值一律
@@ -59,7 +66,8 @@ class ToolPermissions {
     if (toolName == lockedAllowTool) {
       return ToolPermissionState.allow;
     }
-    final s = session?[toolName];
+    if (session == null) return ToolPermissionState.allow;
+    final s = session[toolName];
     if (s != null) return _parse(s);
     final g = global[toolName];
     if (g != null) return _parse(g);

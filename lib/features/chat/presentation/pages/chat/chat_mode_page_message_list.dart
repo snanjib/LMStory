@@ -19,6 +19,7 @@ extension _ChatModePageMessageList on _ChatModePageState {
   /// 逻辑原样搬运）。
   Widget _buildMessageListArea(ChatModeState state) {
     final colors = context.lm.palette;
+    final t = Translations.of(context);
     final displayPreferences = ref.watch(
       settingsNotifierProvider.select((s) => s.displayPreferences),
     );
@@ -75,8 +76,8 @@ extension _ChatModePageMessageList on _ChatModePageState {
             Center(
               child: RepaintBoundary(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxWidth: LmReadingConstraints.width,
+                  constraints: BoxConstraints(
+                    maxWidth: LmLayout.readingWidthOf(context),
                   ),
                   child: ListView.builder(
                     controller: _scrollController,
@@ -289,6 +290,42 @@ extension _ChatModePageMessageList on _ChatModePageState {
                           ? RepaintBoundary(child: item)
                           : item;
                     },
+                  ),
+                ),
+              ),
+            ),
+          // 自动重试占位状态行（2026-10-15 批 F / P8：UI-only 不入
+          // 消息库）——视口底部轻量行；成功随正文出现消失，失败由
+          // error 承担（_finalizeStream 已统一清）
+          if (state.autoRetryNotice != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: SimpleSpacing.sXs),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.5,
+                          color: colors.muted,
+                        ),
+                      ),
+                      const SizedBox(width: SimpleSpacing.sXs),
+                      Text(
+                        t.chat.autoRetryNoticeLine(
+                          count: state.autoRetryNotice!,
+                        ),
+                        style: SimpleTextStyles.caption.copyWith(
+                          color: colors.muted,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

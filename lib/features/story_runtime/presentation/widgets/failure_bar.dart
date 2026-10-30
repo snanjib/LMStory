@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
+import 'package:lmstory/core/theme/shared/components/lm_overflow_card.dart';
+import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/secret_redactor.dart';
@@ -131,6 +133,10 @@ class _FailureBarState extends State<FailureBar> {
 
   @override
   Widget build(BuildContext context) {
+    return LmArrival(child: _buildBody(context));
+  }
+
+  Widget _buildBody(BuildContext context) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
     final ctx = widget.failureContext;
@@ -147,7 +153,8 @@ class _FailureBarState extends State<FailureBar> {
     // v5 结构：整个 FailureBar 包在 SingleChildScrollView 里 → 标题行+按钮行
     // 和详情区一起滚 → FailureBar 受限时标题/按钮也会被挤到可视区域外，
     // 用户以为"显示不全"。
-    // v6 结构：
+    // 通常固定标题与按钮；窄高或大字号时整体滚动，保证动作可达。
+    // 常规结构：
     // - 外层 Container(maxHeight) → FailureBar 整体限高
     //   - Column(mainAxisSize.min)
     //     - 标题行 + 按钮行 → 始终固定在可视范围内，不参与滚动
@@ -160,6 +167,166 @@ class _FailureBarState extends State<FailureBar> {
     //            当超过 remH 时内部滚动，未超过时不滚。
     final effectiveMaxHeight = widget.maxHeight ?? double.infinity;
 
+    final controls = Padding(
+      padding: const EdgeInsets.fromLTRB(
+        IntermediateSpacing.sLg,
+        IntermediateSpacing.sMd,
+        IntermediateSpacing.sLg,
+        0,
+      ),
+      // 固定区域：标题行 + 按钮行 → 永远不滚动，始终可见
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 错误信息行：图标 + 文字 + 展开箭头
+          Row(
+            children: [
+              Icon(Icons.error_outline, size: 20, color: colors.error),
+              const SizedBox(width: IntermediateSpacing.sSm),
+              Expanded(
+                child: Text(
+                  ctx.errorMessage,
+                  style: IntermediateTextStyles.title.copyWith(
+                    color: colors.ink,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                onPressed: _copyReport,
+                icon: Icon(
+                  Icons.copy_outlined,
+                  size: 18,
+                  color: colors.muted,
+                ),
+                tooltip: t.intermediate.chat.failure.copyError,
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(
+                  minWidth: 36,
+                  minHeight: 36,
+                ),
+              ),
+              IconButton(
+                onPressed: () => setState(() => _expanded = !_expanded),
+                icon: AnimatedRotation(
+                  turns: _expanded ? 0.5 : 0,
+                  duration: duration,
+                  curve: curve,
+                  child: Icon(
+                    Icons.expand_more,
+                    size: 20,
+                    color: colors.muted,
+                  ),
+                ),
+                tooltip: _expanded
+                    ? t.intermediate.chat.failure.collapseDetail
+                    : t.intermediate.chat.failure.expandDetail,
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(
+                  minWidth: 36,
+                  minHeight: 36,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: IntermediateSpacing.sMd),
+          // 按钮区：E104 4 按钮时 Wrap 自动换行
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: IntermediateSpacing.sSm,
+            runSpacing: IntermediateSpacing.sXs,
+            children: [
+              TextButton(
+                onPressed: widget.onClear,
+                style: TextButton.styleFrom(
+                  foregroundColor: colors.muted,
+                  minimumSize: const Size(0, 44),
+                  textStyle: IntermediateTextStyles.label,
+                ),
+                child: Text(
+                  t.intermediate.chat.clearRound,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (widget.failureContext.errorCode == 'E104' &&
+                  widget.onContinueWithFts5 != null)
+                TextButton(
+                  onPressed: widget.onContinueWithFts5,
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.muted,
+                    minimumSize: const Size(0, 44),
+                    textStyle: IntermediateTextStyles.label,
+                  ),
+                  child: Text(
+                    t.intermediate.chat.failure.continueWithFts5,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              // 以此收稿（快照非空 + generating/
+              // reviewing 失败时由页面判定 partialReplyAvailable）
+              if (widget.partialReplyAvailable &&
+                  widget.onAcceptPartial != null)
+                TextButton(
+                  onPressed: widget.onAcceptPartial,
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.primary,
+                    minimumSize: const Size(0, 44),
+                    textStyle: IntermediateTextStyles.label,
+                  ),
+                  child: Text(
+                    t.intermediate.chat.failure.acceptPartial,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              if (widget.onContinueFromFailed != null)
+                TextButton(
+                  onPressed: widget.onContinueFromFailed,
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.ink,
+                    minimumSize: const Size(0, 44),
+                    textStyle: IntermediateTextStyles.label,
+                  ),
+                  child: Text(
+                    // 快照可用时继续按钮语义升级为「续写」
+                    //（带半截正文续跑），否则维持「从中断处继续」
+                    widget.partialReplyAvailable
+                        ? t.intermediate.chat.failure.continueWriting
+                        : t.intermediate.chat.failure.continueFromFailed,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ElevatedButton(
+                onPressed: widget.onRetry,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colors.primary,
+                  foregroundColor: colors.bg,
+                  minimumSize: const Size(0, 44),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(
+                      context.lmUi.radius(LmCorner.md),
+                    ),
+                  ),
+                  textStyle: IntermediateTextStyles.label,
+                ),
+                child: Text(
+                  t.intermediate.chat.retryRound,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
     return Container(
       constraints: BoxConstraints(maxHeight: effectiveMaxHeight),
       decoration: BoxDecoration(
@@ -168,195 +335,67 @@ class _FailureBarState extends State<FailureBar> {
       ),
       child: SafeArea(
         top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                IntermediateSpacing.sLg,
-                IntermediateSpacing.sMd,
-                IntermediateSpacing.sLg,
-                0,
-              ),
-              // 固定区域：标题行 + 按钮行 → 永远不滚动，始终可见
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // 错误信息行：图标 + 文字 + 展开箭头
-                  Row(
-                    children: [
-                      Icon(Icons.error_outline, size: 20, color: colors.error),
-                      const SizedBox(width: IntermediateSpacing.sSm),
-                      Expanded(
-                        child: Text(
-                          ctx.errorMessage,
-                          style: IntermediateTextStyles.title.copyWith(
-                            color: colors.ink,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: _copyReport,
-                        icon: Icon(
-                          Icons.copy_outlined,
-                          size: 18,
-                          color: colors.muted,
-                        ),
-                        tooltip: t.intermediate.chat.failure.copyError,
-                        visualDensity: VisualDensity.compact,
-                        constraints: const BoxConstraints(
-                          minWidth: 36,
-                          minHeight: 36,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => setState(() => _expanded = !_expanded),
-                        icon: AnimatedRotation(
-                          turns: _expanded ? 0.5 : 0,
-                          duration: duration,
-                          curve: curve,
-                          child: Icon(
-                            Icons.expand_more,
-                            size: 20,
-                            color: colors.muted,
-                          ),
-                        ),
-                        tooltip: _expanded
-                            ? t.intermediate.chat.failure.collapseDetail
-                            : t.intermediate.chat.failure.expandDetail,
-                        visualDensity: VisualDensity.compact,
-                        constraints: const BoxConstraints(
-                          minWidth: 36,
-                          minHeight: 36,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: IntermediateSpacing.sMd),
-                  // 按钮区：E104 4 按钮时 Wrap 自动换行
-                  Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: IntermediateSpacing.sSm,
-                    runSpacing: IntermediateSpacing.sXs,
-                    children: [
-                      TextButton(
-                        onPressed: widget.onClear,
-                        style: TextButton.styleFrom(
-                          foregroundColor: colors.muted,
-                          minimumSize: const Size(0, 44),
-                          textStyle: IntermediateTextStyles.label,
-                        ),
-                        child: Text(
-                          t.intermediate.chat.clearRound,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (widget.failureContext.errorCode == 'E104' &&
-                          widget.onContinueWithFts5 != null)
-                        TextButton(
-                          onPressed: widget.onContinueWithFts5,
-                          style: TextButton.styleFrom(
-                            foregroundColor: colors.muted,
-                            minimumSize: const Size(0, 44),
-                            textStyle: IntermediateTextStyles.label,
-                          ),
-                          child: Text(
-                            t.intermediate.chat.failure.continueWithFts5,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      // 以此收稿（快照非空 + generating/
-                      // reviewing 失败时由页面判定 partialReplyAvailable）
-                      if (widget.partialReplyAvailable &&
-                          widget.onAcceptPartial != null)
-                        TextButton(
-                          onPressed: widget.onAcceptPartial,
-                          style: TextButton.styleFrom(
-                            foregroundColor: colors.primary,
-                            minimumSize: const Size(0, 44),
-                            textStyle: IntermediateTextStyles.label,
-                          ),
-                          child: Text(
-                            t.intermediate.chat.failure.acceptPartial,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      if (widget.onContinueFromFailed != null)
-                        TextButton(
-                          onPressed: widget.onContinueFromFailed,
-                          style: TextButton.styleFrom(
-                            foregroundColor: colors.ink,
-                            minimumSize: const Size(0, 44),
-                            textStyle: IntermediateTextStyles.label,
-                          ),
-                          child: Text(
-                            // 快照可用时继续按钮语义升级为「续写」
-                            //（带半截正文续跑），否则维持「从中断处继续」
-                            widget.partialReplyAvailable
-                                ? t.intermediate.chat.failure.continueWriting
-                                : t.intermediate.chat.failure
-                                    .continueFromFailed,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ElevatedButton(
-                        onPressed: widget.onRetry,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: colors.primary,
-                          foregroundColor: colors.bg,
-                          minimumSize: const Size(0, 44),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(
-                              context.lmUi.radius(LmCorner.md),
-                            ),
-                          ),
-                          textStyle: IntermediateTextStyles.label,
-                        ),
-                        child: Text(
-                          t.intermediate.chat.retryRound,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            // 详情区：独立约束高度，超出时自身滚动。
-            // 用 LayoutBuilder 拿到 FailureBar 限高后的剩余空间。
-            Flexible(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // 剩余可用高度（标题按钮已占后，FailureBar maxHeight
-                  // 还剩多少空间给详情）。
-                  // 当 FailureBar 不限高（effectiveMaxHeight == ∞）时，
-                  // 这里 maxHeight 也会很大 → 详情区不限制，按自然高度。
-                  final detailMax = constraints.maxHeight;
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final scale = MediaQuery.textScalerOf(context).scale(1);
+            final compact = constraints.maxHeight.isFinite &&
+                (constraints.maxHeight <
+                        LmLayout.failureFixedControlsMinHeight ||
+                    (scale > 1.3 &&
+                        constraints.maxHeight <
+                            LmLayout.failureLargeTextMinHeight));
+            if (compact) {
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    controls,
+                    _buildDetailArea(
+                      colors,
+                      t,
+                      ctx,
+                      duration,
+                      curve,
+                      double.infinity,
+                    ),
+                    const SizedBox(height: IntermediateSpacing.sMd),
+                  ],
+                ),
+              );
+            }
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                controls,
+                // 详情区：独立约束高度，超出时自身滚动。
+                // 用 LayoutBuilder 拿到 FailureBar 限高后的剩余空间。
+                Flexible(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      // 剩余可用高度（标题按钮已占后，FailureBar maxHeight
+                      // 还剩多少空间给详情）。
+                      // 当 FailureBar 不限高（effectiveMaxHeight == ∞）时，
+                      // 这里 maxHeight 也会很大 → 详情区不限制，按自然高度。
+                      final detailMax = constraints.maxHeight;
 
-                  return _buildDetailArea(
-                    colors,
-                    t,
-                    ctx,
-                    duration,
-                    curve,
-                    detailMax,
-                  );
-                },
-              ),
-            ),
-            // 底部留白，避免详情紧贴 FailureBar 下边缘
-            const SizedBox(height: IntermediateSpacing.sMd),
-          ],
+                      return _buildDetailArea(
+                        colors,
+                        t,
+                        ctx,
+                        duration,
+                        curve,
+                        detailMax,
+                      );
+                    },
+                  ),
+                ),
+                // 底部留白，避免详情紧贴 FailureBar 下边缘
+                const SizedBox(height: IntermediateSpacing.sMd),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -385,11 +424,13 @@ class _FailureBarState extends State<FailureBar> {
     if (!_expanded) {
       child = const SizedBox.shrink();
     } else {
-      child = ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: detailMaxHeight),
-        child: SingleChildScrollView(
-          child: _buildDetailPanel(colors, t, ctx),
-        ),
+      // 限高滚动区补底部渐隐（内测反馈"看不出能下滑"）；
+      // 渐隐色取详情面板 surfaceElevated 底色
+      child = LmOverflowCard(
+        maxHeight: detailMaxHeight,
+        padding: EdgeInsets.zero,
+        fadeColor: colors.surfaceElevated,
+        child: _buildDetailPanel(colors, t, ctx),
       );
     }
     if (duration == Duration.zero) {
@@ -471,17 +512,19 @@ class _FailureBarState extends State<FailureBar> {
                 colors: colors,
               ),
               const SizedBox(height: IntermediateSpacing.s2xs),
-              // monospace + faint，可滚动（限制最大高度避免过长异常撑爆面板）
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 120),
-                child: SingleChildScrollView(
-                  child: SelectableText(
-                    ctx.rawError!,
-                    style: GoogleFonts.robotoMono(
-                      fontSize: 12,
-                      height: 1.4,
-                      color: colors.faint,
-                    ),
+              // monospace + faint，可滚动（限制最大高度避免过长异常撑爆面板；
+              // 底部渐隐提示可滚）
+              LmOverflowCard(
+                maxHeight: 120,
+                padding: EdgeInsets.zero,
+                fadeColor: colors.surfaceElevated,
+                child: SelectableText(
+                  ctx.rawError!,
+                  style: TextStyle(
+                    fontFamily: 'LMMono',
+                    fontSize: 12,
+                    height: 1.4,
+                    color: colors.faint,
                   ),
                 ),
               ),

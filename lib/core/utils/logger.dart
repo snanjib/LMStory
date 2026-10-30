@@ -1,5 +1,6 @@
 import 'dart:developer' as developer;
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:lmstory/core/utils/debug_log_options.dart';
 
 /// 日志级别
@@ -9,6 +10,14 @@ enum LogLevel {
   warn,
   error,
 }
+
+/// 未显式设置时的缺省日志级别（单一事实源）
+///
+/// release 收敛到 info（debug 级为开发日志，release 持续落盘只增隐私面
+/// 与磁盘占用）；debug 构建保持 debug 不减损开发体验。启动装配
+/// （main.dart）与诊断页显示（DiagnosticsController._loadLogLevel）共用，
+/// 两端缺省不可再各自漂移。
+const LogLevel kDefaultLogLevel = kReleaseMode ? LogLevel.info : LogLevel.debug;
 
 /// 结构化日志记录（传递给 [LogSink] 的数据载体）。
 ///

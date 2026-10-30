@@ -6,7 +6,7 @@ import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/storage/preferences.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_setting_card.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
@@ -254,7 +254,7 @@ void main() {
 
       // Directly invoke the card callback so this navigation contract does not
       // depend on the host Flutter SDK's Impeller-only InkSparkle shader asset.
-      final card = find.widgetWithText(IntermediateSettingCard, '模型配置');
+      final card = find.widgetWithText(ClassicNarrativeSettingCard, '模型配置');
       final inkWell = find.descendant(of: card, matching: find.byType(InkWell));
       tester.widget<InkWell>(inkWell).onTap!();
       await tester.pumpAndSettle();
@@ -272,7 +272,7 @@ void main() {
         repo: _StubSettingsRepository(),
       );
 
-      final card = find.widgetWithText(IntermediateSettingCard, '系统提示词');
+      final card = find.widgetWithText(ClassicNarrativeSettingCard, '系统提示词');
       final inkWell = find.descendant(of: card, matching: find.byType(InkWell));
       tester.widget<InkWell>(inkWell).onTap!();
       await tester.pumpAndSettle();
@@ -287,7 +287,7 @@ void main() {
         repo: _StubSettingsRepository(),
       );
 
-      final card = find.widgetWithText(IntermediateSettingCard, '工具与记忆');
+      final card = find.widgetWithText(ClassicNarrativeSettingCard, '工具与记忆');
       final inkWell = find.descendant(of: card, matching: find.byType(InkWell));
       tester.widget<InkWell>(inkWell).onTap!();
       await tester.pumpAndSettle();

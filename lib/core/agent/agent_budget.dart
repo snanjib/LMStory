@@ -11,7 +11,7 @@ class AgentBudget {
     this.maxSteps = 8,
     this.maxTotalTokens,
     this.maxDuration = const Duration(minutes: 5),
-    this.maxRequestRetries = 1,
+    this.maxRequestRetries = 5,
     this.contextWindowTokens,
   });
 

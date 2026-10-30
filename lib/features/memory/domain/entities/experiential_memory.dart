@@ -231,7 +231,11 @@ class ExperientialMemory {
   /// - 若 [summary] 非空：直接返回 summary
   /// - 否则：拼接 [what]/[who]/[when]/[where] 中非空字段（用 · 分隔）
   /// - 全部为空：返回 '(空事件)'
-  String get displayText {
+  /// 格式化展示文本。
+  /// - 若 [summary] 非空：直接返回 summary
+  /// - 否则：拼接 [what]/[who]/[when]/[where] 中非空字段（用 · 分隔）
+  /// - 全部为空：返回 [emptyPlaceholder]
+  String formatDisplayText({String emptyPlaceholder = '(空事件)'}) {
     if (summary != null && summary!.isNotEmpty) return summary!;
     final parts = <String>[
       if (what != null && what!.isNotEmpty) what!,
@@ -239,9 +243,11 @@ class ExperientialMemory {
       if (when != null && when!.isNotEmpty) when!,
       if (where != null && where!.isNotEmpty) where!,
     ];
-    if (parts.isEmpty) return '(空事件)';
+    if (parts.isEmpty) return emptyPlaceholder;
     return parts.join(' · ');
   }
+
+  String get displayText => formatDisplayText();
 
   /// 序列化为 JSON（用于 intermediate_round_artifacts 表持久化）
   Map<String, dynamic> toJson() => {

@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_system_prompt.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
 import 'package:lmstory/features/templates/domain/repositories/template_repository.dart';
@@ -28,6 +29,8 @@ class TemplateRepositoryImpl implements TemplateRepository {
               isBuiltIn: row.isBuiltIn,
               createdAt: row.createdAt,
               updatedAt: row.updatedAt,
+              nameEn: row.nameEn,
+              contentEn: row.contentEn,
             );
 
   @override
@@ -153,7 +156,7 @@ class TemplateRepositoryImpl implements TemplateRepository {
   @override
   Future<Template> copyTemplate(String templateId, {String? newName}) async {
     final source = await getTemplate(templateId);
-    final copiedName = newName ?? '${source.name} (副本)';
+    final copiedName = newName ?? '${source.name} (Copy)';
     return createTemplate(
       name: copiedName,
       kind: source.kind,
@@ -170,9 +173,30 @@ class TemplateRepositoryImpl implements TemplateRepository {
       TemplatesTableCompanion.insert(
         templateId: 'builtin-narrative-engine',
         name: '叙事引擎系统提示词',
+        nameEn: const Value('Narrative engine system prompt'),
         kind: TemplateKind.systemPrompt.toDbValue(),
-        content:
-            "You are a narrative engine for interactive storytelling. Follow the user's instructions to advance the story. Maintain consistency with established facts and events.",
+        // 与导演模式未配规则时的兜底同源（agent_system_prompt.dart 的
+        // defaultRulesPrompt）——显式选模板与留空兜底拿到同一份完整规范，
+        // 不会出现"选了模板反而更薄"的倒挂。
+        content: AgentSystemPromptBuilder.defaultRulesPrompt,
+        contentEn: const Value('''
+You are the narrative engine and host of an interactive story, working with the director (the user) to advance one continuous long-form story. You are not a Q&A assistant: your output is the story itself.
+
+[How you tell it]
+- Write prose for the reader — not outlines, analyses, or creation notes; unless the director explicitly asks, never step outside the narrative to comment on your own writing.
+- Every director input is a direction for the story: a line of dialogue, a plot request, a piece of worldbuilding, or a free-form instruction. Weave it into the story and keep telling; do not explain or answer it literally.
+- Where the director has not been explicit, you decide: advance the plot, arrange scenes, move characters, push unresolved situations toward their next beat. Better to move the story forward than to wait or ask what should happen next.
+- Only when a major story decision hangs in the balance (a protagonist's fate, a fundamental reversal, a large jump in the timeline) and you cannot settle it safely alone, ask the director; everyday progression never needs asking.
+- In a fresh session with no prior text, open naturally from the director's first setting or input: begin in medias res — no restating the setting, no prefacing.
+
+[Continuity]
+- The story is one continuous whole: established settings, past events, characters' personalities and goals are invariants; the world state given by retrieval and tools always outranks your impression.
+- Foreshadowing once planted must be kept in view; characters do not forget without cause or change temperament at will; the world evolves by its own logic even when the camera looks away.
+
+[Pacing]
+- Each round of prose is a passage that can pause naturally: deliver image and progress, keep momentum for what comes next, and do not exhaust every possibility at once.
+- Move the story with concrete actions, details, and dialogue rather than summary, explanation, or piled-up lyricism.
+'''),
         isBuiltIn: const Value(true),
         createdAt: Value(now),
         updatedAt: Value(now),
@@ -180,6 +204,7 @@ class TemplateRepositoryImpl implements TemplateRepository {
       TemplatesTableCompanion.insert(
         templateId: 'builtin-free-chat',
         name: '自由对话系统提示词',
+        nameEn: const Value('Free chat system prompt'),
         kind: TemplateKind.systemPrompt.toDbValue(),
         content:
             'You are a helpful AI assistant. Engage in natural conversation and provide thoughtful responses.',
@@ -190,6 +215,7 @@ class TemplateRepositoryImpl implements TemplateRepository {
       TemplatesTableCompanion.insert(
         templateId: 'builtin-roleplay',
         name: '纯角色扮演系统提示词',
+        nameEn: const Value('Pure roleplay system prompt'),
         kind: TemplateKind.systemPrompt.toDbValue(),
         content:
             "You are a character in a role-playing scenario. Stay in character at all times. React to the user's actions and dialogue as your character would.",
@@ -202,6 +228,7 @@ class TemplateRepositoryImpl implements TemplateRepository {
       TemplatesTableCompanion.insert(
         templateId: 'builtin-isekai-narrator',
         name: '异世界穿越叙述者系统提示词',
+        nameEn: const Value('Isekai narrator system prompt'),
         kind: TemplateKind.systemPrompt.toDbValue(),
         content: '''
 你是一位严格的第三人称全知叙述者，负责构建并驱动一个无限开放的穿越异世界。你绝不代入用户身份，绝不生成用户的对话、动作或内心想法。
@@ -226,6 +253,30 @@ NPC生成：根据当前场景逻辑自然生成合适的NPC（性别、数量�
 避免重复：严禁相邻回复出现重复的动作、描写或对话。
 逻辑：遵循异世界物理逻辑、魔法逻辑与人物性格逻辑，但完全不受地球规则约束。
 世界观：日漫风格无限开放穿越异世界，只忠于用户行动、世界逻辑与沉浸式叙述。''',
+        contentEn: const Value('''
+You are a strict third-person omniscient narrator who builds and drives a boundlessly open isekai (transported-to-another-world). You never speak as the user, and you never write the user''s dialogue, actions, decisions, or inner thoughts.
+You only describe the environment and the NPCs'' behavior, inner thoughts, and dialogue. Keep the language down-to-earth — natural, vivid, rich with imagery, like high-quality plain-language web fiction.
+User input parsing rules
+Anything the user types directly (no parentheses) = the user''s dialogue.
+Anything the user wraps in parentheses (e.g. (I walk up to the bar), (I rest my hand on her waist)) = the user''s action.
+The moment the user''s input begins with a parenthesis and contains "System", switch immediately to system meta-mode.
+Normal narration output format (must be followed strictly)
+Actions, environment, and sensory description: wrapped in parentheses, each on its own line; keep the description natural and finely observed.
+Dialogue: wrapped in double quotes, its own paragraph, in first person (the speaking character calls themselves "I").
+Keep everyday interactions natural and true to life.
+Address the user directly as "you".
+Never produce any dialogue, action, decision, or inner thought for the user.
+Player premise
+In this world you (the player) may move, speak, and decide freely; the world answers your identity, looks, abilities, and conduct with plausible reactions and affordances.
+Core creative requirements
+Open world: a fully open, anime-style isekai. You may travel anywhere at will (the royal capital, border towns, the elf forest, demon territory, underground labyrinths, harbor trade-guilds, the academy of magic...) and do anything. The world responds to your moves and words plausibly, naturally, and dynamically, conjuring matching events and NPCs.
+Worldview: a classic anime-flavored isekai — magic, battle-aura, clergy, magic beasts, many races (humans, elves, beastfolk, demons, dwarves and more), kingdoms/empires/guild structures, reincarnation/summoning, optional system panels, levels and skills, relics and artifacts. Physical and social rules follow "common isekai logic".
+NPC generation: spawn fitting NPCs naturally from the scene (gender, number, personality, age, and race decided by the scene). Give each NPC a distinct temperament. Adventurers, nobles, maids, war-magi, priests, demon princesses, guild receptionists, black-market brokers and other stock faces are all fair game.
+Real people / established characters: if real-world figures or well-known fictional characters appear, they must strictly keep their real or canonical persona, temperament, speech style, and habits — no OOC behavior (core personality survives even after isekai-ification).
+No repetition: adjacent replies must never repeat the same actions, descriptions, or dialogue.
+Logic: honor isekai physics, magic logic, and character logic, wholly unbound by Earth''s rules.
+Worldview: an anime-style, boundlessly open isekai, loyal only to the player''s actions, the world''s own logic, and immersive narration.
+'''),
         isBuiltIn: const Value(true),
         createdAt: Value(now),
         updatedAt: Value(now),
@@ -243,6 +294,9 @@ NPC生成：根据当前场景逻辑自然生成合适的NPC（性别、数量�
       // 关键：显式指定 conflict target 为 template_id 列（UNIQUE 约束所在），
       // 否则 drift 默认用主键 id（自增列）作为 target，导致冲突时无法匹配。
       // 用户自定义副本使用不同的 templateId（uuid），不会被触碰。
+      // 契约：内置种子的 templateId 与 kind 一经发布不可变——upsert 只刷
+      // content/name/updatedAt，不改 kind；下架内置模板须在此同步物理删除
+      // 存量行（按 id+isBuiltIn 限定），防止 kind 漂移或僵尸条目。
       for (final template in builtInTemplates) {
         await _db.into(_db.templatesTable).insert(
               template,
@@ -250,6 +304,8 @@ NPC生成：根据当前场景逻辑自然生成合适的NPC（性别、数量�
                 (old) => TemplatesTableCompanion(
                   content: Value(template.content.value),
                   name: Value(template.name.value),
+                  nameEn: template.nameEn,
+                  contentEn: template.contentEn,
                   updatedAt: Value(now),
                 ),
                 target: [_db.templatesTable.templateId],
@@ -266,13 +322,12 @@ NPC生成：根据当前场景逻辑自然生成合适的NPC（性别、数量�
         'builtin-ancient-transmigration-narrator',
       ];
       for (final templateId in removedBuiltInIds) {
-        await (
-          _db.delete(_db.templatesTable)
-            ..where(
-              (t) =>
-                  t.templateId.equals(templateId) & t.isBuiltIn.equals(true),
-            )
-        ).go();
+        await (_db.delete(_db.templatesTable)
+              ..where(
+                (t) =>
+                    t.templateId.equals(templateId) & t.isBuiltIn.equals(true),
+              ))
+            .go();
       }
     } catch (e) {
       throw QueryException('Failed to ensure built-in templates: $e');

@@ -9,6 +9,7 @@ import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_shortcuts.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/chat/domain/entities/search_result.dart';
@@ -163,10 +164,6 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
     final colors = context.lm.palette;
 
     return Dialog(
-      backgroundColor: colors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
       child: LmShortcutHost(
         // ↑↓ 移动键盘高亮（焦点在输入框时单行 TextField
         // 不消费上下键，事件冒泡至此）。Esc 关闭浮层不在这里重复绑定——
@@ -204,7 +201,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
         style: SimpleTextStyles.body.copyWith(color: colors.ink),
         decoration: InputDecoration(
           hintText: t.chat.globalSearch.hint,
-          hintStyle: SimpleTextStyles.body.copyWith(color: colors.faint),
+          hintStyle: SimpleTextStyles.body.copyWith(color: colors.muted),
           prefixIcon: Icon(Icons.search, size: 20, color: colors.muted),
           suffixIcon: _searchController.text.isNotEmpty
               ? Semantics(
@@ -362,7 +359,7 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
                   Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: SimpleSpacing.sMd,
-                      vertical: SimpleSpacing.s2xs,
+                      vertical: SimpleSpacing.sSm,
                     ),
                     child: Row(
                       children: [
@@ -375,11 +372,13 @@ class _GlobalSearchDialogState extends ConsumerState<GlobalSearchDialog> {
                         Expanded(
                           child: Text(
                             sessionName,
-                            style: SimpleTextStyles.caption.copyWith(
-                              color: colors.muted,
-                              fontWeight: FontWeight.w600,
+                            style:
+                                LmNarrativeTextStyles.narrativeDisplay.copyWith(
+                              fontSize: 20,
+                              height: 1.35,
+                              color: colors.ink,
                             ),
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -448,7 +447,7 @@ class _SearchResultItem extends StatelessWidget {
         color: highlighted ? colors.primaryDim : null,
         padding: const EdgeInsets.symmetric(
           horizontal: SimpleSpacing.sMd,
-          vertical: SimpleSpacing.s2xs,
+          vertical: SimpleSpacing.sSm,
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -463,7 +462,7 @@ class _SearchResultItem extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildHighlightedContent(),
+                  _buildHighlightedContent(context),
                   const SizedBox(height: 2),
                   Text(
                     _formatTime(context, result.createdAt),
@@ -481,7 +480,7 @@ class _SearchResultItem extends StatelessWidget {
     );
   }
 
-  Widget _buildHighlightedContent() {
+  Widget _buildHighlightedContent(BuildContext context) {
     final content = result.content;
     // 2026-09-08 修复：预览片段不再以 120 字符为界——短多行消息（关键字
     // 在第 3 行之后）被 maxLines 截断时关键字完全不显示。统一先定位
@@ -489,22 +488,28 @@ class _SearchResultItem extends StatelessWidget {
     final idx = findQueryIndex(content, query);
     if (idx >= 0) {
       return _buildRichText(
+        context,
         buildContextSnippet(content, idx, query.length),
       );
     }
     // 极端情况：SQL LIKE 命中但 Dart 无法定位关键字
     // （Unicode 大小写折叠差异，如全角/半角、特殊 locale 折叠）
     // 展示完整内容由 maxLines 截断，避免仅显示前 120 字误导用户
-    return _buildRichText(content);
+    return _buildRichText(context, content);
   }
 
-  Widget _buildRichText(String text) {
+  Widget _buildRichText(BuildContext context, String text) {
+    final baseStyle = DefaultTextStyle.of(context)
+        .style
+        .merge(SimpleTextStyles.bodySm)
+        .copyWith(color: colors.ink);
     return RichText(
+      textScaler: MediaQuery.textScalerOf(context),
       text: buildSearchHighlightSpans(
         text: text,
         query: query,
-        baseStyle: SimpleTextStyles.bodySm.copyWith(color: colors.ink),
-        highlightStyle: SimpleTextStyles.bodySm.copyWith(
+        baseStyle: baseStyle,
+        highlightStyle: baseStyle.copyWith(
           color: colors.primary,
           fontWeight: FontWeight.w600,
           backgroundColor: colors.primaryDim,
@@ -530,6 +535,6 @@ class _SearchResultItem extends StatelessWidget {
     if (diff.inDays < 30) {
       return t.chat.time.daysAgo(n: diff.inDays);
     }
-    return '${time.month}/${time.day}';
+    return t.chat.time.dateShort(month: time.month, day: time.day);
   }
 }

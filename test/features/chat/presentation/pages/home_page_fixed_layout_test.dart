@@ -25,12 +25,17 @@ void main() {
     await LocaleSettings.setLocale(AppLocale.zhCn);
   });
 
-  Future<Preferences> fakePrefs() async {
-    SharedPreferences.setMockInitialValues({});
+  Future<Preferences> fakePrefs({Map<String, Object> values = const {}}) async {
+    SharedPreferences.setMockInitialValues(values);
     return Preferences(prefs: await SharedPreferences.getInstance());
   }
 
-  Widget wrapHome(Preferences prefs, ChatRepository chatRepo) {
+  Widget wrapHome(
+    Preferences prefs,
+    ChatRepository chatRepo, {
+    ValueChanged<ChatSession>? onSessionSelected,
+    VoidCallback? onDirectorWizard,
+  }) {
     return ProviderScope(
       overrides: [
         preferencesProvider.overrideWithValue(prefs),
@@ -45,7 +50,8 @@ void main() {
           home: HomePage(
             onNewChat: () {},
             onNewStory: () {},
-            onSessionSelected: (_) {},
+            onDirectorWizard: onDirectorWizard,
+            onSessionSelected: onSessionSelected ?? (_) {},
           ),
         ),
       ),
@@ -68,6 +74,67 @@ void main() {
       ),
     );
   }
+
+  testWidgets('recent activity selects the story independently of pinned order',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    ChatSession story(String id, String mode, int day) => ChatSession(
+          sessionId: id,
+          title: id,
+          mode: mode,
+          createdAt: DateTime(2026),
+          lastActiveAt: DateTime(2026, 10, day),
+          messageCount: 2,
+        );
+    final repo = _HomeChatRepository([
+      story('pinned chat', ChatMode.chat, 7),
+      story('older story', ChatMode.intermediate, 2),
+      story('latest director', ChatMode.advanced, 6),
+    ]);
+    ChatSession? selected;
+    await tester.pumpWidget(
+      wrapHome(
+        await fakePrefs(),
+        repo,
+        onSessionSelected: (session) => selected = session,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('继续故事'), findsOneWidget);
+    expect(find.text('latest director'), findsOneWidget);
+    expect(find.text('新建故事'), findsNothing);
+    await tester.tap(find.text('回到故事'));
+    expect(selected?.sessionId, 'latest director');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('short screen retains the narrative session in recent sessions',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repo = _HomeChatRepository([
+      ChatSession(
+        sessionId: 'story',
+        title: 'Existing story',
+        mode: ChatMode.intermediate,
+        createdAt: DateTime(2026),
+        lastActiveAt: DateTime(2026),
+        messageCount: 2,
+      ),
+    ]);
+    await tester.pumpWidget(wrapHome(await fakePrefs(), repo));
+    await tester.pumpAndSettle();
+    expect(find.text('Existing story'), findsOneWidget);
+    expect(find.text('设置'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    final scrollable = tester.state<ScrollableState>(find.byType(Scrollable));
+    expect(scrollable.position.maxScrollExtent, 0);
+  });
 
   testWidgets('会话塞满列表：滚动范围恒为 0，整行裁切，设置入口在屏内', (
     tester,
@@ -99,6 +166,52 @@ void main() {
     expect(tester.getBottomRight(find.text('设置')).dy, lessThan(600));
   });
 
+  testWidgets('故事入口开+三卡最高布局：滚动范围仍恒 0，无溢出', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      wrapHome(
+        await fakePrefs(values: {'intermediate_mode_enabled': true}),
+        fiveSessions(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 三卡齐备（对话/故事/导演）= 固定一屏最高布局形态
+    final cards = find.byType(IntrinsicHeight);
+    expect(cards, findsWidgets);
+    expect(find.text('新建对话'), findsOneWidget);
+    expect(find.text('新建故事'), findsOneWidget);
+
+    final scrollable = tester.state<ScrollableState>(
+      find.byType(Scrollable),
+    );
+    expect(
+      scrollable.position.maxScrollExtent,
+      0,
+      reason: '三卡最高布局下内容仍恒定一屏',
+    );
+    expect(tester.takeException(), isNull, reason: '不溢出');
+  });
+
+  testWidgets('短屏把最近会话全裁掉（可见行=0）：显示侧边栏指路行', (
+    tester,
+  ) async {
+    // 高度压到非弹性内容几乎占满：剩余空间不足一行 → 5 条全裁
+    tester.view.physicalSize = const Size(800, 420);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(wrapHome(await fakePrefs(), fiveSessions()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('会话较多，打开侧边栏查看全部'), findsOneWidget);
+    for (var i = 1; i <= 5; i++) {
+      expect(find.text('会话$i'), findsNothing, reason: '零行时一行也不渲染');
+    }
+  });
+
   testWidgets('无会话（内容不足一屏）：仍可下拉触发刷新', (tester) async {
     final repo = _HomeChatRepository(const []);
     await tester.pumpWidget(wrapHome(await fakePrefs(), repo));
@@ -121,6 +234,82 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pump(const Duration(seconds: 1));
     expect(repo.loadCount, greaterThan(1));
+  });
+
+  testWidgets('向导引导卡加入后：滚动范围仍恒 0，无溢出，设置入口在屏内', (
+    tester,
+  ) async {
+    // 故事开+双回调 = 最高布局（对话+故事双卡 + 导演横卡 + 向导引导卡）；
+    // 720 高确保非 compact 分支
+    tester.view.physicalSize = const Size(800, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      wrapHome(
+        await fakePrefs(values: {'intermediate_mode_enabled': true}),
+        fiveSessions(),
+        onDirectorWizard: () {},
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('导演模式创建向导'), findsOneWidget);
+    expect(find.text('新建对话'), findsOneWidget);
+    expect(find.text('新建故事'), findsOneWidget);
+
+    final scrollable = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byType(CustomScrollView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(scrollable.position.maxScrollExtent, 0, reason: '恒定一屏不可滑动');
+    expect(tester.takeException(), isNull, reason: '不溢出');
+    expect(find.text('设置'), findsOneWidget);
+    expect(tester.getBottomRight(find.text('设置')).dy, lessThan(720));
+  });
+
+  testWidgets('向导引导卡加入 compact 形态后：滚动范围仍恒 0，设置入口在屏内', (
+    tester,
+  ) async {
+    // 继续故事大卡 + 对话/故事小卡行 + 引导卡 = compact 最高布局形态
+    tester.view.physicalSize = const Size(800, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final repo = _HomeChatRepository([
+      ChatSession(
+        sessionId: 'director-1',
+        title: '旧导演会话',
+        mode: ChatMode.advanced,
+        createdAt: DateTime(2026),
+        lastActiveAt: DateTime(2026, 2),
+        messageCount: 3,
+      ),
+    ]);
+    await tester.pumpWidget(
+      wrapHome(
+        await fakePrefs(values: {'intermediate_mode_enabled': true}),
+        repo,
+        onDirectorWizard: () {},
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('继续故事'), findsOneWidget, reason: 'compact 形态成立');
+    expect(find.text('导演模式创建向导'), findsOneWidget, reason: '小卡行之后渲染引导卡');
+
+    final scrollable = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byType(CustomScrollView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(scrollable.position.maxScrollExtent, 0, reason: '恒定一屏不可滑动');
+    expect(tester.takeException(), isNull, reason: '不溢出');
+    expect(find.text('设置'), findsOneWidget);
+    expect(tester.getBottomRight(find.text('设置')).dy, lessThan(800));
   });
 }
 

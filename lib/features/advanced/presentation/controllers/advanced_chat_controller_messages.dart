@@ -291,11 +291,30 @@ extension AdvancedChatControllerMessages on AdvancedChatController {
   ) async {
     if (state.phase != IntermediatePhase.idle) return false;
 
+    // 编辑助手消息=直接改写该消息当前内容并持久化：message 行与
+    // 当前变体行同事务更新（所见=所存，切换器往返不回退用户编辑）；
+    // 用户消息无变体，只改 message 行。
+    final editedTurn = targetMessage.role == 'assistant'
+        ? _computeTurnNumber(targetMessage)
+        : null;
     try {
-      await _chatRepository.updateMessageContent(
-        targetMessage.messageId,
-        newContent,
-      );
+      var saved = false;
+      if (editedTurn != null) {
+        saved =
+            await _persistenceService.updateAssistantContentAndCurrentVariant(
+          sessionId: state.session.sessionId,
+          turnNumber: editedTurn,
+          assistantMessageId: targetMessage.messageId,
+          newContent: newContent,
+        );
+      } else {
+        await _chatRepository.updateMessageContent(
+          targetMessage.messageId,
+          newContent,
+        );
+        saved = true;
+      }
+      if (!saved) return false;
     } catch (e, stackTrace) {
       _logger.error(
         'EditMessageContent failed',
@@ -306,14 +325,42 @@ extension AdvancedChatControllerMessages on AdvancedChatController {
       return false;
     }
 
-    // 更新 state.messages 中对应消息的 content
+    // 更新 state.messages 中对应消息的 content；助手消息同步当前变体
+    // 记录（切换器徽标/预览数据源），保持与持久层同口径。
     final newMessages = state.messages.map((m) {
       if (m.messageId == targetMessage.messageId) {
         return m.copyWith(content: newContent);
       }
       return m;
     }).toList();
-    state = state.copyWith(messages: newMessages);
+    Map<int, List<MessageVariantRecord>>? newVariants;
+    if (editedTurn != null && state.variantsByTurn != null) {
+      final records = state.variantsByTurn![editedTurn];
+      if (records != null && records.isNotEmpty) {
+        final currentIndex =
+            state.artifactsByTurnNumber?[editedTurn]?.currentVariantIndex ?? 0;
+        newVariants = Map<int, List<MessageVariantRecord>>.of(
+          state.variantsByTurn!,
+        );
+        newVariants[editedTurn] = [
+          for (var i = 0; i < records.length; i++)
+            if (i == currentIndex)
+              MessageVariantRecord(
+                variantIndex: records[i].variantIndex,
+                createdAtMs: records[i].createdAtMs,
+                content: newContent,
+                thinkingContent: records[i].thinkingContent,
+                sourceInput: records[i].sourceInput,
+              )
+            else
+              records[i],
+        ];
+      }
+    }
+    state = state.copyWith(
+      messages: newMessages,
+      variantsByTurn: newVariants,
+    );
     return true;
   }
 

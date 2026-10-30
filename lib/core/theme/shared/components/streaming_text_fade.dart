@@ -18,6 +18,13 @@
 /// 「一次蹦出好几个字」。
 typedef StreamingFadeSegment = ({int start, int end, DateTime createdAt});
 
+/// 每次 [StreamingFadeSegmentTracker.update] 的判定结果。
+///
+/// [appendExtension] = 新文以旧文为前缀的追加增长（渲染层据此允许冻结
+/// 前缀单调前进）；[replacement] = 替换/收缩（冻结缓存必须整体失效）；
+/// [unchanged] = 文本未变（淡入推进的常态帧，不触发任何失效）。
+enum StreamingFadeUpdateKind { unchanged, appendExtension, replacement }
+
 // lm-motion-exempt: 流式淡出时长（性能红线区引擎节奏，文件内已具名单源）
 /// 淡入时长：300ms 内由透明推进到完全不透明（chatbox Block.css 300ms
 /// ease-out 的同量级取值；300ms 单段尺度上线性与 ease-out 肉眼不可辨，
@@ -64,18 +71,25 @@ class StreamingFadeSegmentTracker {
   List<StreamingFadeSegment> get segments => List.unmodifiable(_segments);
 
   /// 每次 build 调用（[now] 为单调时钟，宿主用帧时间戳保证可测性）。
-  void update(String text, DateTime now) {
+  /// 返回值见 [StreamingFadeUpdateKind]（冻结窗口层据 replacement 失效）。
+  StreamingFadeUpdateKind update(String text, DateTime now) {
     _segments.removeWhere((s) => now.difference(s.createdAt) > retention);
+    StreamingFadeUpdateKind kind;
     if (text.length > _previous.length && text.startsWith(_previous)) {
       // 追加增长：新增区间 = 旧文长度到新文长度。首观察（旧文为空）时
       // 只取尾部窗口，避免长文重挂整体重放淡入。
       final start = _previous.isEmpty ? _tailStart(text) : _previous.length;
       _segments.add((start: start, end: text.length, createdAt: now));
+      kind = StreamingFadeUpdateKind.appendExtension;
     } else if (text != _previous) {
       // 替换/收缩（重生成、压缩）：清空且不淡入（不重放历史）。
       _segments.clear();
+      kind = StreamingFadeUpdateKind.replacement;
+    } else {
+      kind = StreamingFadeUpdateKind.unchanged;
     }
     _previous = text;
+    return kind;
   }
 
   /// 回到首观察态（数据清空后重新开始流式）。

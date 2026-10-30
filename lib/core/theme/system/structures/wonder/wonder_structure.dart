@@ -130,7 +130,7 @@ class WonderStructure implements LmStructure {
           borderRadius: WonderComponents.rowRadius,
           borderSide: BorderSide(color: palette.accent, width: 2),
         ),
-        hintStyle: LmUiTextStyles.body.copyWith(color: palette.faint),
+        hintStyle: LmUiTextStyles.body.copyWith(color: palette.muted),
       ),
       dialogTheme: DialogThemeData(
         constraints: const BoxConstraints(
@@ -141,9 +141,8 @@ class WonderStructure implements LmStructure {
         barrierColor: palette.scrim,
         elevation: 0,
         shape: cardShape,
-        titleTextStyle: LmNarrativeTextStyles.narrativeDisplay.copyWith(
-          color: palette.ink,
-        ),
+        titleTextStyle: LmNarrativeTextStyles.narrativeDisplay
+            .copyWith(color: palette.ink, fontSize: 24, height: 1.3),
         contentTextStyle: LmUiTextStyles.body.copyWith(color: palette.muted),
       ),
       drawerTheme: DrawerThemeData(

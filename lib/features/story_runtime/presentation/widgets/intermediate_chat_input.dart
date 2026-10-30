@@ -3,10 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
-import 'package:lmstory/core/theme/simple/components/simple_chat_input.dart'
-    show NewlineKey, SendKey;
+import 'package:lmstory/core/theme/shared/components/lm_state_transition.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/features/settings/domain/entities/input_keys.dart'
+    show NewlineKey, SendKey;
 import 'package:lmstory/features/story_runtime/domain/entities/story_phase_models.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -25,6 +26,7 @@ class IntermediateChatInput extends StatefulWidget {
     required this.phase,
     required this.onSend,
     required this.onCancel,
+    this.onTextChanged,
     this.isStopping = false,
     this.isManualCompacting = false,
     this.sendKey = SendKey.enter,
@@ -35,6 +37,9 @@ class IntermediateChatInput extends StatefulWidget {
 
   final IntermediatePhase phase;
   final void Function(String text) onSend;
+
+  /// 输入文本变化透传（可选；宿主挂草稿防抖落库等，去抖由宿主负责）。
+  final void Function(String text)? onTextChanged;
   final VoidCallback onCancel;
   final SendKey sendKey;
   final NewlineKey newlineKey;
@@ -73,6 +78,7 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
   }
 
   void _onTextChanged() {
+    widget.onTextChanged?.call(_controller.text);
     final hasText = _controller.text.isNotEmpty;
     if (hasText != _hasText) {
       setState(() => _hasText = hasText);
@@ -99,21 +105,19 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
   ///
   ///  修复：原逻辑仅在 idle 时允许输入，导致生成过程中
   /// 用户无法提前编辑下次准备发送的内容。新逻辑：输入框始终可输入，
-  /// 仅发送按钮根据 _isBusy/_isFailed 禁用。
-  ///
-  /// failed 阶段：输入框可输入（让用户编辑后重试），但发送按钮禁用
-  /// （用户需先点击"整轮重试"或"清空本轮"）。
+  /// 仅发送按钮根据 _isBusy/_canSend 禁用。
   bool get _inputEnabled => true;
 
-  /// 是否允许发送：仅 idle 且非停止中、非手动压缩中允许发送。
+  /// 是否允许发送：idle/failed 且非停止中、非手动压缩中允许发送。
   ///
-  /// failed 阶段禁止发送（避免用户输入后被 Controller 静默丢弃，
-  /// DOC-09B 失败处理：失败时需先重试或清空）。
+  /// failed 阶段放行直发新消息（控制器先事务性清掉失败轮残留），
+  /// 用户不必先点「清空本轮」。
   /// 停止中禁止发送（防止与后台 cancel 竞态）。
   /// 手动压缩中禁止发送（：压缩全程 phase=idle，控制器静默
   /// no-op，UI 必须同口径禁用）。
   bool get _canSend =>
-      widget.phase == IntermediatePhase.idle &&
+      (widget.phase == IntermediatePhase.idle ||
+          widget.phase == IntermediatePhase.failed) &&
       !widget.isStopping &&
       !widget.isManualCompacting;
 
@@ -332,7 +336,7 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
                           color: colors.muted,
                         ),
                         filled: true,
-                        fillColor: colors.surfaceVariant,
+                        fillColor: Colors.transparent,
                         //  修复：优化 padding 提升屏占比
                         contentPadding: const EdgeInsets.fromLTRB(
                           IntermediateSpacing.sMd,
@@ -340,29 +344,27 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
                           4,
                           12,
                         ),
-                        //  修复：圆角 rMd->rXs（4px 微圆角）
-                        // 对齐用户偏好"直角边缘"+ Death Stranding 风格
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(
-                            context.lmUi.radius(LmCorner.xs),
+                            context.lmUi.radius(LmCorner.md),
                           ),
                           borderSide: BorderSide.none,
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(
-                            context.lmUi.radius(LmCorner.xs),
+                            context.lmUi.radius(LmCorner.md),
                           ),
                           borderSide: BorderSide.none,
                         ),
                         disabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(
-                            context.lmUi.radius(LmCorner.xs),
+                            context.lmUi.radius(LmCorner.md),
                           ),
                           borderSide: BorderSide.none,
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(
-                            context.lmUi.radius(LmCorner.xs),
+                            context.lmUi.radius(LmCorner.md),
                           ),
                           borderSide: BorderSide(
                             color: colors.primary,
@@ -388,6 +390,14 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
   }
 
   Widget _buildSendButton(LmPalette colors, Translations t) {
+    return LmStateTransition(
+      stateKey: _isBusyOrStopping,
+      alignment: Alignment.center,
+      child: _buildSendButtonContent(colors, t),
+    );
+  }
+
+  Widget _buildSendButtonContent(LmPalette colors, Translations t) {
     if (_isBusyOrStopping) {
       return SizedBox(
         width: 36,

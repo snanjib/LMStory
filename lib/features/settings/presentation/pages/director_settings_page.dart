@@ -10,6 +10,7 @@ import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/features/advanced/presentation/advanced_mode_flag.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/collapsed_sections_store.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/collapsible_settings_section.dart';
@@ -227,6 +228,9 @@ class _DirectorSettingsPageState extends ConsumerState<DirectorSettingsPage> {
                     _ => null,
                   },
                 ),
+            const AdvancedLevelHint(
+              surfaceId: ConfigVisibilitySurfaces.director,
+            ),
           ],
         ),
       ),

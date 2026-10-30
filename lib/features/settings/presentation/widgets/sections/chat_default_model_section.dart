@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_card.dart';
+import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/entities/model_capability.dart';
@@ -68,7 +68,8 @@ class ChatDefaultModelSection extends ConsumerWidget {
       }
     }
 
-    return SimpleSettingCard(
+    return context.lmUi.settingCard(
+      context,
       icon: Icons.smart_toy_outlined,
       title: t.settings.chatSettings.defaultModel.title,
       subtitle: subtitle,

@@ -5,11 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/experience_memory_tab.dart';
-import 'package:lmstory/core/theme/intermediate/components/factual_memory_tab.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/experience_memory_tab.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/factual_memory_tab.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/presentation/pages/advanced_chat_page.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
@@ -115,7 +116,11 @@ class _MemoryBrowserPageState extends ConsumerState<MemoryBrowserPage>
       appBar: AppBar(
         title: Text(
           t.intermediate.memoryBrowser.title,
-          style: IntermediateTextStyles.title.copyWith(color: colors.ink),
+          style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
+            color: colors.ink,
+            fontSize: 22,
+            height: 1.2,
+          ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),

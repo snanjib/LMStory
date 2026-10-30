@@ -13,4 +13,5 @@ assets/fonts/LMMono/LMMono-Regular.ttf:42952
 assets/fonts/LMSerif/LMSerif-Italic.ttf:34348
 assets/fonts/LMSerif/LMSerif-Medium.ttf:32168
 assets/fonts/LMSerif/LMSerif-Regular.ttf:32016
-assets/fonts/LMSerifSC/LMSerifSC-Regular.ttf:1541308
+# 2026-10-10 十六轮 CF16-1：charset 补「阈」修复衬线弹窗标题缺字回退（+11224B，共同字形 advance 全同校验过）
+assets/fonts/LMSerifSC/LMSerifSC-Regular.ttf:1552532

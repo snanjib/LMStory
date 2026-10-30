@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lmstory/core/meta/app_meta.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
+import 'package:lmstory/core/theme/shared/components/labeled_value.dart';
+import 'package:lmstory/core/theme/shared/components/section_heading.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
@@ -45,10 +47,9 @@ class DiagnosticsPage extends ConsumerStatefulWidget {
 }
 
 class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
-  // 开发者暗门门禁 + 版本行连点计数
+  // 开发者暗门门禁 + 版本行连点计数（2s 窗口，见 DevGateTapCounter）
   bool _devGateUnlocked = false;
-  int _devGateTaps = 0;
-  static const int _devGateTapTarget = 7;
+  final DevGateTapCounter _gateTaps = DevGateTapCounter();
 
   @override
   void initState() {
@@ -66,12 +67,10 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
     });
   }
 
-  /// 版本行连点 7 次解锁开发者暗门（两卡条件渲染）
+  /// 版本行连点 7 次解锁开发者暗门（两卡条件渲染）；2s 窗口外计数作废
   void _onVersionTap() {
     if (_devGateUnlocked) return;
-    _devGateTaps++;
-    if (_devGateTaps < _devGateTapTarget) return;
-    _devGateTaps = 0;
+    if (!_gateTaps.registerTap(DateTime.now())) return;
     ref.read(diagnosticsControllerProvider.notifier).unlockDevGate();
     setState(() => _devGateUnlocked = true);
     final t = Translations.of(context);
@@ -79,6 +78,22 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
       SnackBar(
         behavior: SnackBarBehavior.floating,
         content: Text(t.settings.diagnostics.devGateUnlockedToast),
+      ),
+    );
+  }
+
+  /// 重新上锁：收回两张开发者卡（与连点解锁对称）
+  void _onRelockTap() {
+    ref.read(diagnosticsControllerProvider.notifier).lockDevGate();
+    setState(() {
+      _devGateUnlocked = false;
+      _gateTaps.reset();
+    });
+    final t = Translations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(t.settings.diagnostics.devGateLockedToast),
       ),
     );
   }
@@ -91,7 +106,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
 
     return Scaffold(
       backgroundColor: context.scaffoldBgOf(colors.bg),
-      appBar: SimpleAppBar(title: t.settings.diagnostics.title),
+      appBar: context.lmUi.appBar(context, title: t.settings.diagnostics.title),
       body: state.isLoading
           ? const Center(child: CircularProgressIndicator())
           : LmMeasure(
@@ -100,7 +115,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
                 padding: const EdgeInsets.all(SimpleSpacing.sLg),
                 children: [
                   _OverviewCard(
-                    failureCount: state.failures.length,
+                    failureCount: state.failureTotal,
                     logLevel: state.logLevel,
                     onShare: () => _shareLog(context),
                     onClear: () => _confirmClear(context),
@@ -132,7 +147,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
                           t.settings.diagnostics.agentLoop.costWarning,
                     ),
                     const SizedBox(height: SimpleSpacing.sMd),
-                    //  轮轨迹入口（开发者暗门；原长按入口因并行改动改道于此）
+                    // 轮轨迹入口（开发者暗门；原长按入口因并行改动改道于此）
                     _AgentLoopEntryCard(
                       onTap: () => _navigateTo(
                         context,
@@ -142,6 +157,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
                       iconOverride: Icons.timeline_outlined,
                     ),
                     const SizedBox(height: SimpleSpacing.sMd),
+                    _DevGateLockAction(onTap: _onRelockTap),
                   ],
                   SizedBox(
                     height: 320,
@@ -160,7 +176,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
                       onTap: _onVersionTap,
                       child: Center(
                         child: Text(
-                          'LMStory v0.4.0',
+                          'LMStory v$kAppVersion',
                           style: SimpleTextStyles.caption.copyWith(
                             color: colors.muted,
                           ),
@@ -240,6 +256,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
     await Share.shareXFiles(
       files,
       subject: t.settings.diagnostics.logs.shareSubject,
+      sharePositionOrigin: shareOriginFrom(context),
     );
   }
 
@@ -257,7 +274,12 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
       await saveLogFilesTo(targetPath: savedPath);
     } catch (e) {
       if (!context.mounted) return;
-      _showInfo(context, e.toString());
+      _showInfo(
+        context,
+        Translations.of(context).settings.diagnostics.logs.saveFailed(
+              error: e.toString(),
+            ),
+      );
       return;
     }
     if (!context.mounted) return;
@@ -401,6 +423,53 @@ class _AgentLoopEntryCard extends StatelessWidget {
   }
 }
 
+/// 重新上锁动作行（暗门解锁态显示）
+///
+/// 状态开关而非功能入口——刻意不用卡片容器（避免读作第三张功能卡），
+/// 与页尾版本行同级的安静样式：lock 图标 + 说明文字，居中，muted 色，
+/// 纵向内边距保证 ≥44dp 触达面积。
+class _DevGateLockAction extends StatelessWidget {
+  const _DevGateLockAction({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Translations.of(context);
+    final colors = context.lm.palette;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: SimpleSpacing.sMd),
+          child: Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.lock_outline, size: 16, color: colors.muted),
+                const SizedBox(width: SimpleSpacing.sXs),
+                Flexible(
+                  child: Text(
+                    t.settings.diagnostics.devGateRelock,
+                    style: SimpleTextStyles.caption.copyWith(
+                      color: colors.muted,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _OverviewCard extends StatelessWidget {
   const _OverviewCard({
     required this.failureCount,
@@ -419,24 +488,12 @@ class _OverviewCard extends StatelessWidget {
     final t = Translations.of(context);
     final colors = context.lm.palette;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surfaceVariant,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
-      padding: const EdgeInsets.all(SimpleSpacing.sLg),
+    return context.lmUi.card(
+      context,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            t.settings.diagnostics.overview.title,
-            style: SimpleTextStyles.title3.copyWith(
-              color: colors.ink,
-              fontWeight: FontWeight.w600,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+          SectionHeading(title: t.settings.diagnostics.overview.title),
           const SizedBox(height: SimpleSpacing.sMd),
           _InfoRow(
             label: t.settings.diagnostics.failures.title,
@@ -453,24 +510,21 @@ class _OverviewCard extends StatelessWidget {
             value: _levelLabel(logLevel, t),
           ),
           const SizedBox(height: SimpleSpacing.sLg),
-          Row(
+          Wrap(
+            spacing: SimpleSpacing.sSm,
+            runSpacing: SimpleSpacing.sSm,
             children: [
-              Expanded(
-                child: _ActionButton(
-                  icon: Icons.ios_share,
-                  label: t.settings.diagnostics.logs.share,
-                  onTap: onShare,
-                  primary: true,
-                ),
+              _ActionButton(
+                icon: Icons.ios_share,
+                label: t.settings.diagnostics.logs.share,
+                onTap: onShare,
+                primary: true,
               ),
-              const SizedBox(width: SimpleSpacing.sSm),
-              Expanded(
-                child: _ActionButton(
-                  icon: Icons.delete_outline,
-                  label: t.settings.diagnostics.clear.title,
-                  onTap: onClear,
-                  danger: true,
-                ),
+              _ActionButton(
+                icon: Icons.delete_outline,
+                label: t.settings.diagnostics.clear.title,
+                onTap: onClear,
+                danger: true,
               ),
             ],
           ),
@@ -491,46 +545,14 @@ class _OverviewCard extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({
-    required this.label,
-    required this.value,
-    this.valueColor,
-  });
-
+  const _InfoRow({required this.label, required this.value, this.valueColor});
   final String label;
   final String value;
   final Color? valueColor;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.lm.palette;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Flexible(
-          child: Text(
-            label,
-            style: SimpleTextStyles.bodySm.copyWith(color: colors.muted),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        const SizedBox(width: SimpleSpacing.sSm),
-        Flexible(
-          child: Text(
-            value,
-            style: SimpleTextStyles.bodySm.copyWith(
-              color: valueColor ?? colors.ink,
-              fontWeight: FontWeight.w600,
-            ),
-            textAlign: TextAlign.right,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) =>
+      LabeledValue(label: label, value: value, valueColor: valueColor);
 }
 
 class _ActionButton extends StatelessWidget {
@@ -554,43 +576,18 @@ class _ActionButton extends StatelessWidget {
     final color =
         danger ? colors.error : (primary ? colors.primary : colors.ink);
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: SimpleSpacing.sMd,
-            vertical: SimpleSpacing.sSm,
-          ),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.08),
-            borderRadius:
-                BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(width: SimpleSpacing.sXs),
-              Flexible(
-                child: Text(
-                  label,
-                  style: SimpleTextStyles.bodySm.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    return primary
+        ? FilledButton.icon(
+            onPressed: onTap,
+            icon: Icon(icon, size: 18),
+            label: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+          )
+        : OutlinedButton.icon(
+            onPressed: onTap,
+            icon: Icon(icon, size: 18),
+            label: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+            style: OutlinedButton.styleFrom(foregroundColor: color),
+          );
   }
 }
 
@@ -611,24 +608,12 @@ class _LogLevelCard extends StatelessWidget {
     final colors = context.lm.palette;
     final l = t.settings.diagnostics.logLevel;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surfaceVariant,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
-      padding: const EdgeInsets.all(SimpleSpacing.sLg),
+    return context.lmUi.card(
+      context,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            l.title,
-            style: SimpleTextStyles.title3.copyWith(
-              color: colors.ink,
-              fontWeight: FontWeight.w600,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+          SectionHeading(title: l.title),
           const SizedBox(height: 2),
           Text(
             l.desc,
@@ -731,24 +716,12 @@ class _DebugLogOptionsCard extends StatelessWidget {
     final colors = context.lm.palette;
     final l = t.settings.diagnostics.debugLog;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surfaceVariant,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      ),
-      padding: const EdgeInsets.all(SimpleSpacing.sLg),
+    return context.lmUi.card(
+      context,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            l.title,
-            style: SimpleTextStyles.title3.copyWith(
-              color: colors.ink,
-              fontWeight: FontWeight.w600,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+          SectionHeading(title: l.title),
           const SizedBox(height: 2),
           Text(
             l.desc,

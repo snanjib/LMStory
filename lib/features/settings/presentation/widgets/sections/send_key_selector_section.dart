@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_chat_input.dart';
-import 'package:lmstory/core/theme/simple/components/simple_selection_option.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/features/settings/domain/entities/input_keys.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -52,12 +51,14 @@ class SendKeySelectorSection extends ConsumerWidget {
       ),
       child: Column(
         children: [
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.mobileSendKeyOptions.enter,
             isSelected: sendKey == SendKey.enter,
             onTap: () => notifier.setSendKey(SendKey.enter),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.mobileSendKeyOptions.button,
             isSelected: sendKey == SendKey.button,
             onTap: () => notifier.setSendKey(SendKey.button),
@@ -88,42 +89,49 @@ class SendKeySelectorSection extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildSectionTitle(colors, t.settings.general.sendKey),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.sendKeyOptions.enter,
             isSelected: sendKey == SendKey.enter,
             onTap: () => notifier.setSendKey(SendKey.enter),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.sendKeyOptions.shiftEnter,
             isSelected: sendKey == SendKey.shiftEnter,
             onTap: () => notifier.setSendKey(SendKey.shiftEnter),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.sendKeyOptions.ctrlEnter,
             isSelected: sendKey == SendKey.ctrlEnter,
             onTap: () => notifier.setSendKey(SendKey.ctrlEnter),
           ),
           Divider(height: 1, color: colors.divider),
           _buildSectionTitle(colors, t.settings.general.newlineKey),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.newlineKeyOptions.enter,
             isSelected: newlineKey == NewlineKey.enter,
             isEnabled: sendKey != SendKey.enter,
             onTap: () => notifier.setNewlineKey(NewlineKey.enter),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.newlineKeyOptions.shiftEnter,
             isSelected: newlineKey == NewlineKey.shiftEnter,
             isEnabled: sendKey != SendKey.shiftEnter,
             onTap: () => notifier.setNewlineKey(NewlineKey.shiftEnter),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.newlineKeyOptions.ctrlEnter,
             isSelected: newlineKey == NewlineKey.ctrlEnter,
             isEnabled: sendKey != SendKey.ctrlEnter,
             onTap: () => notifier.setNewlineKey(NewlineKey.ctrlEnter),
           ),
-          SimpleSelectionOption(
+          context.lmUi.selectionOption(
+            context,
             label: t.settings.general.newlineKeyOptions.altEnter,
             isSelected: newlineKey == NewlineKey.altEnter,
             onTap: () => notifier.setNewlineKey(NewlineKey.altEnter),

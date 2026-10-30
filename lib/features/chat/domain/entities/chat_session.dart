@@ -64,6 +64,10 @@ class ChatSession {
     // 导演会话「检索松紧度」快照 JSON（具体值语义）。
     // NULL = 存量会话未物化，消费方回落内置默认值。
     this.retrievalOverrides,
+    // 导演向导「初始化你的角色」：自由描述原文（第 1 轮一次性注入）
+    // 与所选角色卡 id（物化时应用、列值留档）。
+    this.characterInitPrompt,
+    this.characterInitCardId,
   });
 
   /// 会话唯一标识
@@ -306,6 +310,20 @@ class ChatSession {
   /// 持久化：`chat_sessions.retrieval_overrides`（repairSchema 开库补列）。
   final String? retrievalOverrides;
 
+  /// 导演向导「初始化你的角色」自由描述原文。
+  ///
+  /// 仅第 1 轮尾部一次性注入（firstTurnCharacterInitHint）；此后角色由
+  /// 正文与事实层承载。NULL = 未启用。
+  /// 持久化：`chat_sessions.character_init_prompt`（repairSchema 开库补列）。
+  final String? characterInitPrompt;
+
+  /// 导演向导「初始化你的角色」所选角色卡 id。
+  ///
+  /// 草稿物化时应用卡（资料通道建基线实体），本列留档供排查；
+  /// 运行时不再消费。NULL = 未启用。
+  /// 持久化：`chat_sessions.character_init_card_id`（repairSchema 开库补列）。
+  final String? characterInitCardId;
+
   /// Sentinel value used by [copyWith] to distinguish "not provided" from
   /// "explicitly null" for nullable fields.
   static const _sentinel = Object();
@@ -357,6 +375,8 @@ class ChatSession {
     Object? narrativePacing = _sentinel,
     Object? nextTurn = _sentinel,
     Object? retrievalOverrides = _sentinel,
+    Object? characterInitPrompt = _sentinel,
+    Object? characterInitCardId = _sentinel,
   }) {
     return ChatSession(
       sessionId:
@@ -462,6 +482,12 @@ class ChatSession {
       retrievalOverrides: retrievalOverrides == _sentinel
           ? this.retrievalOverrides
           : retrievalOverrides as String?,
+      characterInitPrompt: characterInitPrompt == _sentinel
+          ? this.characterInitPrompt
+          : characterInitPrompt as String?,
+      characterInitCardId: characterInitCardId == _sentinel
+          ? this.characterInitCardId
+          : characterInitCardId as String?,
     );
   }
 

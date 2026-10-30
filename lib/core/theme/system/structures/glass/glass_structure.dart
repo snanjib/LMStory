@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/system/lm_button_metrics.dart';
+import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_page_transitions.dart';
 import 'package:lmstory/core/theme/system/lm_structure.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -162,13 +163,15 @@ class GlassStructure implements LmStructure {
             width: GlassMaterials.focusRingWidth,
           ),
         ),
-        hintStyle: LmUiTextStyles.body.copyWith(color: palette.faint),
+        hintStyle: LmUiTextStyles.body.copyWith(color: palette.muted),
       ),
 
       // ── Dialog： 模态任务面（surfaceElevated+fill22 台阶）+ 顶部内侧
       // 高光描边 +  阴影；遮罩用配色 scrim 替代默认黑54，保持场地色性并
       // 拉开图底。圆角与模态/弹层同档（GlassRadii.card）──────────────────
       dialogTheme: DialogThemeData(
+        titleTextStyle: LmNarrativeTextStyles.narrativeDisplay
+            .copyWith(color: palette.ink, fontSize: 24, height: 1.3),
         // 宽屏上限（规格 560dp；Flutter 默认无上限，长内容弹窗会被
         // IntrinsicWidth 顶到接近整窗宽）。短弹窗按内容收缩，观感不变。
         constraints: const BoxConstraints(

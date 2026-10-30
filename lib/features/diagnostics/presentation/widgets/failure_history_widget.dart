@@ -194,6 +194,11 @@ class _FailureItemState extends State<_FailureItem> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _CategoryBadge(category: widget.entry.errorCategory),
+                  // 批 F / P8：被自动重试救回的失败条目带「已自动恢复」徽标
+                  if (widget.entry.isRecovered) ...[
+                    const SizedBox(width: SimpleSpacing.sXs),
+                    _RecoveredBadge(),
+                  ],
                   const SizedBox(width: SimpleSpacing.sSm),
                   Expanded(
                     child: Text(
@@ -354,6 +359,32 @@ class _DetailRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 「已自动恢复」徽标（批 F：failure_logs.outcome=recovered 的条目）
+class _RecoveredBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.lm.palette;
+    final t = Translations.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: SimpleSpacing.sXs,
+        vertical: 2,
+      ),
+      decoration: BoxDecoration(
+        color: colors.success.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        t.settings.diagnostics.failures.recoveredBadge,
+        style: SimpleTextStyles.caption.copyWith(
+          color: colors.success,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
 }

@@ -27,5 +27,4 @@ lib/features/intermediate/presentation/controllers/intermediate_chat_controller_
 lib/features/intermediate/presentation/controllers/intermediate_chat_controller_suggest.dart:5
 lib/features/intermediate/presentation/controllers/phases/extract_phase_handler.dart:6
 lib/features/intermediate/presentation/controllers/phases/summarize_phase_handler.dart:26
-lib/features/settings/presentation/support/intermediate_preview_mock_data.dart:19
 lib/features/settings/presentation/widgets/intermediate_phase_models_section.dart:1

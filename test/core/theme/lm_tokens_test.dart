@@ -129,7 +129,7 @@ void main() {
           48,
         ],
       );
-      expect(LmReadingConstraints.width, 720);
+      expect(LmReadingConstraints.width, 800);
     },
   );
 

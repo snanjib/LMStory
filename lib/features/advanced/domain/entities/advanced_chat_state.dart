@@ -450,6 +450,8 @@ class AgentRetryWait {
     required this.waitMs,
     required this.attempt,
     required this.scheduledAtMs,
+    this.maxAttempts,
+    this.cause,
   });
 
   /// 总等待毫秒数
@@ -460,6 +462,12 @@ class AgentRetryWait {
 
   /// 事件到达时刻（ms epoch；倒计时锚点）
   final int scheduledAtMs;
+
+  /// 重试总预算（批 F：k/N 进度显示；null = 未知/旧值）
+  final int? maxAttempts;
+
+  /// 归一语义码（UI 层映射人话原因；null = 未知）
+  final String? cause;
 
   /// 按 [nowMs] 计算的剩余毫秒（下限 0）
   int remainingMs(int nowMs) {

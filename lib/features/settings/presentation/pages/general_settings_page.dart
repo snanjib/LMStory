@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_card.dart';
-import 'package:lmstory/core/theme/simple/components/simple_setting_section.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
@@ -38,21 +35,26 @@ class GeneralSettingsPage extends ConsumerWidget {
     return Scaffold(
       backgroundColor:
           context.scaffoldBgOf(Theme.of(context).scaffoldBackgroundColor),
-      appBar: SimpleAppBar(title: t.settings.general.title),
+      appBar: context.lmUi.appBar(context, title: t.settings.general.title),
       body: LmMeasure(
         child: ListView(
           padding: const EdgeInsets.all(SimpleSpacing.sLg),
           children: [
             // 1. 供应商（直接跳转 ProviderListPage）
-            SimpleSettingCard(
+            context.lmUi.settingCard(
+              context,
               icon: Icons.dns_outlined,
               title: t.settings.provider.title,
-              subtitle: t.settings.provider.entrySubtitle(count: presetCount),
+              subtitle: t.settings.provider.entrySubtitle(
+                n: presetCount,
+                count: presetCount,
+              ),
               onTap: () => _push(context, const ProviderListPage()),
             ),
             const SizedBox(height: SimpleSpacing.sMd),
             // 2. 外观
-            SimpleSettingCard(
+            context.lmUi.settingCard(
+              context,
               icon: Icons.palette_outlined,
               title: t.settings.general.categories.appearance.title,
               subtitle: t.settings.general.categories.appearance.subtitle,
@@ -63,7 +65,8 @@ class GeneralSettingsPage extends ConsumerWidget {
             ),
             const SizedBox(height: SimpleSpacing.sMd),
             // 3. 语言与输入
-            SimpleSettingCard(
+            context.lmUi.settingCard(
+              context,
               icon: Icons.language_outlined,
               title: t.settings.general.categories.languageInput.title,
               subtitle: t.settings.general.categories.languageInput.subtitle,
@@ -74,7 +77,8 @@ class GeneralSettingsPage extends ConsumerWidget {
             ),
             const SizedBox(height: SimpleSpacing.sMd),
             // 4. 高级
-            SimpleSettingCard(
+            context.lmUi.settingCard(
+              context,
               icon: Icons.tune_outlined,
               title: t.settings.general.categories.advanced.title,
               subtitle: t.settings.general.categories.advanced.subtitle,
@@ -83,7 +87,8 @@ class GeneralSettingsPage extends ConsumerWidget {
             const SizedBox(height: SimpleSpacing.sLg),
             // 配置显示模式（跨页元配置，双模式恒显；页底内联区块与
             // 4 张页面对象分类卡形成视觉分层）
-            SimpleSettingSection(
+            context.lmUi.settingSection(
+              context,
               title: t.settings.general.configDisplayMode.title,
               child: const ConfigDisplayModeSection(),
             ),

@@ -65,6 +65,18 @@ void main() {
     });
   });
 
+  group('positiveOrNullOrNull（累计器分项落 summary 前的口径闸）', () {
+    test('正值保值', () {
+      expect(positiveOrNullOrNull(1), 1);
+      expect(positiveOrNullOrNull(152000), 152000);
+    });
+
+    test('非正值（端点未回 usage 时累计器留 0）映射 null，放行「—」/回填探针', () {
+      expect(positiveOrNullOrNull(0), isNull);
+      expect(positiveOrNullOrNull(-3), isNull);
+    });
+  });
+
   group('AgentWorkSummary styleLintHits 序列化（S4 风格漂移监测）', () {
     test('toJson：非 null 写入、null 缺省；fromJson round-trip 保值', () {
       const withHits = AgentWorkSummary(

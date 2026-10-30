@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/core/theme/simple/components/simple_message_bubble.dart';
+import 'package:lmstory/core/theme/system/structures/classic/conversation/simple_message_bubble.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/services/simple_failure_classifier.dart';
 import 'package:lmstory/i18n/strings.g.dart';

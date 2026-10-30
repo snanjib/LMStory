@@ -42,6 +42,8 @@ class Template {
     required this.createdAt,
     required this.updatedAt,
     this.isBuiltIn = false,
+    this.nameEn,
+    this.contentEn,
   });
 
   final String templateId;
@@ -49,6 +51,13 @@ class Template {
   final TemplateKind kind;
   final String content;
   final bool isBuiltIn;
+
+  /// 英文名（内置模板双语；NULL = 无英文版，回退 [name]）。
+  /// 显示与运行时消费的本地化口径见 presentation/support/template_l10n.dart。
+  final String? nameEn;
+
+  /// 英文正文（内置模板双语；NULL = 无英文版，回退 [content]）。
+  final String? contentEn;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -57,6 +66,8 @@ class Template {
     TemplateKind? kind,
     String? content,
     bool? isBuiltIn,
+    String? nameEn,
+    String? contentEn,
     DateTime? updatedAt,
   }) =>
       Template(
@@ -65,6 +76,8 @@ class Template {
         kind: kind ?? this.kind,
         content: content ?? this.content,
         isBuiltIn: isBuiltIn ?? this.isBuiltIn,
+        nameEn: nameEn ?? this.nameEn,
+        contentEn: contentEn ?? this.contentEn,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
       );

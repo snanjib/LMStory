@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/simple/components/simple_app_bar.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
@@ -30,9 +29,9 @@ class WikiPageScaffold extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: context.scaffoldBgOf(colors.bg),
-      appBar: SimpleAppBar(title: title),
+      appBar: context.lmUi.appBar(context, title: title),
       body: LmMeasure(
-        maxWidth: LmLayout.listMeasure,
+        maxWidth: LmLayout.readingMeasure,
         child: ListView.separated(
           padding: const EdgeInsets.fromLTRB(
             SimpleSpacing.sLg,

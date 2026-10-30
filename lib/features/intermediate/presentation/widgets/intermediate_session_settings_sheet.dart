@@ -7,12 +7,13 @@ import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/config/intermediate_prompts.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/intermediate_setting_card.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
@@ -34,6 +35,7 @@ import 'package:lmstory/features/story_runtime/presentation/widgets/seed_resourc
 import 'package:lmstory/features/story_runtime/presentation/widgets/session_settings_fields.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
 import 'package:lmstory/features/templates/domain/repositories/template_repository.dart';
+import 'package:lmstory/features/templates/presentation/support/template_l10n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 中级模式会话设置面板（夜航主题，独立组件）。
@@ -375,12 +377,13 @@ class _IntermediateSessionSettingsSheetState
   }
 
   void _onTemplateSelected(Template template) {
-    _systemPromptController.text = template.content;
+    final content = template.localizedContent(Translations.of(context));
+    _systemPromptController.text = content;
     _systemPromptController.selection = TextSelection.fromPosition(
-      TextPosition(offset: template.content.length),
+      TextPosition(offset: content.length),
     );
     _pushUpdate(
-      _session.copyWith(systemPromptOverride: template.content),
+      _session.copyWith(systemPromptOverride: content),
     );
   }
 
@@ -983,6 +986,9 @@ class _IntermediateSessionSettingsSheetState
                       // ── 底部：前往全局设置链接 ──
                       const SizedBox(height: IntermediateSpacing.sXl),
                       _buildGlobalSettingsLink(t, colors),
+                      const AdvancedLevelHint(
+                        surfaceId: ConfigVisibilitySurfaces.storyPanel,
+                      ),
                       SizedBox(
                         height: MediaQuery.of(context).viewInsets.bottom +
                             MediaQuery.of(context).padding.bottom +
@@ -1088,7 +1094,9 @@ class _IntermediateSessionSettingsSheetState
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: IntermediateSpacing.sXs),
-        IntermediateSettingCard(
+        context.lmUi.settingCard(
+          context,
+          narrative: true,
           icon: Icons.smart_toy_outlined,
           title: t.intermediate.chat.sessionSettings.suggestReplyModel,
           subtitle: subtitle,
@@ -1659,33 +1667,12 @@ class _IntermediateSessionSettingsSheetState
   ) {
     return Padding(
       padding: const EdgeInsets.all(IntermediateSpacing.sLg),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  t.intermediate.chat.sessionSettings.title,
-                  style:
-                      IntermediateTextStyles.title.copyWith(color: colors.ink),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (isGenerating) ...[
-                  const SizedBox(height: IntermediateSpacing.s2xs),
-                  Text(
-                    t.intermediate.chat.sessionSettings.generatingDisabled,
-                    style: IntermediateTextStyles.caption
-                        .copyWith(color: colors.faint),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ],
-            ),
-          ),
+      child: PanelHeading(
+        title: t.intermediate.chat.sessionSettings.title,
+        subtitle: isGenerating
+            ? t.intermediate.chat.sessionSettings.generatingDisabled
+            : null,
+        actions: [
           _buildCollapseToggleButton(
             colors: colors,
             icon: Icons.unfold_less_rounded,

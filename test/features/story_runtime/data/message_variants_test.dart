@@ -336,4 +336,171 @@ void main() {
     final variants = await service.loadMessageVariants(sessionId);
     expect(variants[1], isNull, reason: '删轮后变体随之物理删除');
   });
+
+  test('编辑助手消息 → message 行与当前变体行同改，切换器往返不回退', () async {
+    final sessionId = await seedRound(content: '第一版正文。');
+    await service.persistRound(
+      userMessage: ChatMessage(
+        messageId: 'u1x',
+        sessionId: sessionId,
+        role: 'user',
+        content: '推进剧情',
+        createdAt: DateTime(2026),
+      ),
+      assistantMessage: ChatMessage(
+        messageId: 'a1x',
+        sessionId: sessionId,
+        role: 'assistant',
+        content: '第一版正文。',
+        createdAt: DateTime(2026),
+      ),
+      eventSummary: const EventSummary(
+        summary: '第一轮',
+        importance: 3,
+        tags: [],
+        turnNumber: 1,
+      ),
+      embedding: null,
+      artifacts: StoryRoundArtifacts(
+        sessionId: sessionId,
+        turnNumber: 1,
+        createdAt: DateTime(2026),
+        replyText: '第一版正文。',
+      ),
+    );
+    await service.snapshotMessageVariant(
+      sessionId: sessionId,
+      turnNumber: 1,
+      content: '第一版正文。',
+      sourceInput: '推进剧情',
+      process: StoryRoundArtifacts(
+        sessionId: sessionId,
+        turnNumber: 1,
+        createdAt: DateTime(2026),
+        replyText: '第一版正文。',
+      ),
+    );
+    await chatRepo.deleteMessage('a1x');
+    await service.persistRegeneratedRound(
+      assistantMessage: ChatMessage(
+        messageId: 'a2x',
+        sessionId: sessionId,
+        role: 'assistant',
+        content: '第二版正文。',
+        createdAt: DateTime(2026),
+      ),
+      eventSummary: const EventSummary(
+        summary: '第一轮（重生成）',
+        importance: 3,
+        tags: [],
+        turnNumber: 1,
+      ),
+      embedding: null,
+      artifacts: StoryRoundArtifacts(
+        sessionId: sessionId,
+        turnNumber: 1,
+        createdAt: DateTime(2026),
+        replyText: '第二版正文。',
+      ),
+      recordVariant: true,
+      variantSourceInput: '推进剧情',
+    );
+    // 指针指向第二版（variant 1）
+
+    final saved = await service.updateAssistantContentAndCurrentVariant(
+      sessionId: sessionId,
+      turnNumber: 1,
+      assistantMessageId: 'a2x',
+      newContent: '用户改写的正文。',
+    );
+    expect(saved, isTrue);
+
+    // message 行 = 新内容（所见=所存）
+    var messages = await chatRepo.getMessages(sessionId);
+    expect(
+      messages.firstWhere((m) => m.messageId == 'a2x').content,
+      '用户改写的正文。',
+    );
+    // 当前指针变体行同步；非当前变体（旧版）不动
+    final variants = await service.loadMessageVariants(sessionId);
+    expect(variants[1]![0].content, '第一版正文。');
+    expect(variants[1]![1].content, '用户改写的正文。');
+
+    // 切换器往返：切到旧版再切回，编辑不被回退
+    expect(
+      await service.switchMessageVariant(
+        sessionId: sessionId,
+        turnNumber: 1,
+        variantIndex: 0,
+        assistantMessageId: 'a2x',
+      ),
+      isTrue,
+    );
+    expect(
+      await service.switchMessageVariant(
+        sessionId: sessionId,
+        turnNumber: 1,
+        variantIndex: 1,
+        assistantMessageId: 'a2x',
+      ),
+      isTrue,
+    );
+    messages = await chatRepo.getMessages(sessionId);
+    expect(
+      messages.firstWhere((m) => m.messageId == 'a2x').content,
+      '用户改写的正文。',
+      reason: '往返后用户编辑仍在（当前变体行已同步）',
+    );
+  });
+
+  test('无变体轮编辑助手消息：仅改 message 行，等价旧路径', () async {
+    final sessionId = await seedRound(content: '只有一版。');
+    await service.persistRound(
+      userMessage: ChatMessage(
+        messageId: 'u2x',
+        sessionId: sessionId,
+        role: 'user',
+        content: '推进',
+        createdAt: DateTime(2026),
+      ),
+      assistantMessage: ChatMessage(
+        messageId: 'a3x',
+        sessionId: sessionId,
+        role: 'assistant',
+        content: '只有一版。',
+        createdAt: DateTime(2026),
+      ),
+      eventSummary: const EventSummary(
+        summary: '第一轮',
+        importance: 3,
+        tags: [],
+        turnNumber: 1,
+      ),
+      embedding: null,
+      artifacts: StoryRoundArtifacts(
+        sessionId: sessionId,
+        turnNumber: 1,
+        createdAt: DateTime(2026),
+        replyText: '只有一版。',
+      ),
+    );
+
+    final saved = await service.updateAssistantContentAndCurrentVariant(
+      sessionId: sessionId,
+      turnNumber: 1,
+      assistantMessageId: 'a3x',
+      newContent: '编辑后的一版。',
+    );
+    expect(saved, isTrue);
+    final messages = await chatRepo.getMessages(sessionId);
+    expect(
+      messages.firstWhere((m) => m.messageId == 'a3x').content,
+      '编辑后的一版。',
+    );
+    expect(
+      await service.loadMessageVariants(sessionId),
+      isEmpty,
+      reason: '无变体轮不产生变体行',
+    );
+  });
 }

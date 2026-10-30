@@ -72,8 +72,7 @@ void main() {
   }
 
   group('DirectorSettingsPage 配置显示模式过滤', () {
-    testWidgets('1. 简单模式：规则+记忆区壳（D-C13），入口开关与模型区保留，折叠批操作隐藏',
-        (tester) async {
+    testWidgets('1. 简单模式：规则+记忆区壳（D-C13），入口开关与模型区保留，折叠批操作隐藏', (tester) async {
       await pumpPage(tester, level: ConfigLevel.simple);
 
       expect(find.text('项目规则'), findsOneWidget);
@@ -149,8 +148,7 @@ void main() {
       expect(saved, containsAll(['budget', 'memory']));
     });
 
-    testWidgets('5. 简单模式记忆区（D-C13）：向量化模型行保留，记忆管线技术行隐藏',
-        (tester) async {
+    testWidgets('5. 简单模式记忆区（D-C13）：向量化模型行保留，记忆管线技术行隐藏', (tester) async {
       // focusSection 展开记忆区（同会话横幅「去配置」深链口径），
       // 简单模式下区内仅向量化模型行（simple），其余行 advanced 隐藏。
       await pumpPage(

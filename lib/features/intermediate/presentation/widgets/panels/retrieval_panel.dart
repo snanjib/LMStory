@@ -2,13 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
-import 'package:lmstory/core/theme/intermediate/components/factual_detail_dialog.dart';
-import 'package:lmstory/core/theme/intermediate/components/history_panel_shell.dart';
-import 'package:lmstory/core/theme/intermediate/components/memory_detail_dialog.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/factual_detail_dialog.dart';
+import 'package:lmstory/core/theme/system/structures/classic/narrative/memory_detail_dialog.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
@@ -23,7 +22,7 @@ import 'package:lmstory/i18n/strings.g.dart';
 /// - 完成：先展开 [foldDelayMs] 毫秒展示命中结果列表（stagger 淡入），
 ///   然后自动折叠为 "▸ 找到 N 条相关经历"；用户点击可重新展开/折叠
 /// - 失败：AnimatedOpacity + 灰度滤镜（300ms ease-out，DOC-06B §5.3）+ 重试按钮
-/// - 历史态（[artifacts] != null）：用 [HistoryPanelShell] 渲染，默认折叠、
+/// - 历史态（[artifacts] != null）：用 HistoryPanelShell 渲染，默认折叠、
 ///   muted 箭头、入场淡入、无 stagger 淡入、无失败态/无重试按钮
 ///
 /// 自动折叠时序（DOC-09B §7.3）、检索结果 stagger 淡入（DOC-06B §5.3）、
@@ -231,7 +230,7 @@ class _RetrievalPanelState extends State<RetrievalPanel> {
     );
   }
 
-  /// 历史态渲染：用 [HistoryPanelShell] 容器 + 记忆列表展开内容。
+  /// 历史态渲染：用 HistoryPanelShell 容器 + 记忆列表展开内容。
   ///
   /// DOC-11 §6.1 扩展：记忆列表之后追加【相关事实】分区，
   /// 展示事实类命中实体（按类型分组），点击实体可弹出 [FactualDetailDialog]。
@@ -267,7 +266,8 @@ class _RetrievalPanelState extends State<RetrievalPanel> {
       }
     }
 
-    return HistoryPanelShell(
+    return context.lmUi.historyPanelShell(
+      context,
       key: ValueKey('history-retrieval-${artifacts.turnNumber}'),
       summary: summary,
       animateEntrance: false,
@@ -284,7 +284,7 @@ class _RetrievalPanelState extends State<RetrievalPanel> {
   /// 历史记忆条目（与 _StaggeredMemoryItem 静态部分相同，无 AnimatedOpacity）
   ///
   /// 点击记忆文本可弹出 [MemoryDetailDialog] 查看 5W1E 详情（v0.2 Phase C
-  /// 方案二，2026-07-19 新增）。注意：父级 [HistoryPanelShell] 不消费 tap，
+  /// 方案二，2026-07-19 新增）。注意：父级 HistoryPanelShell 不消费 tap，
   /// 因此这里的 InkWell 不会与外部展开/折叠逻辑冲突。
   Widget _buildHistoryMemoryItem(
     LmPalette colors,
@@ -312,7 +312,13 @@ class _RetrievalPanelState extends State<RetrievalPanel> {
               borderRadius:
                   BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
               child: Text(
-                m.displayText,
+                m.formatDisplayText(
+                  emptyPlaceholder: Translations.of(context)
+                      .intermediate
+                      .chat
+                      .memoryDetail
+                      .empty,
+                ),
                 style: IntermediateTextStyles.caption.copyWith(
                   color: colors.ink,
                 ),
@@ -919,7 +925,13 @@ class _StaggeredMemoryItemState extends State<_StaggeredMemoryItem> {
                 borderRadius:
                     BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
                 child: Text(
-                  m.displayText,
+                  m.formatDisplayText(
+                    emptyPlaceholder: Translations.of(context)
+                        .intermediate
+                        .chat
+                        .memoryDetail
+                        .empty,
+                  ),
                   style: IntermediateTextStyles.caption.copyWith(
                     color: colors.ink,
                   ),

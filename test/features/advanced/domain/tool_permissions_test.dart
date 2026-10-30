@@ -12,6 +12,21 @@ void main() {
       expect(e, ToolPermissionState.allow);
     });
 
+    test('会话未设置（NULL）= 监督关：不继承全局 ask/deny，全 allow 运行', () {
+      for (final tool in ToolPermissions.allTools) {
+        final e = ToolPermissions.effective(
+          session: null,
+          global: const {
+            'update_facts': 'ask',
+            'spawn': 'ask',
+            'read_skill': 'deny',
+          },
+          toolName: tool,
+        );
+        expect(e, ToolPermissionState.allow, reason: tool);
+      }
+    });
+
     test('全局 deny 被会话 allow 覆盖（逐工具后写优先）', () {
       final e = ToolPermissions.effective(
         session: const {'update_facts': 'allow'},

@@ -13,22 +13,21 @@
 
          This Theme is only used starting with V2 of Flutter's Android embedding. -->
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
-        <!-- Window background aligned with the default appearance's light
-             variant lightBg = #F4F5F7. Single source in
-             lib/core/theme/system/palettes/classic/classic_palette.dart,
-             kept in sync by test/core/theme/t10_android_window_bg_guard_test.dart.
+        <!-- T10-4：窗口背景对齐**默认外观**（classic 结构 + classic 配色）的日间档
+             lightBg = #F4F5F7。单源在
+             lib/core/theme/system/palettes/classic/classic_palette.dart，
+             由 test/core/theme/t10_android_window_bg_guard_test.dart 锁死同源。
 
-             A cold-start first frame can only use one static value and cannot
-             follow the runtime-selected palette/structure, so aligning with
-             the default appearance is the only deterministic choice. Users of
-             other palettes/structures may briefly see the classic background
-             at cold start (far better than the previous hardcoded dark
-             blue-purple sitting on the light theme).
+             此前硬编码 #0A0E27（深蓝紫）却挂在日间档上 —— 明亮模式冷启动背后
+             是深色，且它是脱离配色系统的自造色。
 
-             The Android 12+ SplashScreen API is not enabled (no values-v31
-             override), so the system splash takes this theme's
-             android:windowBackground and is already covered by
-             @drawable/launch_background. -->
+             冷启动首帧只能用一个静态值，无法跟随运行时选中的配色族/结构，
+             对齐默认外观是唯一确定且正确的选择。波尔多/琉璃用户冷启动仍会
+             见到经典配色一瞬，属可接受（远好过现在的深蓝紫）。
+
+             Android 12+ 的 SplashScreen API 未显式启用（无 values-v31 覆写），
+             系统启动画面直接取本主题的 android:windowBackground，
+             故已被 @drawable/launch_background 一并覆盖。 -->
         <item name="android:windowBackground">#F4F5F7</item>
     </style>
 </resources>

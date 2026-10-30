@@ -27,7 +27,8 @@ void main() {
       ),
     );
 
-    expect(find.text('限流等待中 · '), findsOneWidget);
+    // 批 F：徽标并入进度文案（cause=null 未知原因 + 无 max → 旧两段式；
+    // ShimmerText 单体渲染倒计时行）
     expect(find.text('10s 后第 2 次重试'), findsOneWidget);
 
     // 前进 2 秒：倒计时按锚点递减（10s → 8s）

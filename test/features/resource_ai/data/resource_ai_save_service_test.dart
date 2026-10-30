@@ -121,7 +121,10 @@ void main() {
         .withField(CardField.description, '剑客');
 
     test('新建：buildCardJson + create(sourceFormat v2)，返回新 id', () async {
-      final id = await service.saveCharacterCard(draft: draft);
+      final id = await service.saveCharacterCard(
+        draft: draft,
+        defaultName: '未命名角色卡',
+      );
       expect(id, 'card-0');
       final saved = repo.cards.single;
       expect(saved.name, '阿尔');
@@ -131,12 +134,38 @@ void main() {
       expect(repo.updates, isEmpty, reason: '新建不走 update');
     });
 
+    test('空名兜底由调用方传入默认名落库', () async {
+      final emptyDraft =
+          CardDraft.initial().withField(CardField.description, '无名');
+
+      await service.saveCharacterCard(
+        draft: emptyDraft,
+        defaultName: '未命名角色卡',
+      );
+      expect(repo.cards.single.name, '未命名角色卡');
+
+      await service.saveCharacterCard(
+        draft: emptyDraft,
+        defaultName: 'Untitled character card',
+      );
+      expect(repo.cards.last.name, 'Untitled character card');
+
+      await service.saveWorldbook(
+        draft: WorldbookDraft.initial(),
+        defaultName: 'Untitled worldbook',
+      );
+      expect(repo.books.last.name, 'Untitled worldbook');
+    });
+
     test('编辑+另存：与新建同路径（新 id，不动原卡）', () async {
       final original = await repo.createCharacterCard(
         name: '旧卡',
         rawJson: '{"spec":"chara_card_v2"}',
       );
-      final id = await service.saveCharacterCard(draft: draft);
+      final id = await service.saveCharacterCard(
+        draft: draft,
+        defaultName: '未命名角色卡',
+      );
       expect(id, isNot(original.cardId));
       expect(repo.cards, hasLength(2));
     });
@@ -154,6 +183,7 @@ void main() {
         draft: draft,
         existingCardId: original.cardId,
         originalRawJson: originalRawJson,
+        defaultName: '未命名角色卡',
       );
 
       expect(id, original.cardId);
@@ -176,6 +206,7 @@ void main() {
     test('空名落默认名', () async {
       await service.saveCharacterCard(
         draft: CardDraft.initial().withField(CardField.description, 'x'),
+        defaultName: '未命名角色卡',
       );
       expect(repo.cards.single.name, isNotEmpty);
     });
@@ -187,7 +218,10 @@ void main() {
         );
 
     test('新建：buildWorldbookJson + create，返回新 id', () async {
-      final id = await service.saveWorldbook(draft: draft);
+      final id = await service.saveWorldbook(
+        draft: draft,
+        defaultName: '未命名世界书',
+      );
       expect(id, 'book-0');
       final saved = repo.books.single;
       expect(saved.name, '剑的世界');
@@ -209,6 +243,7 @@ void main() {
         draft: draft,
         existingBookId: original.bookId,
         originalRawJson: originalRawJson,
+        defaultName: '未命名世界书',
       );
 
       expect(id, original.bookId);

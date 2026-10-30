@@ -1,14 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
+import 'package:lmstory/core/theme/api/lm_motion_profile.dart';
+import 'package:lmstory/core/theme/shared/components/composer_surface.dart';
+import 'package:lmstory/core/theme/shared/components/navigation_card_content.dart';
+import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/theme/system/structures/brutal/brutal_factories.dart';
 import 'package:lmstory/core/theme/system/structures/brutal/brutal_materials.dart';
 import 'package:lmstory/core/theme/system/structures/brutal/brutal_radii.dart';
 import 'package:lmstory/core/theme/system/structures/brutal/brutal_text_styles.dart';
+import 'package:lmstory/core/theme/system/structures/classic/classic_components.dart';
 
-class BrutalComponents implements LmComponentKit {
+/// Extends [ClassicComponents] so undifferentiated surfaces keep the
+/// established look; overrides carry the brutal differentiation.
+class BrutalComponents extends ClassicComponents {
   const BrutalComponents();
+
+  @override
+  LmMotionProfile get motionProfile => const LmMotionProfile(
+        enterOffset: Offset(4, 0),
+        hoverOffset: Offset(1, 0),
+        pressScale: 1,
+        activityRadius: 0,
+        curve: LmMotion.linear,
+      );
 
   @override
   double radius(LmCorner corner) => 0;
@@ -51,47 +67,22 @@ class BrutalComponents implements LmComponentKit {
     bool narrative = false,
     bool enabled = true,
   }) {
-    final palette = context.lm.palette;
     return Opacity(
       opacity: enabled ? 1 : 0.5,
-      child: BrutalCard(
-        onTap: enabled ? onTap : null,
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: palette.primaryDim,
-                borderRadius: BorderRadius.circular(BrutalRadii.cornerNone),
-              ),
-              child: Icon(icon, color: palette.primary, size: 20),
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        child: BrutalCard(
+          onTap: enabled ? onTap : null,
+          child: NavigationCardContent(
+            icon: icon,
+            title: title,
+            subtitle: subtitle,
+            titleStyle: BrutalTextStyles.body.copyWith(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: BrutalTextStyles.body.copyWith(color: palette.ink),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    subtitle,
-                    style: BrutalTextStyles.caption.copyWith(
-                      color: palette.muted,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right, size: 20, color: palette.faint),
-          ],
+          ),
         ),
       ),
     );
@@ -217,6 +208,18 @@ class BrutalComponents implements LmComponentKit {
     bool narrative = false,
   }) {
     final palette = context.lm.palette;
+    if (narrative) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isUser ? palette.primaryDim : Colors.transparent,
+          border: isUser
+              ? Border.all(color: BrutalMaterials.frameOf(palette))
+              : null,
+        ),
+        child: child,
+      );
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -247,16 +250,10 @@ class BrutalComponents implements LmComponentKit {
     bool narrative = false,
   }) {
     final palette = context.lm.palette;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: palette.surfaceElevated,
-        border: Border(
-          top: BorderSide(
-            color: BrutalMaterials.frameOf(palette),
-            width: BrutalRadii.frameCard,
-          ),
-        ),
-      ),
+    return ComposerSurface(
+      color: palette.surfaceElevated,
+      borderColor: BrutalMaterials.frameOf(palette),
+      borderWidth: BrutalRadii.frameCard,
       child: child,
     );
   }

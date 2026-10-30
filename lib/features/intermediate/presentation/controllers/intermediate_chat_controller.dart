@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/config/output_token_policy.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/llm/context_overflow.dart';
 import 'package:lmstory/core/network/http_client.dart' show CancellationToken;
-import 'package:lmstory/core/network/retry_after.dart';
+import 'package:lmstory/core/network/retry_policy.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/throttled_delta_buffer.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
@@ -214,6 +215,10 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// 无状态纯决策：最大重试次数查询、阶段映射、延迟计算、状态清理、格式提醒。
   /// 重试编排（设置 state / 降级标志 / 重跑阶段）留在控制器。
   final RetryScheduler _retryScheduler = const RetryScheduler();
+
+  /// 本轮自动重试累计纯等待（2026-10-15 批 E / P6 预算闸：累计超 90s
+  /// 提前放弃，防 5 连长冷却纯等约 5 分钟；新一轮清零）
+  Duration _retryWaitTotal = Duration.zero;
 
   /// 关键词提取阶段处理器（Phase 6 Step 6.2 新增）
   ///
@@ -540,7 +545,12 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
         namingConfig: namingConfig,
         contextWindow: state.contextWindowTokens ??
             ConfigurationResolver.defaultContextWindow,
-        maxTokens: OutputTokenPolicy.compactionLimit,
+        // 输出帽与轮前压缩同源：按会话配置与实际执行模型上限钳制，
+        // 防止固定帽超过小输出模型上限被严格端点拒绝。
+        maxTokens: _outputTokenReserveFor(
+          resolvedSettings.settings.maxTokens,
+          modelMaxOutput: namingConfig.maxOutputTokens,
+        ),
         budget: budget,
         connectTimeout: timeouts.connectTimeout,
         readTimeout: timeouts.readTimeout,
@@ -680,19 +690,84 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// 记录本轮主请求的真实 usage（上下文用量指示）
   ///
   /// generating 与 reviewing 两处调用：reviewing 启用时后写覆盖前写，
-  /// 环形指示器对齐上下文最全的那次请求；端点未回 usage（null）跳过。
-  /// 会话累计（缓存命中率分母分子）同批累加，重进会话后归零重算。
-  void _recordRequestUsage(LlmUsage? usage) {
-    if (usage == null || usage.promptTokens == null) return;
+  /// 环形指示器对齐上下文最全的那次请求。会话累计（缓存命中率分母分子）
+  /// 同批累加，重进会话后归零重算。
+  ///
+  /// 兜底（内测反馈「面板全是 —」）：端点未回 usage 时用 tiktoken 本地
+  /// 估算 prompt/completion 写入并置 lastUsageIsEstimated，详情面板加
+  /// 「≈」标注。缓存分项本地不可估算，显式清 null（面板「—」）；估算值
+  /// 不进会话累计——命中率口径只吃端点真实数据。无任何可估来源（流异常
+  /// 截断且 payload 缺失）时保持现状。
+  Future<void> _recordRequestUsage(
+    LlmUsage? usage, {
+    List<String> promptTexts = const [],
+    String completionText = '',
+  }) async {
+    if (usage != null && usage.promptTokens != null) {
+      state = state.copyWith(
+        lastPromptTokens: usage.promptTokens,
+        lastCompletionTokens: usage.completionTokens,
+        lastCacheReadTokens: usage.cacheReadTokens,
+        lastUsageIsEstimated: false,
+        contextPromptTokensTotal:
+            state.contextPromptTokensTotal + usage.promptTokens!,
+        contextCacheReadTokensTotal:
+            state.contextCacheReadTokensTotal + (usage.cacheReadTokens ?? 0),
+      );
+      return;
+    }
+    final promptTokens = promptTexts.isEmpty
+        ? null
+        : await _tokenCounter.countTokensForMessages(promptTexts);
+    final completionTokens = completionText.isEmpty
+        ? null
+        : await _tokenCounter.countTokens(completionText);
+    if (promptTokens == null && completionTokens == null) return;
     state = state.copyWith(
-      lastPromptTokens: usage.promptTokens,
-      lastCompletionTokens: usage.completionTokens,
-      lastCacheReadTokens: usage.cacheReadTokens,
-      contextPromptTokensTotal:
-          state.contextPromptTokensTotal + usage.promptTokens!,
-      contextCacheReadTokensTotal:
-          state.contextCacheReadTokensTotal + (usage.cacheReadTokens ?? 0),
+      lastPromptTokens: promptTokens,
+      lastCompletionTokens: completionTokens,
+      // 上一轮的端点真实缓存分项不得与本轮估算值混排（口径错位）
+      lastCacheReadTokens: null,
+      lastUsageIsEstimated: true,
     );
+  }
+
+  /// 测试直通：估算兜底逻辑走真实生成管线才能触达（HTTP/SSE 集成面），
+  /// 单元测试经此入口驱动 [_recordRequestUsage]。
+  @visibleForTesting
+  Future<void> recordRequestUsageForTest(
+    LlmUsage? usage, {
+    List<String> promptTexts = const [],
+    String completionText = '',
+  }) {
+    return _recordRequestUsage(
+      usage,
+      promptTexts: promptTexts,
+      completionText: completionText,
+    );
+  }
+
+  /// 请求 payload 的文本内容列表（估算兜底取数）：content 为字符串的
+  /// 消息原样取用，多模态数组只收 text 段，其余跳过。
+  /// 实例方法（非静态）——phases extension 对本类静态成员须类型限定，
+  /// 实例成员则可裸引。
+  List<String> _promptTextsForEstimate(
+    List<Map<String, dynamic>> messages,
+  ) {
+    final texts = <String>[];
+    for (final message in messages) {
+      final content = message['content'];
+      if (content is String) {
+        texts.add(content);
+      } else if (content is List) {
+        for (final part in content) {
+          if (part is Map && part['text'] is String) {
+            texts.add(part['text'] as String);
+          }
+        }
+      }
+    }
+    return texts;
   }
 
   /// 加载按最新 CompactionPoint 过滤后的消息列表（2026-08-04 新增）
@@ -936,8 +1011,12 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// （对齐 DOC-09A-2 §6.5）。persist 成功后清空（已落入 state.messages），
   /// 失败时保留（clearTemporary 不清空本字段）。
   Future<void> sendMessage(String userInput) async {
-    // 守卫：非 idle 状态忽略（DOC-09C §3 单会话串行）
-    if (state.phase != IntermediatePhase.idle) return;
+    // 守卫：非 idle/failed 状态忽略（DOC-09C §3 单会话串行）。
+    // failed 放行直发新消息——放弃失败轮不必先清空。
+    if (state.phase != IntermediatePhase.idle &&
+        state.phase != IntermediatePhase.failed) {
+      return;
+    }
     // 守卫：手动压缩以压缩事务为先（上下文用量指示 §4.3）
     if (state.isManualCompacting) return;
     // 守卫：停止中不允许启动新轮次（防止与后台 cancel 竞态）
@@ -945,6 +1024,13 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     // 守卫：重生成/编辑重发「准备中」窗口（快照/删除/回滚多个 await）
     // 内 phase 仍为 idle——此窗口发送新消息会与随后的状态覆写互踩两轮。
     if (state.isPreparingRegenerate) return;
+
+    // failed 态直发：先事务性清掉失败轮残留（旧 pending 气泡/半截快照/
+    // 流式缓冲/失败上下文/_round），不留幽灵态再走正常首发链。
+    if (state.phase == IntermediatePhase.failed) {
+      _round = null;
+      state = state.clearTemporary().copyWith(pendingUserMessage: null);
+    }
 
     // 草稿会话检查：首次发送消息时创建真实会话
     if (isDraftSession) {
@@ -1077,6 +1163,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     //    UI 仍显示压缩提示
     // 现在统一初始化为 extracting：只有 _runCompactionPhase 确认要压缩时
     // 才切到 compacting，未触发压缩时用户完全看不到压缩提示。
+    _retryWaitTotal = Duration.zero; // 新轮预算闸累计清零（批 E）
     state = state.copyWith(
       phase: IntermediatePhase.extracting,
       failureContext: null,
@@ -1238,6 +1325,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
         );
         return;
       }
+      _retryWaitTotal = Duration.zero;
       _round = RoundContext(
         userInput: roundInput,
         history: history,
@@ -1534,7 +1622,12 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   // _computeTurnNumber / _removeArtifactsFromTurn / clearRound
   // 已拆分到 intermediate_chat_controller_messages.dart
 
-  /// 取消：停止 SSE + 清理临时状态 -> idle（不进 failed，DOC-09C §3）
+  /// 取消：停止 SSE + 清理临时状态（DOC-09C §3）
+  ///
+  /// 生成/审查流式中途停止且正文已流出时，不再丢弃半截正文——与失败
+  /// 路径同款快照通路：进「已停止」failed 态，保留未完成稿件卡与
+  /// 「以此收稿/续写」出口（失败栏文案区分：手动停止非错误）。其余
+  /// 阶段（提取/摘要/压缩/持久化）无正文可保，维持清场回 idle 行为。
   ///
   /// 同时清空 pendingUserMessage（气泡消失），保留 userInput 供页面层
   /// 回写到输入框（用户无需重新打字）。
@@ -1561,6 +1654,46 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     // 压缩阶段（无流式订阅）的停止走压缩令牌
     _activeCompactionToken?.cancel();
 
+    // 正文快照优先 streamingGenerated（review-on 生成草稿——中断时即
+    // 正文最完整形态），回退 streamingReply（review-off 直写/审查修正稿），
+    // 与 _fail 的快照口径一致。
+    final stoppedPhase = state.phase;
+    final partial = switch (stoppedPhase) {
+      IntermediatePhase.generating ||
+      IntermediatePhase.generatingRetry ||
+      IntermediatePhase.reviewing ||
+      IntermediatePhase.reviewingRetry =>
+        _firstNonEmpty(
+          state.streamingGenerated,
+          state.streamingReply,
+        ),
+      _ => null,
+    };
+    if (partial != null && partial.isNotEmpty && _round != null) {
+      // 保留路径：_round 不清（收稿/续写出口依赖），pending 气泡保留
+      //（与失败态呈现同构）；失败阶段归一到 generating/reviewing 基础
+      // 相位（收稿守卫 canAcceptPartialReply 只认基础相位）。
+      final failedPhase = stoppedPhase == IntermediatePhase.reviewing ||
+              stoppedPhase == IntermediatePhase.reviewingRetry
+          ? IntermediatePhase.reviewing
+          : IntermediatePhase.generating;
+      state = state.clearTemporary().copyWith(
+            phase: IntermediatePhase.failed,
+            failureContext: FailureContext(
+              errorCode: 'user_stopped',
+              failedPhase: failedPhase,
+              errorMessage: t.intermediate.chat.failure.stopped,
+              retryable: true,
+            ),
+            partialReplySnapshot: partial,
+            isStopping: true,
+          );
+      unawaited(
+        _waitForCancelCompletion(cancelFuture, resetStreamAfter: true),
+      );
+      return;
+    }
+
     _round = null;
     state = state.clearTemporary().copyWith(
           pendingUserMessage: null,
@@ -1575,11 +1708,22 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// 后台等待 `_streamRunner.cancel` 的 Future 完成，然后清除 isStopping。
   ///
   /// 使用 3 秒超时兜底，防止 subscription.cancel() 卡住导致永久 stopping。
-  Future<void> _waitForCancelCompletion(Future<void> cancelFuture) async {
+  ///
+  /// [resetStreamAfter]：停止保留半截正文的分支置 true——订阅取消完成后
+  /// 复位流式取消标志（先于 isStopping 清除，避免 UI 见到可交互态时标志
+  /// 仍拦截事件）；否则收稿/续写等出口不经 _prepareAndRunRound，其后续
+  /// 流式事件会被残留的取消标志全部丢弃。
+  Future<void> _waitForCancelCompletion(
+    Future<void> cancelFuture, {
+    bool resetStreamAfter = false,
+  }) async {
     try {
       await cancelFuture.timeout(const Duration(seconds: 3));
     } catch (_) {
       // 超时或异常都视为清理完成
+    }
+    if (resetStreamAfter) {
+      _streamRunner.resetCancelled();
     }
     if (state.isStopping) {
       state = state.copyWith(isStopping: false);
@@ -1675,6 +1819,41 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     if (_backgroundInterrupted ||
         (isStreamingPhase && !_streamRunner.isStreaming)) {
       _backgroundInterrupted = false;
+      // 生成/审查流式中断且正文已流出：与手动停止同款保留半截正文——
+      // 进「已停止」failed 态而非清场回 idle（失败栏给收稿/续写出口）。
+      final interruptedPhase = state.phase;
+      final partial = switch (interruptedPhase) {
+        IntermediatePhase.generating ||
+        IntermediatePhase.generatingRetry ||
+        IntermediatePhase.reviewing ||
+        IntermediatePhase.reviewingRetry =>
+          _firstNonEmpty(
+            state.streamingGenerated,
+            state.streamingReply,
+          ),
+        _ => null,
+      };
+      if (partial != null && partial.isNotEmpty && _round != null) {
+        final failedPhase = interruptedPhase == IntermediatePhase.reviewing ||
+                interruptedPhase == IntermediatePhase.reviewingRetry
+            ? IntermediatePhase.reviewing
+            : IntermediatePhase.generating;
+        state = state.clearTemporary().copyWith(
+              phase: IntermediatePhase.failed,
+              failureContext: FailureContext(
+                errorCode: 'user_stopped',
+                failedPhase: failedPhase,
+                errorMessage: t.intermediate.chat.failure.stopped,
+                retryable: true,
+              ),
+              partialReplySnapshot: partial,
+              // 恢复点即解除停止残留（后台 cancel 回调不会再跑）
+              isStopping: false,
+            );
+        // 出口（收稿/续写）不经 _prepareAndRunRound，同 cancel 复位标志
+        _streamRunner.resetCancelled();
+        return true;
+      }
       _round = null;
       // 清空 pendingUserMessage（气泡消失），保留 userInput 供页面层
       // 回写到输入框（用户无需重新打字）
@@ -1738,7 +1917,10 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
               );
       if (namingConfig == null) {
         // 标题模型与生成模型均不可用 → 直接走 fallback（回复前缀）
-        final title = SessionTitleGenerator.fallbackTitle(userInput);
+        final title = SessionTitleGenerator.fallbackTitle(
+          userInput,
+          defaultTitle: t.chat.draft.title,
+        );
         final written =
             await _chatRepository.updateSessionTitleIfCurrentTitleIn(
           state.session.sessionId,
@@ -1759,7 +1941,11 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
       );
 
       // LLM 失败/超时返回 null → 走 fallback（截取首条用户消息前 20 字符）
-      final title = generated ?? SessionTitleGenerator.fallbackTitle(userInput);
+      final title = generated ??
+          SessionTitleGenerator.fallbackTitle(
+            userInput,
+            defaultTitle: t.chat.draft.title,
+          );
 
       final written = await _chatRepository.updateSessionTitleIfCurrentTitleIn(
         state.session.sessionId,
