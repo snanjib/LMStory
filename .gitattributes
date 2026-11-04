@@ -1,0 +1,4 @@
+# Gradle wrapper 脚本必须使用 LF 换行。
+# 避免在 Windows 上 checkout 时被 autocrlf 转成 CRLF，
+# 导致 Mac/Linux 下执行 gradlew 时因 \r 报 "bad interpreter" 之类错误。
+gradlew text eol=lf

@@ -1,0 +1,5 @@
+// macOS 代码签名身份默认值：ad-hoc（"-"）只保证本机可跑，没有稳定代码身份，
+// 传统文件钥匙串的"始终允许"无法跨构建记忆，flutter_secure_storage 的授权弹窗
+// 每次启动都会重弹。本机执行 signing/create_local_signing.sh 生成
+// LocalSigning.xcconfig（gitignore，不属仓库）后按后者覆盖。
+CODE_SIGN_IDENTITY = -

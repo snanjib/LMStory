@@ -1,0 +1,350 @@
+# Multi-platform release pipeline. Pushing a `v*` tag builds the four
+# release assets (Android APK, Windows portable zip + installer exe,
+# macOS arm64 DMG) on three runners in parallel, then creates a DRAFT
+# GitHub Release. Publishing the draft is always a manual step.
+#
+# Asset naming: lmstory-<version>-<platform>.<ext>, each with a .sha256
+# sidecar. The tag must match pubspec.yaml's `version:` (prepare fails
+# otherwise). workflow_dispatch is the dry-run entry: it builds and
+# uploads artifacts only, never creates a Release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          pubspec_ver="$(grep -E '^version:' pubspec.yaml | head -n1 | sed -E 's/^version:[[:space:]]*//')"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            tag_ver="${GITHUB_REF_NAME#v}"
+            if [ "${tag_ver}" != "${pubspec_ver}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match pubspec version ${pubspec_ver}"
+              exit 1
+            fi
+            version="${tag_ver}"
+          else
+            version="${pubspec_ver}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  build-android:
+    name: Build Android APK
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: '3.47.7'
+          cache: true
+
+      - name: Cache pub packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Run build_runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # strings_*.g.dart is a gitignored slang artifact; the APK build
+      # compiles it in, so it must exist in this job too.
+      - name: Regenerate i18n
+        run: dart run slang
+
+      # Mirror of ci.yml's signing step (deliberate duplication, kept in
+      # sync with ci.yml): decode the keystore secret into
+      # android/key.properties, or fall back to the documented escape
+      # hatch so sanity builds never produce debug-signed output silently.
+      - name: Restore release signing
+        env:
+          LMSTORY_KEYSTORE_BASE64: ${{ secrets.LMSTORY_KEYSTORE_BASE64 }}
+          LMSTORY_KEYSTORE_PASSWORD: ${{ secrets.LMSTORY_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$LMSTORY_KEYSTORE_BASE64" ]; then
+            echo "No signing secrets configured; allowing unsigned release for CI smoke build."
+            echo "allowUnsignedRelease=true" >> android/gradle.properties
+            exit 0
+          fi
+          echo "$LMSTORY_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/lmstory-release.keystore"
+          cat > android/key.properties <<EOF
+          storeFile=$GITHUB_WORKSPACE/lmstory-release.keystore
+          storePassword=$LMSTORY_KEYSTORE_PASSWORD
+          keyAlias=lmstory-release
+          keyPassword=$LMSTORY_KEYSTORE_PASSWORD
+          EOF
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Rename and hash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mv build/app/outputs/flutter-apk/app-release.apk "lmstory-${VERSION}-android.apk"
+          sha256sum "lmstory-${VERSION}-android.apk" > "lmstory-${VERSION}-android.apk.sha256"
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-android
+          path: |
+            lmstory-*-android.apk
+            lmstory-*-android.apk.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows (portable zip + installer)
+    needs: prepare
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: '3.47.7'
+          cache: true
+
+      - name: Cache pub packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~\AppData\Local\Pub\Cache
+            .dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Run build_runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Regenerate i18n
+        run: dart run slang
+
+      - name: Build Windows app
+        run: flutter build windows --release
+
+      # Flutter does not ship the VC++ redistributable DLLs with its output;
+      # a bare machine without them fails to start the app. The runner has
+      # them in System32, so bundle them into the portable zip.
+      - name: Bundle VC++ runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = 'build\windows\x64\runner\Release'
+          Copy-Item 'C:\Windows\System32\msvcp140.dll' $dest
+          Copy-Item 'C:\Windows\System32\vcruntime140.dll' $dest
+          Copy-Item 'C:\Windows\System32\vcruntime140_1.dll' $dest
+
+      - name: Pack portable zip
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sz = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+          if (-not $sz) { $sz = "$env:ProgramFiles\7-Zip\7z.exe" }
+          New-Item -ItemType Directory -Force -Path staging\lmstory | Out-Null
+          Copy-Item 'build\windows\x64\runner\Release\*' 'staging\lmstory' -Recurse -Force
+          Push-Location staging
+          & $sz a "..\lmstory-$env:VERSION-windows-x64-portable.zip" lmstory
+          Pop-Location
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -Recurse -Force staging
+
+      # Inno Setup 6 is preinstalled on GitHub windows runners; fall back to
+      # choco if the image layout ever changes. packaging/windows-installer.iss
+      # resolves its icon/inputs relative to packaging/, and outputs to
+      # packaging/output/ per its own OutputDir.
+      - name: Build installer
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DLmStoryVersion=$env:VERSION" 'packaging\windows-installer.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item "packaging\output\lmstory-$env:VERSION-windows-x64-setup.exe" "lmstory-$env:VERSION-windows-x64-setup.exe"
+
+      - name: SHA256 sidecars
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($f in @("lmstory-$env:VERSION-windows-x64-portable.zip", "lmstory-$env:VERSION-windows-x64-setup.exe")) {
+            $hash = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
+            [IO.File]::WriteAllText("$f.sha256", "$hash  $f`n")
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-windows
+          path: |
+            lmstory-*-windows-x64-portable.zip
+            lmstory-*-windows-x64-portable.zip.sha256
+            lmstory-*-windows-x64-setup.exe
+            lmstory-*-windows-x64-setup.exe.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS DMG (arm64)
+    needs: prepare
+    # macos-latest(=26) 池 2026-11-03 晚三连排队饥饿取消（15min 未领 runner），
+    # 钉上一代大池 macos-15（同为 arm64），DMG 产物不变。
+    runs-on: macos-15
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: '3.47.7'
+          cache: true
+
+      - name: Cache pub packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Run build_runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Regenerate i18n
+        run: dart run slang
+
+      # macos/Runner/Configs/Signing.xcconfig defaults to ad-hoc signing
+      # (CODE_SIGN_IDENTITY = -), so no certificates are needed on CI.
+      # Do NOT set CODE_SIGNING_ALLOWED=NO here: that would strip the App
+      # Sandbox entitlements instead of ad-hoc signing them.
+      - name: Build macOS app
+        run: flutter build macos --release
+
+      - name: Pack DMG
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          hdiutil create -volname LMStory \
+            -srcfolder "build/macos/Build/Products/Release/lmstory.app" \
+            -ov -format UDZO "lmstory-${VERSION}-macos-arm64.dmg"
+          shasum -a 256 "lmstory-${VERSION}-macos-arm64.dmg" > "lmstory-${VERSION}-macos-arm64.dmg.sha256"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-macos
+          path: |
+            lmstory-*-macos-arm64.dmg
+            lmstory-*-macos-arm64.dmg.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    name: Create draft release
+    needs: [prepare, build-android, build-windows, build-macos]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Release notes = the CHANGELOG section for this version (exact
+      # header match: '## [0.4.2] - date') + the fixed install-guide footer.
+      - name: Assemble release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 按前缀匹配：兼容 Keep a Changelog 的「## [x.y.z] - 日期」写法
+          # （精确等于匹配曾使首版 2026-11-03 发布流水线红在 Assemble notes）。
+          awk -v header="## [${VERSION}]" '
+            index($0, header) == 1 {insec=1; next}
+            /^## \[/ {insec=0}
+            insec {print}
+          ' CHANGELOG.md > release_body.md
+          if [ ! -s release_body.md ]; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section"
+            exit 1
+          fi
+          cat .github/release-footer.md >> release_body.md
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release_body.md
+          files: dist/lmstory-*
+          fail_on_unmatched_files: true

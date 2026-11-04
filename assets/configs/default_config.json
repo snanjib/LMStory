@@ -1,0 +1,215 @@
+{
+  "version": "0.1",
+  "network": {
+    "connect_timeout_ms": 15000,
+    "receive_timeout_ms": 30000,
+    "director_response_start_timeout_ms": 600000,
+    "director_non_streaming_timeout_ms": 600000,
+    "auto_retry_max_attempts": 5,
+    "auto_retry_wait_budget_ms": 90000
+  },
+  "common": {
+    "title_model": {
+      "preset_id": "",
+      "model_id": ""
+    },
+    "auxiliary": {
+      "temperature": 0.3
+    }
+  },
+  "broadcast_chat": {
+    "temperature": 0.7,
+    "top_p": 1.0,
+    "auto_compaction": true,
+    "compaction_threshold": 0.6,
+    "stream_enabled": true
+  },
+  "intermediate": {
+    "system_prompt": "",
+    "reviewEnabled": false,
+    "contextBudget": {
+      "compactionTriggerRatio": 0.5,
+      "recentMinRatio": null,
+      "retrievalRatio": 0.15,
+      "recentMinTokenTarget": 32000
+    },
+    "generation": {
+      "temperature": 0.8,
+      "top_p": 0.95,
+      "max_tokens": 8192,
+      "presence_penalty": 0,
+      "frequency_penalty": 0,
+      "reasoning_effort": null
+    },
+    "retrieval": {
+      "top_k": 12,
+      "fts5_weight": 0.5,
+      "vector_weight": 0.5,
+      "key_event_threshold": 999,
+      "key_event_boost": 1.0,
+      "normalization_epsilon": 0.01,
+      "recency_weight": 0.05,
+      "importance_weight": 0.1,
+      "recency_half_life": 20,
+      "vector_score_threshold": 0.55,
+      "importance_storage_threshold": 3,
+      "micro_vectorize_threshold": 4,
+      "absolute_threshold": 0.5,
+      "relative_threshold": 0.65,
+      "vector_only_cosine_floor": 0.3,
+      "substring_fallback_enabled": true,
+      "substring_fallback_limit": 5
+    },
+    "context": {
+      "effective_context_limit": null
+    },
+    "retry": {
+      "generating_max_retries": 5,
+      "extracting_max_retries": 5,
+      "retrieval_max_retries": 5,
+      "reviewing_max_retries": 5,
+      "summarizing_max_retries": 5,
+      "stream_interrupt_retry": 5
+    },
+    "phase_models": {
+      "generating_preset_id": "",
+      "generating_model_id": "",
+      "extracting_preset_id": "",
+      "extracting_model_id": "",
+      "reviewing_preset_id": "",
+      "reviewing_model_id": "",
+      "summarizing_preset_id": "",
+      "summarizing_model_id": ""
+    },
+    "embedding": {
+      "timeout_ms": 5000,
+      "fallback_on_failure": false
+    },
+    "stream": {
+      "tool_calling_enabled": true,
+      "generating_fold_delay_ms": 2000,
+      "retrieval_fold_delay_ms": 1000
+    },
+    "fork": {
+      "regenerate_window_rounds": 5
+    },
+    "prompts": {},
+    "consolidation": {
+      "trigger_threshold": 2.0,
+      "min_artifacts_to_consolidate": 3,
+      "max_artifacts_to_consolidate": 10
+    },
+    "memory": {
+      "factual": {
+        "enabled": true,
+        "key_entity_importance_threshold": 5,
+        "injection_max_entities": 20,
+        "force_inject_safety_cap": 50,
+        "modify_confidence_threshold": 4,
+        "max_updates_per_3turns": 4,
+        "max_attr_value_length": 500
+      }
+    },
+    "suggest_reply": {
+      "preset_id": "",
+      "model_id": "",
+      "prompt": "",
+      "temperature": 0.8,
+      "max_tokens": 600,
+      "candidate_count": 3,
+      "max_reply_length": 150
+    }
+  },
+  "advanced": {
+    "system_prompt": "",
+    "phase_models": {
+      "generating_preset_id": "",
+      "generating_model_id": ""
+    },
+    "generation": {
+      "temperature": 0.8,
+      "top_p": 0.95,
+      "max_tokens": 8192,
+      "presence_penalty": 0,
+      "frequency_penalty": 0,
+      "reasoning_effort": null
+    },
+    "defaults": {
+      "max_steps": 8
+    },
+    "budget": {
+      "max_duration_minutes": 5,
+      "token_budget_ratio": 0.6,
+      "max_request_retries": 5
+    },
+    "doom_loop": {
+      "threshold": 8
+    },
+    "hitl": {
+      "ask_user_timeout_minutes": 3,
+      "approval_timeout_minutes": 5,
+      "approval_timeout_enabled": true
+    },
+    "subagent": {
+      "max_steps": 6,
+      "max_duration_minutes": 2
+    },
+    "harness": {
+      "tool_output_limit": 20000,
+      "tool_timeout_seconds": 120,
+      "core_blocks_in_tail": true,
+      "full_chunk_events": false,
+      "foreshadow_check_interval": 8,
+      "event_log_retention_turns": 20
+    },
+    "context": {
+      "effective_context_limit": null
+    },
+    "contextBudget": {
+      "compactionTriggerRatio": 0.5,
+      "recentMinTokenTarget": 32000
+    },
+    "tools": {},
+    "narrative_pacing": "balanced",
+    "embedding_preset_id": "",
+    "embedding_model_id": "",
+    "embedding": {
+      "timeout_ms": 5000,
+      "fallback_on_failure": false
+    },
+    "memory": {
+      "factual": {
+        "enabled": true,
+        "key_entity_importance_threshold": 5,
+        "injection_max_entities": 20,
+        "force_inject_safety_cap": 50,
+        "modify_confidence_threshold": 4,
+        "max_updates_per_3turns": 4,
+        "max_attr_value_length": 500
+      }
+    },
+    "consolidation": {
+      "trigger_threshold": 2.0,
+      "min_artifacts_to_consolidate": 3,
+      "max_artifacts_to_consolidate": 10
+    },
+    "retrieval": {
+      "importance_storage_threshold": 3,
+      "micro_vectorize_threshold": 4
+    },
+    "suggest_reply": {
+      "preset_id": "",
+      "model_id": "",
+      "prompt": "",
+      "temperature": 0.8,
+      "max_tokens": 600,
+      "candidate_count": 3,
+      "max_reply_length": 150
+    },
+    "review_enabled": false,
+    "prompts": {}
+  },
+  "resource_ai": {
+    "max_steps": 6
+  }
+}

@@ -1,0 +1,17 @@
+# 字体资产体积锁（path:bytes，只减不增；新增文件必须先在此登记）
+assets/fonts/Inter/Inter-Bold.ttf:415072
+assets/fonts/Inter/Inter-BoldItalic.ttf:420068
+assets/fonts/Inter/Inter-Light.ttf:408364
+assets/fonts/Inter/Inter-LightItalic.ttf:415024
+assets/fonts/Inter/Inter-Medium.ttf:411500
+assets/fonts/Inter/Inter-MediumItalic.ttf:417780
+assets/fonts/Inter/Inter-Regular.ttf:407056
+assets/fonts/Inter/Inter-SemiBold.ttf:413976
+assets/fonts/Inter/Inter-SemiBoldItalic.ttf:418520
+assets/fonts/LMMono/LMMono-Medium.ttf:43044
+assets/fonts/LMMono/LMMono-Regular.ttf:42952
+assets/fonts/LMSerif/LMSerif-Italic.ttf:34348
+assets/fonts/LMSerif/LMSerif-Medium.ttf:32168
+assets/fonts/LMSerif/LMSerif-Regular.ttf:32016
+# 2026-10-10 十六轮 CF16-1：charset 补「阈」修复衬线弹窗标题缺字回退（+11224B，共同字形 advance 全同校验过）
+assets/fonts/LMSerifSC/LMSerifSC-Regular.ttf:1552532
