@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/features/director_wizard/domain/services/world_prompt_composer.dart';
+import 'package:lmstory/i18n/strings.g.dart';
 
 /// 世界观拼装引擎：骨架顺序（身份句→题材→文风→人称→用户补充）、
 /// 未选不拼、自定义原样附加、产物不含输入格式约定。
@@ -88,6 +89,49 @@ void main() {
     );
     expect(output, identity);
   });
+
+  for (final locale in AppLocale.values) {
+    test('实际本地化文案在人称留空时不添加视角并保留用户设定：${locale.name}', () async {
+      final blocks = (await locale.build()).directorWizard.rules.blocks;
+      final source = WorldPromptTextSource(
+        identity: blocks.identity,
+        genreBlocks: {'altHistory': blocks.genre.altHistory},
+        styleBlocks: {'plain': blocks.style.plain},
+        personBlocks: {
+          WorldPerson.first: blocks.person.first,
+          WorldPerson.second: blocks.person.second,
+          WorldPerson.third: blocks.person.third,
+        },
+        userSupplementPrefix: blocks.userSupplementPrefix,
+      );
+      final output = WorldPromptComposer.compose(
+        const WorldQuestionnaireAnswers(
+          genreId: 'altHistory',
+          styleId: 'plain',
+          genreCustom: '  A family of potters  ',
+        ),
+        source,
+      );
+      expect(output, contains('A family of potters'));
+      expect(output, contains(blocks.genre.altHistory));
+      expect(
+        output,
+        isNot(
+          matches(
+            '第[一二三]人称|全知|旁观|first.person|second.person|third.person|'
+            'omniscient|observer|庙堂|江湖|court|jianghu',
+          ),
+        ),
+      );
+      for (final person in WorldPerson.values) {
+        final specified = WorldPromptComposer.compose(
+          WorldQuestionnaireAnswers(person: person),
+          source,
+        );
+        expect(specified, contains(source.personBlocks[person]));
+      }
+    });
+  }
 
   test('产物不含括号/引号输入约定（指引提及即可，不写入产物）', () {
     final output = WorldPromptComposer.compose(

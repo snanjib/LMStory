@@ -12,10 +12,14 @@ import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/appearance_controller.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/theme_controller.dart';
+import 'package:lmstory/core/tutorial/modal_route_presence.dart';
+import 'package:lmstory/core/tutorial/spotlight_overlay.dart';
 import 'package:lmstory/core/utils/file_log_sink.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/presentation/advanced_mode_flag.dart';
 import 'package:lmstory/features/chat/presentation/pages/main_layout.dart';
+import 'package:lmstory/features/demo/presentation/demo_runtime.dart';
+import 'package:lmstory/features/demo/presentation/demo_scope.dart';
 import 'package:lmstory/features/diagnostics/presentation/controllers/diagnostics_controller.dart';
 import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
@@ -116,7 +120,7 @@ void main() async {
               ),
             ),
           ],
-          child: const MyApp(),
+          child: MyApp(),
         ),
       );
     },
@@ -175,7 +179,10 @@ Future<void> _initFileLogging(Preferences prefs) async {
 }
 
 class MyApp extends ConsumerWidget {
-  const MyApp({super.key});
+  MyApp({super.key}) : modalPresence = ModalRoutePresence();
+
+  /// 模态路由在栈计数（对话框/sheet 打开时教程遮罩抬起）
+  final ModalRoutePresence modalPresence;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -186,30 +193,46 @@ class MyApp extends ConsumerWidget {
       settingsNotifierProvider.select((s) => s.contentWidthMode),
     );
 
-    return TranslationProvider(
-      child: MaterialApp(
-        title: 'LMStory',
-        theme: themes.light,
-        darkTheme: themes.dark,
-        themeMode: themeMode,
-        locale: locale,
-        // 全局场地：琉璃结构下所有路由共享的根渐变幕布——经根导航推入的
-        // 页面（设置树/供应商页等）scaffoldBgOf 取透明底，无此地时透出
-        // 黑底（日间尤其不可读）。首页/壳层的内层 venue 与此同色叠加无观感差。
-        // 内容宽度模式经作用域下发全树（版心消费面 context 读取，
-        // 切换即时生效）
-        builder: (context, child) => LmContentWidthScope(
+    // 首次启动演示：运行期把 MaterialApp 包进独立无父的 Demo 容器
+    //（主题/locale/内容宽度在根作用域解析后以构造参数传入，视觉不回退）
+    final demo = ref.watch(demoRuntimeProvider);
+
+    // 作用域切换强制重建整树：Demo 挂载/卸载改变全部 provider 解析，
+    // Element 复用会让旧 State 的 ref 指向错容器（initState 一次性
+    // 副作用无法重放）。ValueKey 驱动 Element 重建。
+    final app = MaterialApp(
+      key: ValueKey<bool>(demo.scopeActive),
+      navigatorKey: demo.navigatorKey,
+      title: 'LMStory',
+      theme: themes.light,
+      darkTheme: themes.dark,
+      themeMode: themeMode,
+      locale: locale,
+      // 全局场地：琉璃结构下所有路由共享的根渐变幕布——经根导航推入的
+      // 页面（设置树/供应商页等）scaffoldBgOf 取透明底，无此地时透出
+      // 黑底（日间尤其不可读）。首页/壳层的内层 venue 与此同色叠加无观感差。
+      // 内容宽度模式经作用域下发全树（版心消费面 context 读取，
+      // 切换即时生效）
+      navigatorObservers: [modalPresence],
+      builder: (context, child) => SpotlightOverlayHost(
+        modalPresence: modalPresence.openCount,
+        child: LmContentWidthScope(
           mode: contentWidthMode,
           child: _GlassVenueShell(child: child),
         ),
-        supportedLocales: AppLocale.values.map((e) => e.flutterLocale),
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        home: const MainLayout(),
       ),
+      supportedLocales: AppLocale.values.map((e) => e.flutterLocale),
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      home: const MainLayout(),
+    );
+    return TranslationProvider(
+      child: demo.scopeActive && demo.container != null
+          ? DemoScope(container: demo.container!, child: app)
+          : app,
     );
   }
 }

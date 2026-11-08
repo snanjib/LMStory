@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/features/demo/data/demo_state_store.dart';
+import 'package:lmstory/features/demo/presentation/demo_runtime.dart';
 import 'package:lmstory/features/help/presentation/widgets/first_launch_flow_diagram.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_page_scaffold.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_section_title.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_step_card.dart';
+import 'package:lmstory/features/onboarding/presentation/controllers/onboarding_controller.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// Wiki 子页 1.1：第一次打开 App（2026-07-27 新增）。
@@ -39,6 +43,10 @@ class FirstLaunchWikiPage extends StatelessWidget {
             height: 1.7,
           ),
         ),
+
+        // 演示重看入口（onboarding 完成且包可用时显示；见 _DemoReplayEntry）
+        const _DemoReplayEntry(),
+        const SizedBox(height: SimpleSpacing.sMd),
 
         // 主视觉：首次启动流程示意图
         WikiSectionTitle(
@@ -169,6 +177,57 @@ class _ApiKeyHintCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 手动体验入口卡：完整引导演示的再入口（首问拒绝/完成后可用，或中断后恢复）。
+/// 当演示处于 running 但当前未激活作用域时，暴露可达的后续入口，允许重新进入恢复决策/重开或放弃；
+/// 当 onboarding 已完成、演示未在途且当前 locale 包可用时，显示重新体验入口。
+class _DemoReplayEntry extends ConsumerWidget {
+  const _DemoReplayEntry();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = Translations.of(context);
+    final colors = context.lm.palette;
+    final onboarding = ref.watch(
+      onboardingProvider.select((s) => s.completed),
+    );
+    final demo = ref.watch(demoRuntimeProvider);
+
+    // 当演示曾被中断且未在当前作用域激活（如不兼容恢复被取消、异常中断或退出保留），
+    // 暴露可达的后续入口，允许重新进入恢复决策/重开或放弃，避免页面死锁。
+    if (onboarding &&
+        demo.loaded &&
+        demo.packAvailable &&
+        !demo.scopeActive &&
+        demo.state.phase == DemoPhase.running) {
+      return OutlinedButton.icon(
+        onPressed: () => handleDemoResumeFlow(demo, context),
+        icon: Icon(Icons.play_circle_outline, size: 18, color: colors.primary),
+        label: Text(t.demo.resume.continueDemo),
+      );
+    }
+
+    final eligible = onboarding &&
+        demo.loaded &&
+        demo.packAvailable &&
+        !demo.scopeActive &&
+        demo.state.phase != DemoPhase.running;
+    if (!eligible) return const SizedBox.shrink();
+
+    return OutlinedButton.icon(
+      onPressed: () async {
+        if (context.mounted) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+          // lm-motion-exempt: 路由退出动画完成等待窗口（非过渡动效，手动启动演示前的时序缓冲）
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+        await demo.start(fresh: true);
+      },
+      icon: Icon(Icons.play_circle_outline, size: 18, color: colors.primary),
+      label: Text(t.demo.invite.accept),
     );
   }
 }

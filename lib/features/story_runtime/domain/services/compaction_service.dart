@@ -817,6 +817,7 @@ class StoryCompactionService {
       connectTimeout: connectTimeout,
       readTimeout: readTimeout,
       cancelToken: cancelToken,
+      purpose: LlmPurposes.compaction,
     );
 
     if (Logger.debugOptions.logPrompts) {
@@ -937,6 +938,7 @@ class StoryCompactionService {
       connectTimeout: connectTimeout,
       readTimeout: readTimeout,
       cancelToken: cancelToken,
+      purpose: LlmPurposes.compaction,
     );
 
     if (Logger.debugOptions.logPrompts) {

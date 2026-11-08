@@ -258,6 +258,8 @@ void main() {
 /// 任何**新文件**或**新数值**都会让守卫失败——这是刻意的：
 /// 逼作者回答「这到底是版心还是内容尺寸」。
 const _widthWhitelist = <String, Set<int>>{
+  // 教程气泡的内容固有最大宽度（说明卡，非布局槽）。
+  'lib/core/tutorial/spotlight_overlay.dart': {320},
   // 折叠卡正文预览的最大高度（行数上限的物理表现）。
   'lib/core/theme/system/structures/classic/conversation/message_bubble/bubble_compaction_card.dart':
       {80},

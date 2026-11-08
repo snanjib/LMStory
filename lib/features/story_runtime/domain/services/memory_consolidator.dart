@@ -84,6 +84,7 @@ class MemoryConsolidator {
       // 不传时 reasoningEffort=null，ThinkingParamBuilder 走"未配置"分支不发参数，
       // 对 DeepSeek-V3.1+/Qwen3 等默认开启思考的模型会触发不必要思考
       reasoningEffort: ReasoningEffort.disabled,
+      purpose: LlmPurposes.memoryMerge,
     );
 
     try {

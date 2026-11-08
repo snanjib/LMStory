@@ -11,10 +11,12 @@ import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/tutorial/spotlight_target.dart';
 import 'package:lmstory/core/widgets/model_config_banner.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
+import 'package:lmstory/features/advanced/presentation/controllers/director_input_lock.dart';
 import 'package:lmstory/features/advanced/presentation/pages/director_chat_body.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_export_sheet.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_hitl_banner.dart';
@@ -24,6 +26,8 @@ import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
+import 'package:lmstory/features/demo/presentation/demo_bridge.dart';
 import 'package:lmstory/features/resource_library/domain/services/resource_apply_service.dart';
 import 'package:lmstory/features/resource_library/domain/services/resource_projection_service.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
@@ -114,6 +118,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   /// 输入文本变化 → 防抖 500ms 落库（退出兜底主力；dispose 只取消）。
   void _onDraftTextChanged(String text) {
+    if (_isInputLocked) return; // 固定提示词不作为用户草稿落库
     _draftDebounce?.cancel();
     final sessionId = widget.session.sessionId;
     // lm-motion-exempt: 草稿落库去抖（交互节流，非过渡动效）
@@ -137,6 +142,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   /// 跨重启恢复：页面级 Map 未命中时读库（输入框仍空才落，不覆盖新输入）。
   Future<void> _restoreDraftFromDb(String sessionId) async {
+    if (_isInputLocked) return; // 锁定期间任何草稿恢复不得改写固定文本
     final String? draft;
     try {
       draft = await ref
@@ -145,6 +151,9 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     } catch (_) {
       return; // 读库失败静默降级（不炸页面）
     }
+    // await 窗口内锁可能已置位（演示流程 lockTo 先于本异步完成）——
+    // 二次判定防擦掉固定提示词
+    if (_isInputLocked) return;
     if (!mounted || draft == null || draft.isEmpty) return;
     if (widget.session.sessionId != sessionId) return;
     final current = _inputKey.currentState?.currentText ?? '';
@@ -173,17 +182,57 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     super.dispose();
   }
 
+  /// 输入锁（通用能力；根作用域恒 null=无锁，仅演示作用域注入）。
+  /// 锁存在时：输入只读+固定文本、草稿三层恢复/落库全跳过、工具栏
+  /// 插入回调 no-op——发送仍由用户亲自点击（不自动发送）。
+  DirectorInputLock? get _inputLock =>
+      ref.read(directorInputLockProvider).value;
+
+  bool get _isInputLocked => _inputLock != null;
+
   @override
   void initState() {
     super.initState();
     _scheduleBottomAreaMeasurement();
     // 页面首次创建时检查是否需要回写草稿（如异常中断后重新进入）
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _tryRestoreDraft();
+      if (mounted && !_isInputLocked) _tryRestoreDraft();
       // 跨重启恢复：控制器 userInput 无待恢复时读库（Map 冷启动恒空）
-      if (mounted) unawaited(_restoreDraftFromDb(widget.session.sessionId));
+      if (mounted && !_isInputLocked) {
+        unawaited(_restoreDraftFromDb(widget.session.sessionId));
+      }
+      _enforceLockedText();
     });
     _loadPureReadingPreference();
+  }
+
+  /// 锁存在时强制输入框为固定文本（防迟到的草稿恢复/任何入口改写）。
+  /// 输入组件尚未挂载（currentState 为 null）时排一帧重试——锁在页面
+  /// 首帧前已置位的场景（恢复直达会话步）依赖这次补跑。
+  bool _lockEnforcementScheduled = false;
+
+  /// 锁文本校正入口：帧尾执行（输入组件挂载后）。
+  void _scheduleLockEnforcement() {
+    if (_lockEnforcementScheduled) return;
+    _lockEnforcementScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _lockEnforcementScheduled = false;
+      if (!mounted) return;
+      _enforceLockedText();
+    });
+  }
+
+  void _enforceLockedText([DirectorInputLock? lock]) {
+    final l = lock ?? _inputLock;
+    if (l == null || !mounted) return;
+    final inputState = _inputKey.currentState;
+    if (inputState == null) {
+      _scheduleLockEnforcement();
+      return;
+    }
+    if (inputState.currentText != l.fixedText) {
+      inputState.setText(l.fixedText);
+    }
   }
 
   /// 装载当前会话的纯净阅读偏好（无记录 = 关）
@@ -231,13 +280,17 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       _persistDraftColumn(oldWidget.session.sessionId, oldText);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        _enforceLockedText(); // 切会话后锁文本仍须校正（若锁在）
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
         final state = ref.read(advancedChatControllerProvider(widget.session));
         final restorable = state.pendingUserMessage == null &&
             state.userInput != null &&
             state.userInput!.isNotEmpty &&
             state.phase == IntermediatePhase.idle;
         if (restorable) {
-          _tryRestoreDraft();
+          if (!_isInputLocked) _tryRestoreDraft();
         } else {
           // 无待恢复草稿时优先用页面级暂存，都没有才清空（防串台）
           final stashed = _inputDrafts[widget.session.sessionId] ?? '';
@@ -259,6 +312,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   /// + phase=idle。覆盖取消生成、后台恢复中断、清空本轮等场景。
   /// 回写后立即清空 userInput，避免重复触发。
   void _tryRestoreDraft() {
+    if (_isInputLocked) return;
     final state = ref.read(
       advancedChatControllerProvider(widget.session),
     );
@@ -294,6 +348,9 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     final state = ref.watch(
       advancedChatControllerProvider(widget.session),
     );
+    // 输入锁：每帧同步校正（幂等；锁不存在零开销）。State/Element 复用
+    // 会吞掉一次性监听——锁置位晚于页面创建只能靠这里兜底。
+    _enforceLockedText();
 
     // 监听 state 变化：中断后（cancel/recoverIfStuck/clearRound 清空
     // pendingUserMessage + 保留 userInput）自动回写到输入框
@@ -305,7 +362,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
             next.userInput != null &&
             next.userInput!.isNotEmpty &&
             next.phase == IntermediatePhase.idle) {
-          _tryRestoreDraft();
+          if (!_isInputLocked) _tryRestoreDraft();
         }
         // 「系统替你做了决定」的三类
         // 时刻（溢出自愈/请示超时/审批超时 fail-closed）以 3s toast 现身
@@ -473,11 +530,14 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
           ),
           // 会话设置入口：弹出 IntermediateSessionSettingsSheet
           // 生成中也可查看设置（sheet 内部通过 phase 守卫禁用控件）
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            // 导演侧专用键（原借用故事模式文案）
-            tooltip: t.advanced.sessionSettingsTitle,
-            onPressed: _showSessionSettings,
+          SpotlightTarget(
+            id: DemoTargetIds.sessionSettingsButton,
+            child: IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              // 导演侧专用键（原借用故事模式文案）
+              tooltip: t.advanced.sessionSettingsTitle,
+              onPressed: _showSessionSettings,
+            ),
           ),
         ],
       ),
@@ -604,41 +664,44 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                 ),
               // 消息列表：占剩余空间（导演模式专属 harness 消息区）
               Expanded(
-                child: DirectorChatBody(
-                  state: state,
-                  pureReading: _pureReading,
-                  fontScale: fontScale,
-                  onCopy: _handleCopy,
-                  onRegenerate: _handleRegenerate,
-                  onEdit: _handleEdit,
-                  onDeleteRound: _handleDeleteRound,
-                  onUseExample: (example) =>
-                      _inputKey.currentState?.setText(example),
-                  initialFocusMessageId: widget.initialFocusMessageId,
-                  // 体验重构 ：与故事模式同源（fork.regenerateWindowRounds）
-                  windowRounds: windowRounds,
-                  // U2（2026-09-04 撤销压缩）：与故事模式同构
-                  onUndoCompaction: _handleUndoCompaction,
-                  // 稿件变体切换/删除/高亮消费
-                  onSwitchVariant: controller.switchMessageVariant,
-                  onDeleteVariant: controller.deleteMessageVariant,
-                  onVariantFlashConsumed: controller.clearVariantFlash,
-                  // Recap 卡编辑当前剧情锚（写入走与 AI 同一数据源）
-                  onEditAnchor: (anchor) async {
-                    final ok = await controller.updateStoryAnchor(anchor);
-                    if (!context.mounted) return;
-                    final t = Translations.of(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        behavior: SnackBarBehavior.floating,
-                        content: Text(
-                          ok
-                              ? t.advanced.anchorEdit.saved
-                              : t.advanced.anchorEdit.saveBlocked,
+                child: SpotlightTarget(
+                  id: DemoTargetIds.sessionChatBody,
+                  child: DirectorChatBody(
+                    state: state,
+                    pureReading: _pureReading,
+                    fontScale: fontScale,
+                    onCopy: _handleCopy,
+                    onRegenerate: _handleRegenerate,
+                    onEdit: _handleEdit,
+                    onDeleteRound: _handleDeleteRound,
+                    onUseExample: (example) =>
+                        _inputKey.currentState?.setText(example),
+                    initialFocusMessageId: widget.initialFocusMessageId,
+                    // 体验重构 ：与故事模式同源（fork.regenerateWindowRounds）
+                    windowRounds: windowRounds,
+                    // U2（2026-09-04 撤销压缩）：与故事模式同构
+                    onUndoCompaction: _handleUndoCompaction,
+                    // 稿件变体切换/删除/高亮消费
+                    onSwitchVariant: controller.switchMessageVariant,
+                    onDeleteVariant: controller.deleteMessageVariant,
+                    onVariantFlashConsumed: controller.clearVariantFlash,
+                    // Recap 卡编辑当前剧情锚（写入走与 AI 同一数据源）
+                    onEditAnchor: (anchor) async {
+                      final ok = await controller.updateStoryAnchor(anchor);
+                      if (!context.mounted) return;
+                      final t = Translations.of(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          behavior: SnackBarBehavior.floating,
+                          content: Text(
+                            ok
+                                ? t.advanced.anchorEdit.saved
+                                : t.advanced.anchorEdit.saveBlocked,
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
               // ── 底部区域：正常态/失败态分架构 ────────────────────
@@ -668,42 +731,48 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                       ),
                     // 输入区域（工具栏 + 输入框）：用 GlobalKey 测量实际高度，
                     // 供 SnackBar margin 计算使用
-                    SizeChangedLayoutNotifier(
-                      child: Container(
-                        key: _bottomAreaKey,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            context.lmUi.inputToolbar(
-                              context,
-                              onAddQuote: () => _handleInsertText('""', 1),
-                              onAddParen: () => _handleInsertText('()', 1),
-                              onSuggest: controller.generateSuggestReplies,
-                              isGeneratingSuggest: state.isGeneratingSuggest,
-                              canSuggest: state.messages.isNotEmpty,
-                              // 上下文圆环 chip 挂工具栏行末（满刻度=
-                              // 压缩触发线；12px 边距由 toolbar 自带 padding）
-                              trailing: ContextUsageChip(
-                                numerator: _latestLastPromptTokens(state),
-                                denominator: state.compactionTriggerTokens,
-                                onTap: _showContextCapacitySheet,
+                    SpotlightTarget(
+                      id: DemoTargetIds.sessionInputArea,
+                      child: SizeChangedLayoutNotifier(
+                        child: Container(
+                          key: _bottomAreaKey,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              context.lmUi.inputToolbar(
+                                context,
+                                onAddQuote: () => _handleInsertText('""', 1),
+                                onAddParen: () => _handleInsertText('()', 1),
+                                onSuggest: controller.generateSuggestReplies,
+                                isGeneratingSuggest: state.isGeneratingSuggest,
+                                canSuggest: state.messages.isNotEmpty,
+                                // 上下文圆环 chip 挂工具栏行末（满刻度=
+                                // 压缩触发线；12px 边距由 toolbar 自带 padding）
+                                trailing: ContextUsageChip(
+                                  numerator: _latestLastPromptTokens(state),
+                                  denominator: state.compactionTriggerTokens,
+                                  onTap: _showContextCapacitySheet,
+                                ),
                               ),
-                            ),
-                            IntermediateChatInput(
-                              key: _inputKey,
-                              phase: state.phase,
-                              isStopping: state.isStopping,
-                              //  同族：手动压缩中禁用
-                              // 发送（控制器静默 no-op，UI 须同口径）
-                              isManualCompacting: state.isManualCompacting,
-                              isDirector: true,
-                              onSend: _handleSend,
-                              onTextChanged: _onDraftTextChanged,
-                              onCancel: controller.cancel,
-                              sendKey: sendKey,
-                              newlineKey: newlineKey,
-                            ),
-                          ],
+                              IntermediateChatInput(
+                                key: _inputKey,
+                                phase: state.phase,
+                                isStopping: state.isStopping,
+                                //  同族：手动压缩中禁用
+                                // 发送（控制器静默 no-op，UI 须同口径）
+                                isManualCompacting: state.isManualCompacting,
+                                isDirector: true,
+                                locked: _isInputLocked ||
+                                    (ref.watch(demoBridgeProvider) != null &&
+                                        isGenerating),
+                                onSend: _handleSend,
+                                onTextChanged: _onDraftTextChanged,
+                                onCancel: controller.cancel,
+                                sendKey: sendKey,
+                                newlineKey: newlineKey,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -732,7 +801,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                                 onRetry: controller.retry,
                                 onClear: () {
                                   controller.clearRound();
-                                  _tryRestoreDraft();
+                                  if (!_isInputLocked) _tryRestoreDraft();
                                 },
                                 onContinueWithFts5:
                                     controller.continueWithFts5Only,
@@ -948,6 +1017,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   /// - 引号 `""`：光标在两个引号之间
   /// - 括号 `()`：光标在两个括号之间
   void _handleInsertText(String text, int cursorOffset) {
+    if (_isInputLocked) return; // 锁定期间插入类改写全部无效
     _inputKey.currentState
         ?.insertAtCursor(text, cursorOffsetFromStart: cursorOffset);
   }
@@ -985,6 +1055,12 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       );
       if (!confirmed || !mounted) return;
     }
+    // 发送消息：立即释放 Demo 输入锁并清空输入框、收起软键盘
+    final bridge = ref.read(demoBridgeProvider);
+    bridge?.inputLock.release();
+    _inputKey.currentState?.clear();
+    FocusScope.of(context).unfocus();
+
     await ref
         .read(advancedChatControllerProvider(widget.session).notifier)
         .sendMessage(userInput);
@@ -1335,6 +1411,7 @@ final advancedChatControllerProvider = StateNotifierProvider.family<
           repository: ref.read(factualRepositoryProvider),
         ),
       ),
+      capabilitiesOverride: ref.watch(agentCapabilitiesOverrideProvider),
     );
   },
 );

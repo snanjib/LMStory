@@ -9,6 +9,7 @@ import 'package:lmstory/core/config/advanced_config.dart';
 import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/config/resource_ai_config.dart';
+import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/network/dio_client.dart';
 import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
@@ -503,6 +504,13 @@ final llmServiceProvider = Provider<LlmService>((ref) {
   );
 });
 
+/// Agent 工具调用能力画像覆盖 Provider（Domain / Core 装配点）
+///
+/// 默认为 null：使用生产端点真实三元组通过 ProviderToolCapabilities.resolve 解析。
+/// 仅在独立无父的 Demo 作用域内通过 buildDemoOverrides 注入数据包绑定的已审核画像。
+final agentCapabilitiesOverrideProvider =
+    Provider<ProviderToolCapabilities?>((ref) => null);
+
 /// Agent 网关 Provider（：core 抽象 + feature 实现的装配点）
 ///
 /// 导演 runner 内部就地构造（持 _llmService），资源建卡等外部消费方
@@ -510,6 +518,7 @@ final llmServiceProvider = Provider<LlmService>((ref) {
 final agentLlmGatewayProvider = Provider<AgentLlmGateway>((ref) {
   return LlmServiceAgentGateway(
     llmService: ref.watch(llmServiceProvider),
+    capabilitiesOverride: ref.watch(agentCapabilitiesOverrideProvider),
   );
 });
 

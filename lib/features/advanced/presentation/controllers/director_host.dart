@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_log_recovery.dart';
@@ -68,6 +69,9 @@ abstract interface class DirectorHost {
 
   /// LLM 服务（AgentRunner 的网关出口）。
   LlmService get llmService;
+
+  /// Agent 步骤的能力画像显式覆盖（Demo 作用域等受控环境注入；null 走生产默认解析）。
+  ProviderToolCapabilities? get capabilitiesOverride;
 
   /// 经历记忆仓库（检索 + 宏摘要）。
   ExperienceRepository get experienceRepository;

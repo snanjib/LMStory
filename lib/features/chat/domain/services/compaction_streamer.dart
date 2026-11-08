@@ -145,6 +145,7 @@ class CompactionStreamer {
       providerOptions: config.providerOptions,
       readTimeout: readTimeout,
       cancelToken: cancelToken,
+      purpose: LlmPurposes.compaction,
     );
 
     final buffer = StringBuffer();

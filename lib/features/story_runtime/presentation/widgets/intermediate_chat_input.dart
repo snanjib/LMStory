@@ -32,6 +32,7 @@ class IntermediateChatInput extends StatefulWidget {
     this.sendKey = SendKey.enter,
     this.newlineKey = NewlineKey.shiftEnter,
     this.isDirector = false,
+    this.locked = false,
     super.key,
   });
 
@@ -61,6 +62,11 @@ class IntermediateChatInput extends StatefulWidget {
   /// 故事模式的「推动故事发展...」（导演与故事的输入语义不同）。
   final bool isDirector;
 
+  /// 输入锁定（通用能力）：true 时文本只读（编辑/粘贴/输入法组合全
+  /// 禁），发送按钮仍可用——文本由宿主经 controller 设定，用户必须
+  /// 亲自点击发送。默认 false（正式会话零影响）。
+  final bool locked;
+
   @override
   State<IntermediateChatInput> createState() => IntermediateChatInputState();
 }
@@ -75,6 +81,15 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
   void initState() {
     super.initState();
     _controller.addListener(_onTextChanged);
+  }
+
+  /// 输入锁校正（宿主经 GlobalKey 调用；widget 自身无 provider 依赖）
+  void enforceLockedText(String fixedText) {
+    if (_controller.text != fixedText) {
+      _controller
+        ..text = fixedText
+        ..selection = TextSelection.collapsed(offset: fixedText.length);
+    }
   }
 
   void _onTextChanged() {
@@ -260,6 +275,12 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
   /// 当前输入文本（：页面切会话时暂存/恢复草稿用）
   String get currentText => _controller.text;
 
+  /// 清空输入框内容并失焦
+  void clear() {
+    _controller.clear();
+    _focusNode.unfocus();
+  }
+
   void setText(String text) {
     _controller.value = TextEditingValue(
       text: text,
@@ -310,6 +331,8 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
                       focusNode: _focusNode,
                       controller: _controller,
                       enabled: _inputEnabled,
+                      // 输入锁定（通用能力）：只读但保持可聚焦（辅助技术可达）
+                      readOnly: widget.locked,
                       maxLines: null,
                       // 发送键为 enter 时键盘右下角显示"发送"，其他模式显示"换行"
                       textInputAction:

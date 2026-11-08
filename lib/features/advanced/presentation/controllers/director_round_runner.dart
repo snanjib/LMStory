@@ -501,7 +501,10 @@ class DirectorRoundRunner {
         // 预算来自 advanced.subagent，导演设置）
         spawnToolFactory: (readOnlyTools) => SpawnTool(
           SubagentRunner(
-            gateway: LlmServiceAgentGateway(llmService: _llmService),
+            gateway: LlmServiceAgentGateway(
+              llmService: _llmService,
+              capabilitiesOverride: _host.capabilitiesOverride,
+            ),
             endpoint: endpoint,
             availableTools: readOnlyTools,
             callConfig: AgentCallConfig(
@@ -760,8 +763,12 @@ class DirectorRoundRunner {
       );
     }
 
-    final runner =
-        AgentRunner(gateway: LlmServiceAgentGateway(llmService: _llmService));
+    final runner = AgentRunner(
+      gateway: LlmServiceAgentGateway(
+        llmService: _llmService,
+        capabilitiesOverride: _host.capabilitiesOverride,
+      ),
+    );
     final liveSink = _AgentEventSink(this);
 
     // ──  durable 事件日志：live 多播 + 落库（崩溃可重放）──

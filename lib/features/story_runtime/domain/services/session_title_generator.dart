@@ -81,6 +81,7 @@ class SessionTitleGenerator {
       reasoningEffort: ReasoningEffort.disabled,
       connectTimeout: connectTimeout,
       readTimeout: readTimeout,
+      purpose: LlmPurposes.sessionTitle,
     );
 
     final stopwatch = Stopwatch()..start();

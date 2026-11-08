@@ -12,6 +12,7 @@ import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
 import 'package:lmstory/core/theme/shared/components/panel_heading.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/tutorial/spotlight_target.dart';
 import 'package:lmstory/core/widgets/advanced_level_hint.dart';
 import 'package:lmstory/core/widgets/numeric_input_dialog.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
@@ -26,6 +27,7 @@ import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
 import 'package:lmstory/features/chat/domain/entities/session_phase_models.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/collapsed_sections_store.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/collapsible_settings_section.dart';
 import 'package:lmstory/features/settings/presentation/widgets/director_compaction_threshold_field.dart';
@@ -360,18 +362,21 @@ class _DirectorSessionSettingsSheetState
               const SizedBox(height: IntermediateSpacing.sSm),
 
               // ── 查看记忆库：常驻置顶，不参与折叠（DOC-14 §3.4）──
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => MemoryBrowserPage(
-                        session: state.session,
+              SpotlightTarget(
+                id: DemoTargetIds.sessionMemoryButton,
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => MemoryBrowserPage(
+                          session: state.session,
+                        ),
                       ),
                     ),
+                    icon: const Icon(Icons.library_books_outlined, size: 16),
+                    label: Text(t.advanced.settings.openMemoryBrowser),
                   ),
-                  icon: const Icon(Icons.library_books_outlined, size: 16),
-                  label: Text(t.advanced.settings.openMemoryBrowser),
                 ),
               ),
               const SizedBox(height: IntermediateSpacing.sMd),

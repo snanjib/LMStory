@@ -1,6 +1,6 @@
 name: lmstory
 description: AI-powered interactive storytelling app with self-evolving memory system.
-version: 0.4.1
+version: 0.4.2
 
 repository: https://github.com/snanjib/LMStory
 homepage: https://github.com/snanjib/LMStory
@@ -13,6 +13,7 @@ environment:
 dependencies:
   clock: ^1.1.1
   collection: ^1.18.0
+  crypto: ^3.0.6
   dio: ^5.4.3+1
   drift: ^2.18.0
   file_picker: ^8.1.4
@@ -59,6 +60,9 @@ flutter:
 
   assets:
     - assets/configs/
+    - assets/demo/first_launch/
+    # Flutter 目录资产不递归子目录：多模型候选包位于 zh-CN/ 下，须显式声明
+    - assets/demo/first_launch/zh-CN/
     - assets/skills/deai-flavor/SKILL.md
     - assets/skills/dialogue-scenes/SKILL.md
     - assets/skills/combat-scenes/SKILL.md

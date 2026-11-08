@@ -33,6 +33,8 @@ import 'package:lmstory/features/chat/presentation/pages/chat/chat_mode_page.dar
 import 'package:lmstory/features/chat/presentation/pages/home_page.dart';
 import 'package:lmstory/features/chat/presentation/widgets/chat_sidebar.dart';
 import 'package:lmstory/features/chat/presentation/widgets/global_search_dialog.dart';
+import 'package:lmstory/features/demo/presentation/demo_bridge.dart';
+import 'package:lmstory/features/demo/presentation/demo_runtime.dart';
 import 'package:lmstory/features/director_wizard/domain/entities/director_wizard_outcome.dart';
 import 'package:lmstory/features/director_wizard/presentation/pages/director_wizard_page.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
@@ -174,6 +176,9 @@ class _MainLayoutState extends ConsumerState<MainLayout>
   /// 由 _selectSession 设置、构建会话页时传入并消费。
   String? _focusMessageId;
 
+  /// 启动首帧延迟静默检查备份定时器（非 Web 平台）
+  Timer? _startupBackupTimer;
+
   /// 长驻进程的自动备份周期补查定时器（非 Web 平台）
   Timer? _autoBackupTimer;
 
@@ -182,16 +187,24 @@ class _MainLayoutState extends ConsumerState<MainLayout>
 
   final _uuid = const Uuid();
 
+  bool _demoStartupChecked = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 首次启动演示：经启动检查门处理邀请/恢复（根作用域=真实门；
+    // Demo 作用域=禁用门，本方法整体跳过——职责见 demo_runtime.dart）。
+    // 单入口（postFrame）；恢复导航经桥监听（见 _hookDemoBridge）。
+    _hookDemoBridge();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkDemoStartup());
     //  自动备份：首帧后延迟静默检查（>24h 且有会话数据才导出，
     // 不打扰启动渲染；path_provider 不支持 Web，跳过）。
     // 失败由管理器内部吞掉并记日志，绝不影响启动。
     if (!kIsWeb) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        Future.delayed(const Duration(seconds: 20), () {
+        if (!mounted) return;
+        _startupBackupTimer = Timer(const Duration(seconds: 20), () {
           if (!mounted) return;
           ref.read(autoBackupManagerProvider).runIfNeeded();
         });
@@ -251,7 +264,10 @@ class _MainLayoutState extends ConsumerState<MainLayout>
 
   @override
   void dispose() {
+    _startupBackupTimer?.cancel();
     _autoBackupTimer?.cancel();
+    _subscribedBridge?.run.removeListener(_onDemoRunChanged);
+    _subscribedBridge = null;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -826,6 +842,15 @@ class _MainLayoutState extends ConsumerState<MainLayout>
   void _onPopInvoked(bool didPop) {
     if (didPop) return;
 
+    // Demo 体验中：系统返回手势交由 Demo 退出确认处理（防误触直接回退会话）
+    final bridge = ref.read(demoBridgeProvider);
+    if (bridge != null &&
+        bridge.tutorial.active &&
+        !bridge.tutorial.exitRequestOpen) {
+      bridge.tutorial.requestExit();
+      return;
+    }
+
     // 1. Drawer 打开时，优先关闭 Drawer
     if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
       _scaffoldKey.currentState?.closeDrawer();
@@ -859,8 +884,72 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     }
   }
 
+  /// 启动演示检查：委托启动门（弹窗/启动全部在门内，上下文经
+  /// 运行时导航键实时取用——不在本组件跨 await 持有 context）。
+  Future<void> _checkDemoStartup() async {
+    if (!mounted || _demoStartupChecked) return;
+    // Demo 作用域内（桥非空）由禁用门兜底，这里再防御一次
+    if (ref.read(demoBridgeProvider) != null) return;
+    _demoStartupChecked = true;
+    await ref.read(demoStartupGateProvider)();
+  }
+
+  DemoBridge? _subscribedBridge;
+
+  /// 桥接恢复导航：Demo 作用域挂载后，若恢复推导给出了会话目标，
+  /// 把用户带回该会话页（推导先于挂载完成，见 DemoRuntime._deriveResume）。
+  void _hookDemoBridge() {
+    final bridge = ref.read(demoBridgeProvider);
+    if (_subscribedBridge == bridge) return;
+    _subscribedBridge?.run.removeListener(_onDemoRunChanged);
+    _subscribedBridge = bridge;
+    if (bridge != null) {
+      bridge.run.addListener(_onDemoRunChanged);
+      _onDemoRunChanged();
+    }
+  }
+
+  void _onDemoRunChanged() {
+    final bridge = ref.read(demoBridgeProvider);
+    if (bridge == null || !mounted) return;
+    final target = bridge.resumeSessionId;
+    if (target == null) return;
+    if (_currentSession?.sessionId == target) {
+      bridge.consumeResumeNavigation();
+      return;
+    }
+    unawaited(_navigateToResumedSession(bridge, target));
+  }
+
+  Future<void> _navigateToResumedSession(
+    DemoBridge bridge,
+    String sessionId,
+  ) async {
+    try {
+      final sessions = await ref
+          .read<ChatRepository>(chatRepositoryProvider)
+          .getAllSessions();
+      final match = sessions.where((s) => s.sessionId == sessionId).toList();
+      if (!mounted) return;
+      if (match.isEmpty) {
+        bridge.consumeResumeNavigation();
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _selectSession(match.first);
+        bridge.consumeResumeNavigation();
+      });
+    } catch (_) {
+      bridge.consumeResumeNavigation();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen<DemoBridge?>(demoBridgeProvider, (previous, next) {
+      _hookDemoBridge();
+    });
     // 首次启动新手引导（2026-07-20 新增）：
     // - isLoading：显示空白启动屏，避免引导未加载完显示主界面闪烁
     // - !completed：全屏覆盖 OnboardingPage（首次启动模式，完成时写入 completed）

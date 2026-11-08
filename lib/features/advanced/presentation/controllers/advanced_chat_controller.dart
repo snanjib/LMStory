@@ -7,6 +7,7 @@ import 'package:lmstory/core/config/advanced_config.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/config/output_token_policy.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
+import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/throttled_delta_buffer.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
@@ -114,6 +115,8 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
     // 资源应用服务（向导「初始化你的角色」卡路径物化时应用；
     // nullable 向后兼容旧测试）
     ResourceApplyService? resourceApplyService,
+    // 可选显式能力画像覆盖（Demo 作用域等受控环境注入；null 走生产默认解析）
+    ProviderToolCapabilities? capabilitiesOverride,
   })  : _chatRepository = chatRepository,
         _configurationResolver = configurationResolver,
         _llmService = llmService,
@@ -130,6 +133,7 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
         _agentEventLogRepository = agentEventLogRepository,
         _compactionService = compactionService,
         _resourceApplyService = resourceApplyService,
+        _capabilitiesOverride = capabilitiesOverride,
         _streamRunner = StreamRunner(llmService: llmService),
         super(AdvancedChatState.initial(session)) {
     // 与故事模式一致：构造函数加载历史（会话切换时 State 复用兜底）
@@ -164,6 +168,9 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
 
   /// 资源应用服务（向导「初始化你的角色」卡路径：物化时应用卡）
   final ResourceApplyService? _resourceApplyService;
+
+  /// 可选显式能力画像覆盖（Demo 作用域等受控环境注入；null 走生产默认解析）
+  final ProviderToolCapabilities? _capabilitiesOverride;
 
   /// manualCompact 摘要增量合帧缓冲（见 [_onManualCompactionDelta]）
   ThrottledDeltaBuffer? _manualCompactionDeltaBuffer;
@@ -1582,6 +1589,9 @@ class AdvancedChatController extends StateNotifier<AdvancedChatState>
 
   @override
   LlmService get llmService => _llmService;
+
+  @override
+  ProviderToolCapabilities? get capabilitiesOverride => _capabilitiesOverride;
 
   @override
   ExperienceRepository get experienceRepository => _experienceRepository;

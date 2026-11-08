@@ -9,8 +9,12 @@ import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/tutorial/spotlight_target.dart';
 import 'package:lmstory/features/chat/domain/entities/session_phase_models.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
+import 'package:lmstory/features/demo/presentation/demo_bridge.dart';
+import 'package:lmstory/features/demo/presentation/demo_selection_controller.dart';
 import 'package:lmstory/features/director_wizard/domain/entities/director_wizard_outcome.dart';
 import 'package:lmstory/features/director_wizard/domain/services/world_prompt_composer.dart';
 import 'package:lmstory/features/director_wizard/domain/services/world_prompt_generator.dart';
@@ -141,6 +145,12 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
 
   /// 完成：三步数据齐备后交付产物并 pop。
   ///
+  /// **演示作用域会话入口屏障**：绑定未收敛不得按旧选择创建会话——
+  /// 等待未完成绑定请求收敛（选择器关闭时未提交请求已被取消），
+  /// 将向导选择与已提交候选对齐并锁定；真实会话 Controller/网关消费
+  /// 配置与画像之前固定同一份已提交候选。屏障期间完成按钮呈处理中
+  /// 状态（禁用+进度指示）。
+  ///
   /// 写入时序：未配置分支在「完成」统一下发全局默认——
   /// broadcast_chat 两键（Simple 默认模型）+ advanced.phase_models.
   /// generating 两键（导演 GM），下次新建不必重走全程；已配置分支
@@ -150,22 +160,44 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
     final state = ref.read(directorWizardProvider);
     if (!state.isModelReady) return;
     setState(() => _isFinishing = true);
-    if (state.shouldWriteGlobalDefaults) {
+    final selection = ref.read(demoBridgeProvider)?.selection;
+    if (selection != null) {
+      final committedModelId = await selection.settleForSessionEntry();
+      if (!mounted) return;
+      final current = ref.read(directorWizardProvider);
+      if (current.gmModelId != committedModelId) {
+        // 向导选择与已提交候选不一致（仅极端竞态可达）：以已提交候选
+        // 为准同步最终确认——提交者必为用户真实点击，不冒充旧选择。
+        final presetId = _presetIdForModel(committedModelId);
+        if (presetId == null) {
+          // 无法对齐：阻止完成，回退处理中状态
+          setState(() => _isFinishing = false);
+          return;
+        }
+        _wizard.selectExistingModel(
+          presetId: presetId,
+          modelId: committedModelId,
+        );
+      }
+    }
+    if (!mounted) return;
+    final settled = ref.read(directorWizardProvider);
+    if (settled.shouldWriteGlobalDefaults) {
       // 全局默认写入失败不阻断交付（会话覆盖仍齐）——best-effort
       try {
         await ref.read(settingsNotifierProvider.notifier).setDefaultModel(
-              presetId: state.gmPresetId,
-              modelId: state.gmModelId,
+              presetId: settled.gmPresetId,
+              modelId: settled.gmModelId,
             );
         await writeDirectorOverride(
           ref,
           'advanced.phase_models.generating_preset_id',
-          state.gmPresetId,
+          settled.gmPresetId,
         );
         await writeDirectorOverride(
           ref,
           'advanced.phase_models.generating_model_id',
-          state.gmModelId,
+          settled.gmModelId,
         );
       } catch (e) {
         debugPrint('Wizard finish global defaults write failed: $e');
@@ -175,16 +207,26 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
     Navigator.of(context).pop(
       DirectorWizardOutcome(
         phaseModels: SessionPhaseModels(
-          generatingPresetId: state.gmPresetId,
-          generatingModelId: state.gmModelId,
+          generatingPresetId: settled.gmPresetId,
+          generatingModelId: settled.gmModelId,
         ),
         // null = 跳过规则步，跟随全局兜底（物化语义：null 才回退全局）
-        systemPromptOverride: state.confirmedRules,
+        systemPromptOverride: settled.confirmedRules,
         // 「初始化你的角色」两产物（开关关闭时派生 getter 恒 null）
-        characterInitPrompt: state.characterInitPrompt,
-        characterCardId: state.characterCardId,
+        characterInitPrompt: settled.characterInitPrompt,
+        characterCardId: settled.characterCardId,
       ),
     );
+  }
+
+  /// 在已装载供应商里定位模型所属 preset id（会话入口屏障对齐用）
+  String? _presetIdForModel(String modelId) {
+    for (final preset in ref.read(settingsNotifierProvider).presets) {
+      if (preset.cachedModels.any((m) => m.modelId == modelId)) {
+        return preset.presetId;
+      }
+    }
+    return null;
   }
 
   @override
@@ -196,6 +238,32 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
       settingsNotifierProvider,
       (previous, next) => _determineModelBranch(next),
     );
+    // 演示进度上报：向导选择结果实时写入桥（页面销毁即停报，
+    // 与 autoDispose 状态语义一致；流程按选择结果推进步骤）
+    ref.listen<DirectorWizardState>(directorWizardProvider, (prev, next) {
+      final bridge = ref.read(demoBridgeProvider);
+      if (bridge == null) return;
+      bridge.wizardProgress.value = WizardProgress(
+        modelReady: next.isModelReady,
+        embeddingDone: next.selectedEmbeddingModelId != null ||
+            next.embeddingChoice == WizardEmbeddingChoice.skip,
+        rulesConfirmed: next.confirmedRules != null,
+        currentStep: next.currentStep,
+      );
+    });
+    Future.microtask(() {
+      if (!mounted) return;
+      final bridge = ref.read(demoBridgeProvider);
+      if (bridge == null) return;
+      final s = ref.read(directorWizardProvider);
+      bridge.wizardProgress.value = WizardProgress(
+        modelReady: s.isModelReady,
+        embeddingDone: s.selectedEmbeddingModelId != null ||
+            s.embeddingChoice == WizardEmbeddingChoice.skip,
+        rulesConfirmed: s.confirmedRules != null,
+        currentStep: s.currentStep,
+      );
+    });
     Future.microtask(
       () => _determineModelBranch(ref.read(settingsNotifierProvider)),
     );
@@ -220,55 +288,72 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
     final wizard = ref.watch(directorWizardProvider);
     final currentStep = wizard.currentStep;
 
-    return context.lmVenue(
-      // 场地由本页自承载（不依赖祖先幕布），再按框架口径取 Scaffold
-      // 底色——与 onboarding 同构。
-      Builder(
-        builder: (context) => Scaffold(
-          backgroundColor: context.scaffoldBgOf(colors.bg),
-          appBar: AppBar(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (currentStep > 0) {
+          _prev();
+        } else {
+          final bridge = ref.read(demoBridgeProvider);
+          if (bridge != null) {
+            bridge.tutorial.requestExit();
+          } else {
+            _exit();
+          }
+        }
+      },
+      child: context.lmVenue(
+        // 场地由本页自承载（不依赖祖先幕布），再按框架口径取 Scaffold
+        // 底色——与 onboarding 同构。
+        Builder(
+          builder: (context) => Scaffold(
             backgroundColor: context.scaffoldBgOf(colors.bg),
-            foregroundColor: colors.ink,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            surfaceTintColor: Colors.transparent,
-            actions: [
-              TextButton(
-                onPressed: _exit,
-                child: Text(
-                  t.directorWizard.exit,
-                  style: SimpleTextStyles.bodySm.copyWith(color: colors.muted),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          body: SafeArea(
-            child: Column(
-              children: [
-                _buildStepIndicator(colors, t, currentStep),
-                Expanded(
-                  child: PageView(
-                    controller: _pageController,
-                    // GM 未就绪 / 嵌入步未显式选择时锁滑动——仅靠
-                    // goToStep 守卫会出现「页面已滑走、步号还在原地」的
-                    // 失联态（终审 F1 同款物理门控）
-                    physics: wizard.isModelReady &&
-                            !(currentStep == 1 &&
-                                wizard.isEmbeddingChoicePending)
-                        ? null
-                        : const NeverScrollableScrollPhysics(),
-                    onPageChanged: _wizard.goToStep,
-                    children: [
-                      _buildModelStep(colors, t),
-                      _buildEmbeddingStep(colors, t),
-                      _buildRulesStep(colors, t),
-                    ],
+            appBar: AppBar(
+              backgroundColor: context.scaffoldBgOf(colors.bg),
+              foregroundColor: colors.ink,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              surfaceTintColor: Colors.transparent,
+              actions: [
+                TextButton(
+                  onPressed: _exit,
+                  child: Text(
+                    t.directorWizard.exit,
+                    style:
+                        SimpleTextStyles.bodySm.copyWith(color: colors.muted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                _buildBottomBar(colors, t, currentStep),
               ],
+            ),
+            body: SafeArea(
+              child: Column(
+                children: [
+                  _buildStepIndicator(colors, t, currentStep),
+                  Expanded(
+                    child: PageView(
+                      controller: _pageController,
+                      // GM 未就绪 / 嵌入步未显式选择时锁滑动——仅靠
+                      // goToStep 守卫会出现「页面已滑走、步号还在原地」的
+                      // 失联态（终审 F1 同款物理门控）
+                      physics: wizard.isModelReady &&
+                              !(currentStep == 1 &&
+                                  wizard.isEmbeddingChoicePending)
+                          ? null
+                          : const NeverScrollableScrollPhysics(),
+                      onPageChanged: _wizard.goToStep,
+                      children: [
+                        _buildModelStep(colors, t),
+                        _buildEmbeddingStep(colors, t),
+                        _buildRulesStep(colors, t),
+                      ],
+                    ),
+                  ),
+                  _buildBottomBar(colors, t, currentStep),
+                ],
+              ),
             ),
           ),
         ),
@@ -449,79 +534,93 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
       );
     }
     final selected = _findSelectedChatModel(settings, wizard);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: SimpleSpacing.sMd),
-        Text(
-          t.directorWizard.model.introConfigured,
-          style: SimpleTextStyles.body.copyWith(color: colors.muted),
-        ),
-        const SizedBox(height: SimpleSpacing.sMd),
-        if (selected != null) ...[
-          // 当前选中行：预选的默认模型（或刚换的笔）
-          Container(
-            padding: const EdgeInsets.all(SimpleSpacing.sMd),
-            decoration: BoxDecoration(
-              color: colors.surface,
-              borderRadius: BorderRadius.circular(
-                context.lmUi.radius(LmCorner.xs),
-              ),
-              border: Border.all(color: colors.divider),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.check_circle, size: 20, color: colors.primary),
-                const SizedBox(width: SimpleSpacing.sMd),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        selected.modelName,
-                        style: SimpleTextStyles.body.copyWith(
-                          color: colors.ink,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        selected.presetName,
-                        style: SimpleTextStyles.caption.copyWith(
-                          color: colors.faint,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
+    // Spotlight 目标覆盖整段可操作区：预选选中行/「换一支笔」/无预选
+    // 「选择模型」按钮三种形态都在挖孔内（高亮可操作入口，契约 §10.3）
+    return SpotlightTarget(
+      id: DemoTargetIds.wizardGmRow,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: SimpleSpacing.sMd),
+          Text(
+            t.directorWizard.model.introConfigured,
+            style: SimpleTextStyles.body.copyWith(color: colors.muted),
+          ),
+          const SizedBox(height: SimpleSpacing.sMd),
+          if (selected != null) ...[
+            // 当前选中行：预选的默认模型（或刚换的笔）
+            Container(
+              padding: const EdgeInsets.all(SimpleSpacing.sMd),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(
+                  context.lmUi.radius(LmCorner.xs),
                 ),
-              ],
+                border: Border.all(color: colors.divider),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle, size: 20, color: colors.primary),
+                  const SizedBox(width: SimpleSpacing.sMd),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          selected.modelName,
+                          style: SimpleTextStyles.body.copyWith(
+                            color: colors.ink,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          selected.presetName,
+                          style: SimpleTextStyles.caption.copyWith(
+                            color: colors.faint,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: SimpleSpacing.sSm),
-          OutlinedButton.icon(
-            onPressed: _showModelPickerSheet,
-            icon: Icon(Icons.swap_horiz, size: 16, color: colors.primary),
-            label: Text(t.directorWizard.model.changePen),
-          ),
-        ] else
-          // 罕见边缘：默认链无可预选项（默认模型从未设置且无导演覆盖）
-          OutlinedButton.icon(
-            onPressed: _showModelPickerSheet,
-            icon: Icon(Icons.edit_note, size: 16, color: colors.primary),
-            label: Text(t.directorWizard.model.pickModel),
-          ),
-      ],
+            const SizedBox(height: SimpleSpacing.sSm),
+            OutlinedButton.icon(
+              onPressed: _showModelPickerSheet,
+              icon: Icon(Icons.swap_horiz, size: 16, color: colors.primary),
+              label: Text(t.directorWizard.model.changePen),
+            ),
+          ] else
+            // 罕见边缘：默认链无可预选项（默认模型从未设置且无导演覆盖）
+            OutlinedButton.icon(
+              onPressed: _showModelPickerSheet,
+              icon: Icon(Icons.edit_note, size: 16, color: colors.primary),
+              label: Text(t.directorWizard.model.pickModel),
+            ),
+        ],
+      ),
     );
   }
 
   /// 弹供应商分组模型选择器（复用设置页现成设计）；选中只写向导
   /// 暂存（会话覆盖语义），不动全局默认。
+  ///
+  /// 演示作用域（桥非空）：sheet 顶部注入仿真说明横幅；选择先经
+  /// 选择协调点绑定候选（换包+持久身份），**绑定成功**（正常完成）
+  /// 才确认向导选择——sheet 据此关闭并提示；绑定失败以异常上抛作为
+  /// 失败回执（sheet 保持打开可就地重试，不触发向导推进、不弹成功
+  /// 提示），错误说明由本页 snackbar 承担。选择器关闭时取消全部
+  /// 未提交的绑定请求（已提交选择不受影响）——迟到请求不得在向导
+  /// 推进或页面离开后换包。
   Future<void> _showModelPickerSheet() async {
     final t = Translations.of(context);
     final wizard = ref.read(directorWizardProvider);
+    final bridge = ref.read(demoBridgeProvider);
     await showLmSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -532,12 +631,50 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
         selectedModelId: wizard.gmModelId,
         title: t.directorWizard.model.pickerTitle,
         successMessage: t.directorWizard.model.pickToast,
+        hintText: bridge != null ? t.demo.candidates.pickerHint : null,
         onModelSelected: (presetId, modelId) async {
           if (presetId == null || modelId == null) return;
+          final selection = bridge?.selection;
+          if (selection != null) {
+            // 失败/锁定：抛出→sheet 保持打开；取消：静默失效不推进
+            await _bindDemoCandidate(selection, modelId);
+          }
+          if (!mounted) return;
           _wizard.selectExistingModel(presetId: presetId, modelId: modelId);
         },
       ),
     );
+    // 选择器已关闭（无论以何种方式）：取消仍未提交的绑定请求
+    bridge?.selection?.cancelPendingSelections();
+  }
+
+  /// 演示作用域选模绑定（可等待回执）：绑定完成正常返回放行向导确认；
+  /// 失败（候选不可用/已锁定/身份保存失败）就地提示后**重新抛出**——
+  /// 作为 sheet 的失败回执保持其打开可重试，绝不触发「选模成功」；
+  /// 选择被取消（选择器关闭）静默上抛，不提示、不确认向导选择。
+  Future<void> _bindDemoCandidate(
+    DemoSelectionController selection,
+    String modelId,
+  ) async {
+    try {
+      await selection.bindByVirtualModelId(modelId);
+    } on DemoCandidateCancelledException {
+      rethrow;
+    } catch (e) {
+      debugPrint('demo candidate bind failed: $e');
+      if (!mounted) rethrow;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            Translations.of(context).demo.candidates.bindFailed,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      );
+      rethrow;
+    }
   }
 
   /// 已配置分支的当前选中模型定位（displayName/preset 名用于卡片展示）。
@@ -795,6 +932,8 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
     final hint = wizard.modelBranch == WizardModelBranch.configured
         ? t.directorWizard.model.selectedHintConfigured(model: modelName)
         : t.directorWizard.model.selectedHintNew(model: modelName);
+    // 演示作用域：已选卡片附近的仿真说明（操作当时可见，非选后补发）
+    final isDemo = ref.watch(demoBridgeProvider) != null;
     return Container(
       padding: const EdgeInsets.all(SimpleSpacing.sMd),
       decoration: BoxDecoration(
@@ -806,6 +945,13 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           WizardExplanationLine(text: hint),
+          if (isDemo) ...[
+            const SizedBox(height: SimpleSpacing.sXs),
+            Text(
+              t.demo.candidates.selectedHint,
+              style: SimpleTextStyles.caption.copyWith(color: colors.muted),
+            ),
+          ],
           const SizedBox(height: SimpleSpacing.sXs),
           Align(
             alignment: Alignment.centerLeft,
@@ -938,22 +1084,25 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
           ),
         ),
         const SizedBox(height: SimpleSpacing.sSm),
-        WizardOptionRow(
-          title: t.directorWizard.embedding.optionKeepTitle,
-          description: t.directorWizard.embedding.optionKeepDesc,
-          icon: Icons.check_circle_outline,
-          selected: wizard.embeddingChoice == WizardEmbeddingChoice.keep &&
-              !_embChangeExpanded,
-          // 保留=把入口快照写回去——若中途「换一个」已写新值，
-          // 不回写会让 UI 说的和库里存的两回事（终审 F4）
-          onTap: () async {
-            setState(() => _embChangeExpanded = false);
-            _wizard.keepCurrentEmbedding();
-            await _writeEmbeddingKeys(
-              wizard.currentEmbeddingPresetId,
-              wizard.currentEmbeddingModelId,
-            );
-          },
+        SpotlightTarget(
+          id: DemoTargetIds.wizardEmbeddingChoice,
+          child: WizardOptionRow(
+            title: t.directorWizard.embedding.optionKeepTitle,
+            description: t.directorWizard.embedding.optionKeepDesc,
+            icon: Icons.check_circle_outline,
+            selected: wizard.embeddingChoice == WizardEmbeddingChoice.keep &&
+                !_embChangeExpanded,
+            // 保留=把入口快照写回去——若中途「换一个」已写新值，
+            // 不回写会让 UI 说的和库里存的两回事（终审 F4）
+            onTap: () async {
+              setState(() => _embChangeExpanded = false);
+              _wizard.keepCurrentEmbedding();
+              await _writeEmbeddingKeys(
+                wizard.currentEmbeddingPresetId,
+                wizard.currentEmbeddingModelId,
+              );
+            },
+          ),
         ),
         const SizedBox(height: SimpleSpacing.sSm),
         WizardOptionRow(
@@ -985,14 +1134,17 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        WizardOptionRow(
-          title: t.directorWizard.embedding.optionSetupTitle,
-          description: t.directorWizard.embedding.optionSetupDesc,
-          icon: Icons.memory,
-          selected: _embSetupExpanded ||
-              wizard.embeddingChoice == WizardEmbeddingChoice.change,
-          onTap: () => setState(
-            () => _embSetupExpanded = !_embSetupExpanded,
+        SpotlightTarget(
+          id: DemoTargetIds.wizardEmbeddingChoice,
+          child: WizardOptionRow(
+            title: t.directorWizard.embedding.optionSetupTitle,
+            description: t.directorWizard.embedding.optionSetupDesc,
+            icon: Icons.memory,
+            selected: _embSetupExpanded ||
+                wizard.embeddingChoice == WizardEmbeddingChoice.change,
+            onTap: () => setState(
+              () => _embSetupExpanded = !_embSetupExpanded,
+            ),
           ),
         ),
         const SizedBox(height: SimpleSpacing.sSm),
@@ -1037,6 +1189,13 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
     DirectorWizardState wizard,
     SettingsState settings,
   ) {
+    final embeddingModels = [
+      for (final preset in settings.presets)
+        for (final model
+            in preset.cachedModels.where((m) => m.type == ModelType.embedding))
+          (presetId: preset.presetId, model: model),
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1044,17 +1203,32 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
           colors: colors,
           label: t.directorWizard.embedding.pickSection,
         ),
-        for (final preset in settings.presets)
-          for (final model in preset.cachedModels
-              .where((m) => m.type == ModelType.embedding))
+        for (var i = 0; i < embeddingModels.length; i++)
+          if (i == 0)
+            SpotlightTarget(
+              id: DemoTargetIds.wizardEmbeddingModelItem,
+              child: _ModelRow(
+                colors: colors,
+                modelId: embeddingModels[i].model.modelId,
+                displayName: embeddingModels[i].model.displayName,
+                selected: wizard.selectedEmbeddingModelId ==
+                    embeddingModels[i].model.modelId,
+                onTap: () => _chooseAndWriteEmbedding(
+                  embeddingModels[i].presetId,
+                  embeddingModels[i].model.modelId,
+                ),
+              ),
+            )
+          else
             _ModelRow(
               colors: colors,
-              modelId: model.modelId,
-              displayName: model.displayName,
-              selected: wizard.selectedEmbeddingModelId == model.modelId,
+              modelId: embeddingModels[i].model.modelId,
+              displayName: embeddingModels[i].model.displayName,
+              selected: wizard.selectedEmbeddingModelId ==
+                  embeddingModels[i].model.modelId,
               onTap: () => _chooseAndWriteEmbedding(
-                preset.presetId,
-                model.modelId,
+                embeddingModels[i].presetId,
+                embeddingModels[i].model.modelId,
               ),
             ),
         if (!wizard.showEmbProviderFlow && _hasNoEmbeddingModels(settings))
@@ -1307,12 +1481,15 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
           style: SimpleTextStyles.body.copyWith(color: colors.muted),
         ),
         const SizedBox(height: SimpleSpacing.sLg),
-        _PathCard(
-          colors: colors,
-          icon: Icons.description_outlined,
-          title: t.directorWizard.rules.pathTemplateTitle,
-          desc: t.directorWizard.rules.pathTemplateDesc,
-          onTap: _wizard.enterRulesTemplates,
+        SpotlightTarget(
+          id: DemoTargetIds.wizardTemplateList,
+          child: _PathCard(
+            colors: colors,
+            icon: Icons.description_outlined,
+            title: t.directorWizard.rules.pathTemplateTitle,
+            desc: t.directorWizard.rules.pathTemplateDesc,
+            onTap: _wizard.enterRulesTemplates,
+          ),
         ),
         const SizedBox(height: SimpleSpacing.sSm),
         _PathCard(
@@ -1344,17 +1521,33 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
           colors: colors,
           label: t.directorWizard.rules.templateSection,
         ),
-        for (final tpl in templates)
-          _ModelRow(
-            colors: colors,
-            modelId: tpl.name,
-            displayName: null,
-            selected: false,
-            onTap: () => _wizard.selectRulesTemplate(
-              templateId: tpl.templateId,
-              content: tpl.content,
+        for (final tpl in templates) ...[
+          if (tpl.templateId == 'builtin-isekai-narrator')
+            SpotlightTarget(
+              id: DemoTargetIds.wizardTemplateItem,
+              child: _ModelRow(
+                colors: colors,
+                modelId: tpl.name,
+                displayName: null,
+                selected: false,
+                onTap: () => _wizard.selectRulesTemplate(
+                  templateId: tpl.templateId,
+                  content: tpl.content,
+                ),
+              ),
+            )
+          else
+            _ModelRow(
+              colors: colors,
+              modelId: tpl.name,
+              displayName: null,
+              selected: false,
+              onTap: () => _wizard.selectRulesTemplate(
+                templateId: tpl.templateId,
+                content: tpl.content,
+              ),
             ),
-          ),
+        ],
       ],
     );
   }
@@ -1916,13 +2109,16 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
           spacing: SimpleSpacing.sSm,
           runSpacing: SimpleSpacing.sXs,
           children: [
-            FilledButton(
-              onPressed: () => _useRulesPreview(t),
-              style: FilledButton.styleFrom(
-                backgroundColor: colors.primary,
-                foregroundColor: colors.surface,
+            SpotlightTarget(
+              id: DemoTargetIds.wizardRulesConfirm,
+              child: FilledButton(
+                onPressed: () => _useRulesPreview(t),
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.primary,
+                  foregroundColor: colors.surface,
+                ),
+                child: Text(labels.useIt),
               ),
-              child: Text(labels.useIt),
             ),
             if (wizard.rulesPreviewGenerated || wizard.rulesGenFallback)
               OutlinedButton(
@@ -2159,24 +2355,21 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
       llmService: ref.read(llmServiceProvider),
     );
     final wizard = ref.read(directorWizardProvider);
-    final person = wizard.rulesPerson?.name ?? labels.personNone;
-    String labelOr(
-      List<({String id, String label, String? desc})> options,
-      String? id,
-    ) {
-      final label = _optionLabelOf(options, id);
-      return label.isEmpty ? labels.unanswered : label;
-    }
+    final person = wizard.rulesPerson == null
+        ? labels.genPersonNone
+        : _optionLabelOf(_personOptionsOf(t), wizard.rulesPerson?.name);
+    final genre = _genreBlockOf(t, wizard.rulesGenreId ?? '');
+    final style = _styleBlockOf(t, wizard.rulesStyleId ?? '');
 
     final result = await generator.generate(
       namingConfig: naming,
       systemPrompt: labels.genSystem,
       userPrompt: labels.genUser(
-        genreLabel: labelOr(_genreOptionsOf(t), wizard.rulesGenreId),
+        genreLabel: genre.isEmpty ? labels.unanswered : genre,
         genreExtra: wizard.rulesGenreCustom.trim().isEmpty
             ? labels.noneExtra
             : wizard.rulesGenreCustom.trim(),
-        styleLabel: labelOr(_styleOptionsOf(t), wizard.rulesStyleId),
+        styleLabel: style.isEmpty ? labels.unanswered : style,
         styleExtra: wizard.rulesStyleCustom.trim().isEmpty
             ? labels.noneExtra
             : wizard.rulesStyleCustom.trim(),
@@ -2322,31 +2515,62 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
               ),
               const SizedBox(width: SimpleSpacing.sMd),
               Expanded(
-                child: ElevatedButton(
-                  onPressed: nextEnabled ? _next : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: colors.primary,
-                    foregroundColor: colors.surface,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: SimpleSpacing.sLg,
-                      vertical: SimpleSpacing.sMd,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(
-                        context.lmUi.radius(LmCorner.xs),
+                child: SpotlightTarget(
+                  id: DemoTargetIds.wizardNext,
+                  child: ElevatedButton(
+                    onPressed: nextEnabled ? _next : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colors.primary,
+                      foregroundColor: colors.surface,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: SimpleSpacing.sLg,
+                        vertical: SimpleSpacing.sMd,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          context.lmUi.radius(LmCorner.xs),
+                        ),
                       ),
                     ),
-                  ),
-                  child: Text(
-                    isLast ? t.directorWizard.finish : t.directorWizard.next,
-                    style: SimpleTextStyles.body.copyWith(
-                      color: colors.surface,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 2,
-                    textAlign: TextAlign.center,
-                    overflow: TextOverflow.ellipsis,
+                    child: _isFinishing && isLast
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: colors.surface,
+                                ),
+                              ),
+                              const SizedBox(width: SimpleSpacing.sSm),
+                              Flexible(
+                                child: Text(
+                                  t.directorWizard.finish,
+                                  style: SimpleTextStyles.body.copyWith(
+                                    color: colors.surface,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Text(
+                            isLast
+                                ? t.directorWizard.finish
+                                : t.directorWizard.next,
+                            style: SimpleTextStyles.body.copyWith(
+                              color: colors.surface,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 2,
+                            textAlign: TextAlign.center,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                   ),
                 ),
               ),

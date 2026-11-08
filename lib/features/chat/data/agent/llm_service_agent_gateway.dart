@@ -26,10 +26,14 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///   多工具调用（含 Gemini thoughtSignature），保留全部多轮回传字段。
 /// - Agent 取消令牌桥接 HTTP CancellationToken（中断进行中的流式请求）。
 class LlmServiceAgentGateway implements AgentLlmGateway {
-  LlmServiceAgentGateway({required LlmService llmService})
-      : _llmService = llmService;
+  LlmServiceAgentGateway({
+    required LlmService llmService,
+    ProviderToolCapabilities? capabilitiesOverride,
+  })  : _llmService = llmService,
+        _capabilitiesOverride = capabilitiesOverride;
 
   final LlmService _llmService;
+  final ProviderToolCapabilities? _capabilitiesOverride;
 
   ///  请求级轨迹：logPayloads 开启时记录每步完整请求/响应负载
   /// （与故事模式 stream_runner 同款通道与做法，2000 字符预览）
@@ -49,11 +53,12 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
     cancellation.throwIfCancelled('before_llm_request');
 
     final protocol = _parseProtocol(endpoint.protocol);
-    final capabilities = ProviderToolCapabilities.resolve(
-      protocol: protocol,
-      baseUrl: endpoint.baseUrl,
-      modelId: endpoint.modelId,
-    );
+    final capabilities = _capabilitiesOverride ??
+        ProviderToolCapabilities.resolve(
+          protocol: protocol,
+          baseUrl: endpoint.baseUrl,
+          modelId: endpoint.modelId,
+        );
 
     final toolChoice =
         capabilities.resolveToolChoice(request.config.toolChoice);
@@ -90,6 +95,7 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
       responseStartTimeout: request.config.responseStartTimeout,
       nonStreamingTimeout: request.config.nonStreamingTimeout,
       cacheBreakpointIndex: request.stablePrefixEndIndex,
+      purpose: LlmPurposes.agentStep,
     );
 
     _logRequestPayload(endpoint.modelId, request);
@@ -331,6 +337,7 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
       nonStreamingTimeout: baseRequest.nonStreamingTimeout,
       cancelToken: baseRequest.cancelToken,
       cacheBreakpointIndex: baseRequest.cacheBreakpointIndex,
+      purpose: baseRequest.purpose,
     );
     final LlmResponse response;
     try {

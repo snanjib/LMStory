@@ -236,6 +236,7 @@ class CompactionService {
       protocol: config.protocol,
       providerOptions: config.providerOptions,
       readTimeout: const Duration(seconds: 60),
+      purpose: LlmPurposes.compaction,
     );
 
     try {

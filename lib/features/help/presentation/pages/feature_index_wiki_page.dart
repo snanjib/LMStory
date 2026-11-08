@@ -78,6 +78,14 @@ class FeatureIndexWikiPage extends StatelessWidget {
           body: t.help.featureIndex.moduleHelpBody,
           color: colors.muted,
         ),
+        WikiSectionTitle(
+          title: t.help.featureIndex.moduleDemoTitle,
+          subtitle: '',
+        ),
+        _ModuleBlock(
+          body: t.help.featureIndex.moduleDemoBody,
+          color: colors.primary,
+        ),
         WikiSectionTitle(title: t.help.featureIndex.entryTitle, subtitle: ''),
         Text(
           t.help.featureIndex.entryBody,

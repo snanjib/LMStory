@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/data/repositories/agent_event_log_repository.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
@@ -170,6 +171,9 @@ class _FakeHost implements DirectorHost {
 
   @override
   LlmService get llmService => throw UnimplementedError();
+
+  @override
+  ProviderToolCapabilities? get capabilitiesOverride => null;
 
   @override
   ExperienceRepository get experienceRepository => throw UnimplementedError();

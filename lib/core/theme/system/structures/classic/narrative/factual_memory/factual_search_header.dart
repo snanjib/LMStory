@@ -25,6 +25,7 @@ class FactualSearchHeader extends StatelessWidget {
     required this.onFindSimilar,
     required this.onToggleMultiSelect,
     required this.onAddEntity,
+    this.readOnly = false,
     super.key,
   });
 
@@ -43,6 +44,7 @@ class FactualSearchHeader extends StatelessWidget {
   final VoidCallback onFindSimilar;
   final VoidCallback onToggleMultiSelect;
   final VoidCallback onAddEntity;
+  final bool readOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -182,30 +184,32 @@ class FactualSearchHeader extends StatelessWidget {
             tooltip: t.intermediate.memoryBrowser.filterToggle,
             onPressed: onToggleFilterExpanded,
           ),
-          // 找相似——包含关系聚类分组，一键预选进多选归并
-          IconButton(
-            icon: const Icon(Icons.hub_outlined),
-            color: colors.muted,
-            tooltip: t.intermediate.memoryBrowser.findSimilar,
-            onPressed: onFindSimilar,
-          ),
-          IconButton(
-            icon: Icon(
-              multiSelectMode ? Icons.done : Icons.checklist,
-              color: multiSelectMode ? colors.primary : colors.muted,
-              size: 20,
+          if (!readOnly) ...[
+            // 找相似——包含关系聚类分组，一键预选进多选归并
+            IconButton(
+              icon: const Icon(Icons.hub_outlined),
+              color: colors.muted,
+              tooltip: t.intermediate.memoryBrowser.findSimilar,
+              onPressed: onFindSimilar,
             ),
-            tooltip: multiSelectMode
-                ? t.intermediate.memoryBrowser.multiSelectExit
-                : t.intermediate.memoryBrowser.multiSelectMode,
-            onPressed: onToggleMultiSelect,
-          ),
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            color: colors.primary,
-            tooltip: t.intermediate.memoryBrowser.addEntityTitle,
-            onPressed: onAddEntity,
-          ),
+            IconButton(
+              icon: Icon(
+                multiSelectMode ? Icons.done : Icons.checklist,
+                color: multiSelectMode ? colors.primary : colors.muted,
+                size: 20,
+              ),
+              tooltip: multiSelectMode
+                  ? t.intermediate.memoryBrowser.multiSelectExit
+                  : t.intermediate.memoryBrowser.multiSelectMode,
+              onPressed: onToggleMultiSelect,
+            ),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              color: colors.primary,
+              tooltip: t.intermediate.memoryBrowser.addEntityTitle,
+              onPressed: onAddEntity,
+            ),
+          ],
         ],
       ),
     );

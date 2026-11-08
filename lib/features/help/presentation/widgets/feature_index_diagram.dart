@@ -70,6 +70,13 @@ class FeatureIndexDiagram extends StatelessWidget {
             countDesc: t.help.featureIndex.helpCountDesc,
             color: colors.muted,
           ),
+          const SizedBox(height: SimpleSpacing.sXs),
+          _ModuleCard(
+            title: t.help.featureIndex.diagramDemoTitle,
+            count: t.help.featureIndex.demoCount,
+            countDesc: t.help.featureIndex.demoCountDesc,
+            color: colors.primary,
+          ),
         ],
       ),
     );

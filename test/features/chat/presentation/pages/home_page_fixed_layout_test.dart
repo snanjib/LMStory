@@ -311,6 +311,68 @@ void main() {
     expect(find.text('设置'), findsOneWidget);
     expect(tester.getBottomRight(find.text('设置')).dy, lessThan(800));
   });
+
+  testWidgets('无 Key 黄条 + 向导引导卡 + 故事卡同时存在：高度 800 下 compact 故事卡不溢出，设置在屏内', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final repo = _HomeChatRepository([
+      ChatSession(
+        sessionId: 'director-overflow-check',
+        title:
+            '(我叫南极，刚从超市出来就被泥头车创到了异世界。看了很多动漫的我费尽千辛万苦，终于找到最近的冒险者公会，我推开大门来到前台) 你好，请问是在这里注册冒险者吗？',
+        mode: ChatMode.advanced,
+        createdAt: DateTime(2026),
+        lastActiveAt: DateTime(2026, 2),
+        messageCount: 3,
+        lastMessagePreview: '(门轴响了一声，比想象中沉。热气和声音一起扑上来，麦酒放了夜的那种酸，混着...)',
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          preferencesProvider.overrideWithValue(await fakePrefs()),
+          chatRepositoryProvider.overrideWithValue(repo),
+          apiPresetRepositoryProvider
+              .overrideWithValue(_HomeApiPresetRepository()),
+          settingsRepositoryProvider
+              .overrideWithValue(_HomeEmptySettingsRepository()),
+        ],
+        child: TranslationProvider(
+          child: MaterialApp(
+            theme: ThemeCatalog.assemble(const LmAppearance(), Brightness.light),
+            home: HomePage(
+              onNewChat: () {},
+              onNewStory: () {},
+              onDirectorWizard: () {},
+              onSessionSelected: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('尚未配置 API Key'), findsOneWidget);
+    expect(find.text('导演模式创建向导'), findsOneWidget);
+    expect(find.text('继续故事'), findsOneWidget);
+    expect(find.text('设置'), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: '绝无 RenderFlex 底部溢出异常');
+    expect(tester.getBottomRight(find.text('设置')).dy, lessThanOrEqualTo(800));
+  });
+}
+
+class _HomeEmptySettingsRepository implements SettingsRepository {
+  @override
+  Future<String?> getApiKey(String presetId) async => null;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('Not implemented: ${invocation.memberName}');
 }
 
 class _HomeChatRepository implements ChatRepository {

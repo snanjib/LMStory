@@ -9,7 +9,9 @@ import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_radius.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/tutorial/spotlight_target.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -26,10 +28,12 @@ import 'package:lmstory/i18n/strings.g.dart';
 class ExperienceMemoryTab extends ConsumerStatefulWidget {
   const ExperienceMemoryTab({
     required this.sessionId,
+    this.readOnly = false,
     super.key,
   });
 
   final String sessionId;
+  final bool readOnly;
 
   @override
   ConsumerState<ExperienceMemoryTab> createState() =>
@@ -468,12 +472,13 @@ class _ExperienceMemoryTabState extends ConsumerState<ExperienceMemoryTab> {
             tooltip: t.intermediate.memoryBrowser.filterToggle,
             onPressed: () => setState(() => _filterExpanded = !_filterExpanded),
           ),
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            color: colors.primary,
-            tooltip: t.intermediate.memoryBrowser.addExperienceTitle,
-            onPressed: _onAddMemory,
-          ),
+          if (!widget.readOnly)
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              color: colors.primary,
+              tooltip: t.intermediate.memoryBrowser.addExperienceTitle,
+              onPressed: _onAddMemory,
+            ),
         ],
       ),
     );
@@ -786,20 +791,27 @@ class _ExperienceMemoryTabState extends ConsumerState<ExperienceMemoryTab> {
             memory: memory,
             colors: colors,
             t: t,
+            readOnly: widget.readOnly,
             onEdit: () => _onEditMemory(memory),
             onDelete: () => _onDeleteMemory(memory),
             onArchive: () => _onArchiveMemory(memory),
           );
+          final wrappedCard = (index == 0 && widget.readOnly)
+              ? SpotlightTarget(
+                  id: DemoTargetIds.memoryEpisodicItem,
+                  child: card,
+                )
+              : card;
           if (_sortBy != 0) {
             return Padding(
               padding: const EdgeInsets.only(bottom: LmSpacing.sMd),
-              child: card,
+              child: wrappedCard,
             );
           }
           return MemoryTimelineEntry(
             isFirst: index == 0,
             isLast: index == _filteredMemories.length - 1,
-            child: card,
+            child: wrappedCard,
           );
         },
       ),
@@ -897,7 +909,7 @@ class _ExperienceMemoryTabState extends ConsumerState<ExperienceMemoryTab> {
 }
 
 /// 单条经历记忆卡片。
-class _MemoryCard extends StatelessWidget {
+class _MemoryCard extends StatefulWidget {
   const _MemoryCard({
     required this.memory,
     required this.colors,
@@ -905,6 +917,7 @@ class _MemoryCard extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     this.onArchive,
+    this.readOnly = false,
   });
 
   final ExperientialMemory memory;
@@ -915,12 +928,22 @@ class _MemoryCard extends StatelessWidget {
 
   /// 归档/恢复（null=不显示按钮）。
   final VoidCallback? onArchive;
+  final bool readOnly;
+
+  @override
+  State<_MemoryCard> createState() => _MemoryCardState();
+}
+
+class _MemoryCardState extends State<_MemoryCard> {
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
     return context.lmUi.card(
       context,
-      onTap: onEdit,
+      onTap: widget.readOnly
+          ? () => setState(() => _expanded = !_expanded)
+          : widget.onEdit,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -932,11 +955,24 @@ class _MemoryCard extends StatelessWidget {
           ],
           const SizedBox(height: LmSpacing.sXs),
           _buildContent(),
-          if (memory.tags.isNotEmpty) ...[
+          if (widget.memory.tags.isNotEmpty) ...[
             const SizedBox(height: LmSpacing.sXs),
             _buildTags(),
           ],
-          _buildActions(),
+          if (widget.readOnly) ...[
+            const SizedBox(height: LmSpacing.sXs),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 18,
+                  color: widget.colors.muted,
+                ),
+              ],
+            ),
+          ] else
+            _buildActions(),
         ],
       ),
     );
@@ -944,7 +980,7 @@ class _MemoryCard extends StatelessWidget {
 
   /// 是否有叙事时间（非空且非空字符串）
   bool get _hasNarrativeTime {
-    final v = memory.narrativeTime;
+    final v = widget.memory.narrativeTime;
     return v != null && v.isNotEmpty;
   }
 
@@ -952,12 +988,13 @@ class _MemoryCard extends StatelessWidget {
   Widget _buildNarrativeTime() {
     return Row(
       children: [
-        Icon(Icons.schedule, size: 12, color: colors.muted),
+        Icon(Icons.schedule, size: 12, color: widget.colors.muted),
         const SizedBox(width: LmSpacing.s2xs),
         Expanded(
           child: Text(
-            '${t.intermediate.memoryBrowser.narrativeTime}：${memory.narrativeTime}',
-            style: LmNarrativeTextStyles.caption.copyWith(color: colors.muted),
+            '${widget.t.intermediate.memoryBrowser.narrativeTime}：${widget.memory.narrativeTime}',
+            style: LmNarrativeTextStyles.caption
+                .copyWith(color: widget.colors.muted),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -978,32 +1015,33 @@ class _MemoryCard extends StatelessWidget {
             vertical: 2,
           ),
           decoration: BoxDecoration(
-            color: colors.primaryDim,
+            color: widget.colors.primaryDim,
             borderRadius: BorderRadius.circular(LmRadius.rXs),
           ),
           child: Text(
-            t.intermediate.memoryBrowser.turnLabel(turn: memory.turnNumber),
-            style:
-                LmNarrativeTextStyles.caption.copyWith(color: colors.primary),
+            widget.t.intermediate.memoryBrowser
+                .turnLabel(turn: widget.memory.turnNumber),
+            style: LmNarrativeTextStyles.caption
+                .copyWith(color: widget.colors.primary),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
         ),
         const SizedBox(width: LmSpacing.sXs),
-        if (memory.isMacro) ...[
+        if (widget.memory.isMacro) ...[
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: LmSpacing.sXs,
               vertical: 2,
             ),
             decoration: BoxDecoration(
-              color: colors.accentDim,
+              color: widget.colors.accentDim,
               borderRadius: BorderRadius.circular(LmRadius.rXs),
             ),
             child: Text(
-              t.intermediate.memoryBrowser.macroLabel,
-              style:
-                  LmNarrativeTextStyles.caption.copyWith(color: colors.accent),
+              widget.t.intermediate.memoryBrowser.macroLabel,
+              style: LmNarrativeTextStyles.caption
+                  .copyWith(color: widget.colors.accent),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -1012,21 +1050,21 @@ class _MemoryCard extends StatelessWidget {
         ],
         // 归档标识——归档记忆不参与检索（两通道均排除），
         // 此前浏览器无标识，用户会以为"库里有却搜不到"是缺陷
-        if (memory.isArchived) ...[
+        if (widget.memory.isArchived) ...[
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: LmSpacing.sXs,
               vertical: 2,
             ),
             decoration: BoxDecoration(
-              color: colors.surfaceVariant,
+              color: widget.colors.surfaceVariant,
               borderRadius: BorderRadius.circular(LmRadius.rXs),
-              border: Border.all(color: colors.divider),
+              border: Border.all(color: widget.colors.divider),
             ),
             child: Text(
-              t.intermediate.memoryBrowser.archivedBadge,
-              style:
-                  LmNarrativeTextStyles.caption.copyWith(color: colors.muted),
+              widget.t.intermediate.memoryBrowser.archivedBadge,
+              style: LmNarrativeTextStyles.caption
+                  .copyWith(color: widget.colors.muted),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -1038,26 +1076,29 @@ class _MemoryCard extends StatelessWidget {
           children: List.generate(
             5,
             (i) => Icon(
-              i < memory.importance ? Icons.star : Icons.star_border,
+              i < widget.memory.importance ? Icons.star : Icons.star_border,
               size: 12,
-              color: i < memory.importance ? colors.primary : colors.faint,
+              color: i < widget.memory.importance
+                  ? widget.colors.primary
+                  : widget.colors.faint,
             ),
           ),
         ),
-        if (memory.hasEmbedding)
-          Icon(Icons.bolt_outlined, size: 14, color: colors.success),
+        if (widget.memory.hasEmbedding)
+          Icon(Icons.bolt_outlined, size: 14, color: widget.colors.success),
       ],
     );
   }
 
   Widget _buildContent() {
     return Text(
-      memory.formatDisplayText(
-        emptyPlaceholder: t.intermediate.chat.memoryDetail.empty,
+      widget.memory.formatDisplayText(
+        emptyPlaceholder: widget.t.intermediate.chat.memoryDetail.empty,
       ),
-      style: LmNarrativeTextStyles.narrativeBody.copyWith(color: colors.ink),
-      maxLines: 4,
-      overflow: TextOverflow.ellipsis,
+      style: LmNarrativeTextStyles.narrativeBody
+          .copyWith(color: widget.colors.ink),
+      maxLines: (widget.readOnly && !_expanded) ? 2 : null,
+      overflow: (widget.readOnly && !_expanded) ? TextOverflow.ellipsis : null,
     );
   }
 
@@ -1065,19 +1106,20 @@ class _MemoryCard extends StatelessWidget {
     return Wrap(
       spacing: LmSpacing.s2xs,
       runSpacing: 2,
-      children: memory.tags.map((tag) {
+      children: widget.memory.tags.map((tag) {
         return Container(
           padding: const EdgeInsets.symmetric(
             horizontal: LmSpacing.s2xs,
             vertical: 2,
           ),
           decoration: BoxDecoration(
-            color: colors.surfaceVariant,
+            color: widget.colors.surfaceVariant,
             borderRadius: BorderRadius.circular(LmRadius.rXs),
           ),
           child: Text(
             tag,
-            style: LmNarrativeTextStyles.caption.copyWith(color: colors.muted),
+            style: LmNarrativeTextStyles.caption
+                .copyWith(color: widget.colors.muted),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -1092,32 +1134,32 @@ class _MemoryCard extends StatelessWidget {
       children: [
         IconButton(
           icon: const Icon(Icons.edit_outlined, size: 18),
-          color: colors.muted,
-          tooltip: t.common.edit,
-          onPressed: onEdit,
+          color: widget.colors.muted,
+          tooltip: widget.t.common.edit,
+          onPressed: widget.onEdit,
           visualDensity: VisualDensity.compact,
         ),
-        if (onArchive != null) ...[
+        if (widget.onArchive != null) ...[
           IconButton(
             icon: Icon(
-              memory.isArchived
+              widget.memory.isArchived
                   ? Icons.unarchive_outlined
                   : Icons.archive_outlined,
               size: 18,
             ),
-            color: colors.muted,
-            tooltip: memory.isArchived
-                ? t.intermediate.memoryBrowser.unarchiveMemory
-                : t.intermediate.memoryBrowser.archiveMemory,
-            onPressed: onArchive,
+            color: widget.colors.muted,
+            tooltip: widget.memory.isArchived
+                ? widget.t.intermediate.memoryBrowser.unarchiveMemory
+                : widget.t.intermediate.memoryBrowser.archiveMemory,
+            onPressed: widget.onArchive,
             visualDensity: VisualDensity.compact,
           ),
         ],
         IconButton(
           icon: const Icon(Icons.delete_outline, size: 18),
-          color: colors.error,
-          tooltip: t.common.delete,
-          onPressed: onDelete,
+          color: widget.colors.error,
+          tooltip: widget.t.common.delete,
+          onPressed: widget.onDelete,
           visualDensity: VisualDensity.compact,
         ),
       ],

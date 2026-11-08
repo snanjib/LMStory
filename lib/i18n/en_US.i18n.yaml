@@ -3862,6 +3862,9 @@ help:
     diagramHelpTitle: Help (since v0.2, growing with versions)
     helpCount: 47 Wiki entries
     helpCountDesc: Beginner guide/user manual
+    diagramDemoTitle: First-launch demo (v0.4)
+    demoCount: 1 guided tour
+    demoCountDesc: First-run experience/replayable
     moduleSimpleTitle: Chat mode features
     moduleSimpleBody: Delivered in v0.1. Session management (create/delete/star/reorder/search), message sending (streaming/edit/resend/quote), Fork branches, CompactionPoint compaction, model selection, session settings, thinking budget, template system, attachment upload, tool-call display, thinking-content display, context usage ring and manual compaction (shared with Story/Director), streaming long-conversation rendering optimization (frozen-prefix chunked rendering), in-session search (menu/Ctrl+F, non-modal search bar + hit-location flash, branch-consistent filtering).
     moduleIntermediateTitle: Story mode features
@@ -3874,6 +3877,8 @@ help:
     moduleDataBody: v0.1+v0.3. Full export (multi-select + API Key toggle, v3 backups include character cards/worldbooks/self-built templates/Director event logs), single-session export (JSON/Markdown/TXT), full import (append/overwrite, completion report with asset counts and an API Key re-entry shortcut; overwrite import auto-snapshots to backups/ beforehand keeping the last 2, and aborts on snapshot failure), automatic backup (24h silent rolling retention of 3, domain-split by prefix without touching snapshots or foreign files), data recovery (orphan messages), table structure repair (purely additive, no data loss), clear all data, diagnostics page (failure history + logs + debug toggles), storage statistics (including Director event log counts and size, rolling retention of the last 20 rounds by default), import progress feedback (a non-dismissible overlay for the whole import), external-open routing (backup JSON opened via "Open with"/share goes straight to data import instead of the resource library).
     moduleHelpTitle: Help features
     moduleHelpBody: 'Delivered in v0.2. Beginner guide (six-step first launch + replayable), Wiki home (8 chapter groups, 47 entries, with search): Getting started / Using Chat mode / Using Story mode / How Story mode works / Director mode / Configuration and customization / Data and maintenance / Appendix.'
+    moduleDemoTitle: First-launch demo features
+    moduleDemoBody: 'Delivered in v0.4 (mechanism layer). An interactive first-launch demo: on real pages, a zero-configuration user is guided through one full Director-mode round - invite dialog, real wizard picking demo models, the built-in isekai template, a locked first prompt sent by the user''s own tap, reviewing the memories it produced, and a session that stays in the normal list and can continue once a real model is configured. Everything replays locally with no network (a guard counter is the evidence), demo data is isolated from the real database, and a single-transaction handover preserves all results; exit/resume/replay are supported (a fresh run never overwrites a kept session). The bundled demo content is a real-capture official pack. Before the first round starts, the wizard model step offers five simulated candidates (GLM-5.3 default, DeepSeek-V4.1-Flash, GLM-5.3-Flash, Kimi-K3.1-Pro, MiMo-V2.6-Flash) with an explanatory note at selection time; the candidate locks after the first send, and switching models for a new experience goes through the existing replay path. Entry: the first-launch dialog, or Help > First launch > Start the tour.'
     entryTitle: How to enter
     entryBody: Help → Appendix → Feature index.
   versionHistoryWiki:
@@ -3905,6 +3910,9 @@ help:
     v03Body: 'Director mode: an AI showrunner retrieves memories, maintains settings and writes prose backstage following project rules; the prose is the only output. Implemented so far: project rules, main model and per-step models, per-round step/time budgets with soft landing, supervision mode (item-by-item write approval, with "always allow this session"), ask-director, onstage/backstage process layering (round timeline + a single fold group), interlude recap cards, event log and restart recovery, skill notes, subagents, memory store entity merging (AI merge of duplicate entities), a standalone settings system (global settings page + session panels, three-state tool permissions), three-level narrative pacing, context usage indication (ring + manual compaction). It reuses Story mode''s memory foundation with no standalone HUD; the old HUD blueprint is deprecated. Also delivered: the worldbook/character card resource library (SillyTavern-compatible import). The Director experience keeps being rounded out: draft variants, draft export, story anchor editing, clapperboard view, pure reading and in-round budget progress; context configuration converged into a single "context compaction threshold" knob (percentage ⇄ token dual display) replacing the three-ratio surface, with the window cap demoted to an advanced override; session configuration fully snapshotized (reset = new = copy the current global value; existing sessions materialize automatically when opened).'
     milestonesTitle: Milestones
     milestones:
+    - '2026-11-07 First-launch demo multi-model: the wizard model step now offers five simulated candidates (GLM-5.3 default, DeepSeek-V4.1-Flash, GLM-5.3-Flash, Kimi-K3.1-Pro, MiMo-V2.6-Flash, all real-capture replay packs) with a selection-time note; choices bind atomically (pack/profile/persisted identity), lock after the first send, and resume targets the chosen candidate'
+    - '2026-11-04 First-launch guided demo: a zero-configuration user can experience one full Director-mode round on real pages (local demo-model replay, real tool-chain persistence, session handover, resume/replay); bundled content is a test sample pending the official story'
+    - '2026-11-04 Director wizard project rules: abstract genre and style directions, a stable narrator-template structure, and no narrative-person or viewpoint conventions when left unspecified'
     - '2026-11-03 Director request timeouts and progress feedback: configure first-response and non-streaming completion timeouts independently; cancellation covers the request, thought, speech and tools appear in arrival order, and warning and error cards can be collapsed after a successful round'
     - '2026-11-02 Obsolete sampling params overhaul: Kimi K-series models and the official moonshot endpoint family both stop sending sampling params; the Gemini native protocol stops sending them entirely and gains a gemini-4 thinking branch; o-series detection unified into one source; story/director penalty defaults drop to 0 (existing sessions untouched); compaction, titles, memory consolidation, fact merging, and world-setting prompts now share one configurable temperature key and honor the omit checks'
     - '2026-11-02 OpenAI Responses protocol shipped + API compatibility audit fixes: the openaiResponses placeholder enum goes live (GPT-6-series tool calling requires Responses); GPT-5/GPT-6 models no longer send sampling parameters; Gemini 3 thought-part signatures are replayed verbatim across turns; full audit report lives in the repository docs'
@@ -4268,7 +4276,7 @@ directorWizard:
     styleCustomHint: Or describe the style you want
     personQuestion: Which point of view should the story use?
     personNone: Leave blank
-    personNoneDesc: Let the model decide
+    personNoneDesc: Leave narrative person out of the project rules
     personFirst: First person
     personFirstDesc: Be the protagonist, told by "I" (I push the door open and the rain pours in)
     personSecond: Second person
@@ -4282,7 +4290,7 @@ directorWizard:
     knowGenerateDesc(model): A closer fit to your choices (especially what you wrote yourself); calls your model ($model) and spends a little credit.
     knowTail: Either way you get to review it first — redo or edit if you are not satisfied.
     confirmTitle(model): Have $model write your world rules
-    confirmBody: It will write a roughly 300–700 character set of world rules from your three choices — you review it first and decide whether to use it. This calls your model and spends a little credit.
+    confirmBody: It will write a structured set of project rules of around 300–500 words from your three choices — you review it first and decide whether to use it. This calls your model and spends a little credit.
     startGenerate: Start writing
     generatingHint(model): "$model is writing for you…"
     generatingCancel: Stop
@@ -4295,7 +4303,7 @@ directorWizard:
       first: '"I" narrate this story.'
       second: The world speaks to you directly — deepest immersion.
       third: Watch this story like a novel.
-      none: Let the AI pick the person.
+      none: The project rules will not specify narrative person.
     # Seed your character (questionnaire-path toggle)
     characterInitTitle: Seed your character
     characterInitDesc: Want a character to appear in the very first round? Say so here instead of leaving it to chance.
@@ -4344,40 +4352,40 @@ directorWizard:
       humorous: Light and humorous
       terse: Cold and sharp
       classical: Classical elegance
-    # Assembly blocks (identity and person-second are the finalized copy; others follow the same style)
+    # Assembly blocks: abstract directions; concrete settings come from user additions
     blocks:
       identity: 'You are the narrator of an interactive story, building and driving an open world. You never speak, act, or decide for the user.'
 
       userSupplementPrefix: "User addition: "
       genre:
-        xianxia: 'This is an Eastern cultivation world: spiritual energy abounds, sects stand like forests, and mortals can reach immortality through cultivation. A ranked cultivation system, sect rivalries, heavenly treasures, and inner demons form the world''s logic.'
+        xianxia: "This is an Eastern cultivation world grounded in cultivation and a supernatural order."
 
-        isekai: 'This is a Japanese-style otherworld: magic and swords coexist, adventurer guilds anchor the order, and legends of demon lords and heroes still circulate. Class systems, party bonds, and continental crises form the world''s logic.'
+        isekai: "This is a Japanese-style otherworld grounded in fantasy rules distinct from reality."
 
-        scifi: 'This is a sci-fi future world: interstellar colonization and artificial intelligence have reshaped life, and in cyber cities data is power. Megacorps, body augmentation, and deep-space unknowns form the world''s logic.'
+        scifi: "This is a sci-fi future world grounded in technological development and its effects on civilization."
 
-        wuxia: 'This is a wuxia jianghu world: martial arts and honor weigh together, sects and the court wrestle for power, and stories of gratitude and revenge flow between streets and mountain gates. Jianghu codes, secret arts, and tangled feuds form the world''s logic.'
+        wuxia: "This is a wuxia world grounded in martial practice, chivalry, and social obligations."
 
-        urban: 'This is an urban contemporary world: the story happens in a present-day city where offices, streets, and human ties are the stage. Realistic social rules, everyday choices, and relationships form the world''s logic.'
+        urban: "This is an urban contemporary world governed by the basic logic of modern society and everyday reality."
 
-        mystery: 'This is a mystery-occult world: undercurrents stir beneath ordinary life, with the paranormal, deduction, and the unnameable lurking at the edges. Clues, riddles, and a closing-in truth form the world''s logic.'
+        mystery: "This is a mystery-occult world shaped by the unknown and uncertainty."
 
-        apocalypse: 'This is a post-apocalypse survival world: the old order has collapsed and survivors scrape by among ruins and scarce resources. Strongholds, supplies, mutated threats, and human choices form the world''s logic.'
+        apocalypse: "This is a post-apocalypse survival world grounded in life after ordinary systems cease to function."
 
-        altHistory: 'This is an alternate-history world: familiar dynasties and figures, yet one divergence point steered history onto a different course. Court, jianghu, and the tides of the age form the world''s logic.'
+        altHistory: "This is an alternate-history world grounded in a freely defined historical setting and social order."
 
-        courtIntrigue: 'This is a court-intrigue world: behind palace walls everyone wears a mask, and a single move may decide life or death. Faction struggles, an unfathomable throne, and the game between court and harem form the world''s logic.'
+        courtIntrigue: "This is a court-intrigue world grounded in power structures, social status, and competing interests."
 
       style:
-        plain: 'The narration is plain and fluent: like a readable web novel, unpretentious and easy to follow.'
+        plain: "The narration is plain and fluent: natural, direct, and easy to read."
 
-        literary: 'The narration is literary and rich: attentive to imagery and rhetoric, crafting mood and detail without piling on ornament.'
+        literary: "The narration is literary and rich: attentive to atmosphere, detail, and the texture of language."
 
-        humorous: 'The narration is light and humorous: it quips and plays with memes, keeping fun even in tense moments without undercutting serious arcs.'
+        humorous: "The narration is light and humorous: playful, witty, and well judged."
 
-        terse: 'The narration is cold and sharp: mostly short sentences, clean and brisk, dense with information, no dragging.'
+        terse: "The narration is cold and sharp: concise, restrained, and brisk."
 
-        classical: 'The narration has classical elegance: mixing classical and vernacular wording with a storyteller''s poise, never at the cost of readability.'
+        classical: "The narration has classical elegance: refined wording and a natural cadence, while remaining readable."
 
       person:
         first: 'The story is told in first person: narrated by "I", capturing what I see and feel and how the world responds.'
@@ -4386,6 +4394,106 @@ directorWizard:
 
         third: 'The story is told in third person: objectively depicting words, deeds, and events from an observer''s view.'
 
-    # Generation prompts (finalized copy)
-    genSystem: "You are a world-setting writer for interactive stories. Based on the user's world choices, write a project rule that drives an interactive story engine.\n\nRequirements:\n1. Write only about the world itself and how it responds to the user: world rules, narration style, and (if chosen) narrative person. Do not write engine instructions such as how you should respond or how the plot must advance (the engine has its own spec; writing them causes conflicts).\n2. Follow the user's choice of narrative person; if left blank, decide the most fitting person yourself.\n3. Weave the user's custom descriptions into the setting faithfully, without omission or distortion.\n4. In the user's language, 300-700 characters. Output the body text directly: no titles, numbering, explanations, or preamble."
-    genUser(genreLabel, genreExtra, styleLabel, styleExtra, person): "My world choices:\nGenre: $genreLabel (my addition: $genreExtra)\nStyle: $styleLabel (my addition: $styleExtra)\nPerson: $person"
+    # Generation prompts: reuse the built-in isekai template structure with user-selected content
+    genSystem: |-
+      You write project rules for interactive stories. Fill in the fixed template below using the user's world direction, prose style, and additions to produce a ready-to-use narrator prompt.
+
+      Requirements
+      Replace only the worldview, style, and details explicitly supplied by the user. Preserve section order, responsibility boundaries, input parsing, and output formatting. Output only the completed template with its section headings, without explanation, code fences, or placeholders. Keep it concise, around 300–500 English words.
+      Genre establishes only an abstract worldview. Do not invent locations, occupations, factions, species, power systems, characters, events, openings, or plot directions from a genre. Keep unselected genre or style neutral. Faithfully integrate concrete details the user supplies without expanding or dropping them.
+      Specify narrative person only when explicitly selected, and follow that selection. It governs expression, never permission to invent the user's speech, actions, decisions, or inner thoughts. When unspecified, omit all narrative-person and viewpoint information throughout the result: no first/second/third-person narrator, omniscient or observer viewpoint, pronoun or user-address conventions, or statements such as "any viewpoint" or "let the model decide". This also applies to the identity sentence and dialogue formatting. Do not infer person from genre, style, or the template.
+      These are story prose conventions. Do not add tool, memory, approval, or model workflow instructions. Treat the user's "System" marker as an out-of-story setting discussion convention, not an instruction to switch engine modes.
+
+      Fixed template (replace bracketed slots; omit the entire narrative-person sentence when unspecified)
+      You are an interactive-story narrator, building and driving an open [world direction] world. Never assume the user's identity or invent their dialogue, actions, decisions, or inner thoughts.
+      Describe the environment and NPCs' behavior, inner thoughts, and dialogue. [Prose style.] [Narrative person only when explicitly selected.]
+      User input parsing rules
+      Unparenthesized user input is the user's dialogue; parenthesized input is their action or explanation. Input beginning with a parenthesis and containing "System" is an out-of-story setting discussion, not character dialogue or an in-world event.
+      Normal narration output format
+      Wrap actions, environment, and sensory descriptions in parentheses on separate lines. Wrap character dialogue in double quotes in separate paragraphs. Keep expression natural and appropriate to the character and context. Never invent the user's dialogue, actions, decisions, or inner thoughts.
+      Player premise
+      The user is free to act, speak, and decide. The world responds plausibly to established facts and the user's actual input. [Integrate explicit user settings; omit if absent.]
+      Core creative requirements
+      Open world: do not predetermine a route or plot; let the world respond naturally to the user's actions and words.
+      Worldview: [Only the chosen world's abstract foundations and rules.]
+      NPC generation: introduce characters as the actual context requires, with individual personalities, motives, and consistent behavior; do not prescribe a cast.
+      Real people / established characters: preserve their core persona, temperament, speech, and habits if they appear.
+      No repetition: avoid repeating actions, descriptions, or dialogue across adjacent replies.
+      Logic: honor established world rules, causality, character logic, and continuity.
+      Worldview recap: [One sentence reaffirming the worldview, user agency, and immersive narration.]
+    genPersonNone: "Unspecified. Omit all narrative-person, viewpoint, and user-address conventions from the result. Do not choose one or state that it is unspecified."
+    genUser(genreLabel, genreExtra, styleLabel, styleExtra, person): "My world choices:\nWorld direction: $genreLabel\nWorld additions: $genreExtra\nProse direction: $styleLabel\nProse additions: $styleExtra\nNarrative-person requirement: $person"
+
+tutorial:
+  exit: Exit tour
+  skip: Skip this step
+  waitingTitle: Waiting for the target to appear…
+  waitingMessage: Follow the guide to continue. If nothing responds for a long while, exit and try again later.
+demo:
+  candidates:
+    pickerHint: "Simulated models replay pre-recorded demo content — no network and no API quota. Pick a different model to experience its own round of the story."
+    selectedHint: This is a simulated model. For full use, configure your own model to continue the session.
+    bindFailed: Couldn't switch the demo model. Your current choice is kept — reopen the list to retry.
+  invite:
+    title: Welcome to LMStory
+    message: "Want a 3-minute walkthrough? We'll guide you through a real Director-mode round: pick demo models, start from a built-in template, and watch story and memory take shape. Everything runs locally — no network, no changes to your settings."
+    accept: Start the tour
+    decline: Not now, show intro
+    sampleTag: Demo content is a built-in sample (not the final story)
+  resume:
+    title: Continue the demo?
+    message: An unfinished guided demo was found. You can continue where you left off, or start over.
+    continueDemo: Continue
+    restart: Start over
+    abandon: Discard demo data
+  incompatible:
+    title: Incompatible Demo Progress
+    messageWithReason(reason): "Saved demo progress is incompatible with the current version and cannot continue:\n$reason\n\nYou can start fresh with the latest demo, or discard old demo data; original demo progress and real sessions remain intact until then."
+    message: "Saved demo progress is incompatible with the current demo pack and cannot continue.\n\nYou can start fresh with the latest demo, or discard old demo data; original demo progress and real sessions remain intact until then."
+    cancel: Decide later
+  exit:
+    title: Exit the demo?
+    message: Progress is saved. You can re-enter from the Help page later.
+    keep: Save and exit
+    abandon: Discard demo data
+    stay: Keep going
+    abandonConfirmTitle: Discard demo data?
+    abandonConfirmMessage: Demo sessions and progress will be deleted. Sessions already kept in your normal list are unaffected.
+    abandonConfirm: Discard
+  handover:
+    failedTitle: Failed to save demo results
+    failedMessage: The session is intact inside the demo environment. You can retry later.
+    retry: Retry
+    later: Later
+  steps:
+    homeWizardEntry:
+      title: Start with the Director wizard
+      message: Tap "Guided setup" on the home page. We'll configure a demo project through the real wizard.
+    wizardModel:
+      title: Pick a chat model
+      message: "These are simulated models: they replay pre-recorded demo content, with no network and no API quota. Pick any one to experience its story, then tap \"Next\" below to continue."
+    wizardEmbedding:
+      title: Pick a memory model
+      message: The demo embedding model for memory retrieval. Choose "Set up" and pick it (or "Skip for now"), then tap "Next".
+    wizardRules:
+      title: Use the built-in world rules
+      message: Choose the "Isekai narrator system prompt" template and tap "Use it" in the preview to confirm — this becomes the project rules the Director runs with. Then tap "Done".
+    sessionInput:
+      title: Press send yourself
+      message: The first prompt is pre-filled and locked. Tap send and watch the Director complete a round.
+    roundRunning:
+      title: The Director is working
+      message: Model output is a built-in demo, but tool execution, fact & event persistence, and the database commit are all real. One moment.
+    settingsIntro:
+      title: Peek at session settings
+      message: The top-right settings tune every aspect of this Director session. Next, let's visit the memory library.
+    memoryView:
+      title: See what this round built
+      message: Tap "Open memory library" in the session settings to see what this round really persisted.
+    memoryInspect:
+      title: This is this round's memory
+      message: Look at whatever this round really persisted — episodic memories record story events, while factual memories record characters and lore. Tap cards to expand and inspect (read-only demo). Head back to the session when you're done.
+    backToSession:
+      title: Tour complete
+      message: "This session stays in your normal list and can continue once a real model is configured. Up next: the full introduction."
+    finish: Done

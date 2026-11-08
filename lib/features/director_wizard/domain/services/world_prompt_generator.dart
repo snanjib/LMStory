@@ -64,6 +64,7 @@ class WorldPromptGenerator {
       reasoningEffort: ReasoningEffort.disabled,
       connectTimeout: connectTimeout,
       readTimeout: effectiveRead,
+      purpose: LlmPurposes.worldPrompt,
     );
 
     final stopwatch = Stopwatch()..start();

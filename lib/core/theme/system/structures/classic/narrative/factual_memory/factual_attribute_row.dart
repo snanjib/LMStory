@@ -27,6 +27,7 @@ class FactualAttributeRow extends StatelessWidget {
     required this.t,
     required this.onEdit,
     required this.onDelete,
+    this.readOnly = false,
     super.key,
   });
 
@@ -43,6 +44,7 @@ class FactualAttributeRow extends StatelessWidget {
   final Translations t;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final bool readOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -149,24 +151,26 @@ class FactualAttributeRow extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            tooltip: t.common.edit,
-            icon: const Icon(Icons.edit_outlined, size: 14),
-            color: colors.muted,
-            onPressed: onEdit,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            tooltip: t.common.delete,
-            icon: const Icon(Icons.delete_outline, size: 14),
-            color: colors.error,
-            onPressed: onDelete,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-            visualDensity: VisualDensity.compact,
-          ),
+          if (!readOnly) ...[
+            IconButton(
+              tooltip: t.common.edit,
+              icon: const Icon(Icons.edit_outlined, size: 14),
+              color: colors.muted,
+              onPressed: onEdit,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
+              tooltip: t.common.delete,
+              icon: const Icon(Icons.delete_outline, size: 14),
+              color: colors.error,
+              onPressed: onDelete,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
         ],
       ),
     );

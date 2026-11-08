@@ -72,6 +72,7 @@ class FactualMemoryTab extends ConsumerStatefulWidget {
     this.resolveMergeNamingConfig,
     this.initialMultiSelect = false,
     this.preselectEntityIds = const <String>{},
+    this.readOnly = false,
     super.key,
   });
 
@@ -87,6 +88,7 @@ class FactualMemoryTab extends ConsumerStatefulWidget {
   /// （找相似/疑似重复）跳转归并预选用）；预选 id 在数据加载后应用
   final bool initialMultiSelect;
   final Set<String> preselectEntityIds;
+  final bool readOnly;
 
   @override
   ConsumerState<FactualMemoryTab> createState() => _FactualMemoryTabState();
@@ -320,6 +322,7 @@ class _FactualMemoryTabState extends ConsumerState<FactualMemoryTab> {
             _selectedEntityIds.clear();
           }),
           onAddEntity: _onAddEntity,
+          readOnly: widget.readOnly,
         ),
         FactualFilterChips(
           colors: colors,
@@ -402,6 +405,8 @@ class _FactualMemoryTabState extends ConsumerState<FactualMemoryTab> {
             onDeleteAttribute: _onDeleteAttribute,
             selectedIds: _multiSelectMode ? _selectedEntityIds : null,
             onToggleSelect: _multiSelectMode ? _onToggleEntitySelect : null,
+            readOnly: widget.readOnly,
+            isFirstGroup: index == 0,
           );
         },
       ),

@@ -33,7 +33,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
   /// 仅做日志去重，避免每次打开设置页都重复刷同一条 WARN。
   final Set<String> _warnedOverrideDropPaths = {};
 
-  static const _overridesKey = 'user_overrides';
+  /// user_overrides 偏好键（单键 JSON 承载全部业务覆盖；演示环境
+  /// 确定性覆写与其同源引用）
+  static const userOverridesPrefKey = 'user_overrides';
+  static const _overridesKey = userOverridesPrefKey;
 
   // -- API Key 操作（委托给 ApiKeyDatasource）--
 

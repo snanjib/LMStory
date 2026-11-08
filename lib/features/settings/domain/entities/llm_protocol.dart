@@ -1,11 +1,6 @@
-import 'package:lmstory/core/network/llm_adapters/llm_protocol_adapter.dart'
-    show LlmProtocolAdapter;
-import 'package:lmstory/features/settings/domain/entities/api_preset.dart'
-    show ApiPreset;
-
 /// LLM 协议类型枚举
 ///
-/// 决定 [LlmProtocolAdapter] 的分发目标。每个 [ApiPreset] 持有一个协议类型，
+/// 决定 `LlmProtocolAdapter` 的分发目标。每个 `ApiPreset` 持有一个协议类型，
 /// 运行时按此字段选择对应的适配器构造请求 URL/Header/Body 并解析响应/SSE。
 ///
 /// 详见 DOC-12 §3.1。

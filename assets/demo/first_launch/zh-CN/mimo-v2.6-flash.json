@@ -1,0 +1,221 @@
+{
+  "manifest": {
+    "formatVersion": 2,
+    "sceneId": "first_launch_director",
+    "kind": "official",
+    "locale": "zh-CN",
+    "contentVersion": "batch-20261106-multimodel-1-mimo-v2.6-flash-candidate-1",
+    "sourceCommit": "e4dbd3b37ab432305286e54f6afd735dbed0b223",
+    "templateId": "builtin-isekai-narrator",
+    "templateHash": "346f6de1553d3916",
+    "promptHash": "070bde0187451cff",
+    "toolFingerprint": "224cab116c3ffa4c",
+    "embeddingDimensions": 8,
+    "embeddingModelLabel": "nvidia/nemotron-3.5-embed-8b",
+    "replayProfile": {
+      "id": "conservativeRelay",
+      "version": 1,
+      "protocol": "openaiCompatible",
+      "capabilitiesHash": "2f54d79457ea729b"
+    },
+    "source": {
+      "textModel": "mimo-v2.6-flash",
+      "embeddingModel": "nvidia/nemotron-3.5-embed-8b",
+      "capturedAt": "2026-11-07T05:09:55.079612Z",
+      "candidateIndex": 1
+    },
+    "notes": [
+      "LMStory 首次启动 Demo 数据包（kind=official，formatVersion=2）。",
+      "多模型补充采集候选：真实模型 mimo-v2.6-flash + nvidia/nemotron-3.5-embed-8b，画像 conservativeRelay，批次 20261106-multimodel-1。"
+    ]
+  },
+  "prompt": "（我叫南极，刚从超市出来就被泥头车创到了异世界。看了很多动漫的我费尽千辛万苦，终于找到最近的冒险者公会，我推开大门来到前台）你好，请问是在这里注册冒险者吗？",
+  "responses": {
+    "stream": [],
+    "chat": [
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "\n\n",
+          "finishReason": "tool_calls",
+          "usage": {
+            "promptTokens": 6317,
+            "completionTokens": 512,
+            "totalTokens": 6829,
+            "cacheReadTokens": 51
+          },
+          "toolCalls": [
+            {
+              "toolCallId": "tc-1",
+              "name": "read_compact_summary",
+              "arguments": {}
+            }
+          ]
+        }
+      },
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "新开场，无历史包袱。先看看有没有相关的写作技能要读（对话场景，前台注册）。\n\n",
+          "finishReason": "tool_calls",
+          "usage": {
+            "promptTokens": 6361,
+            "completionTokens": 512,
+            "totalTokens": 6873,
+            "cacheReadTokens": 51
+          },
+          "toolCalls": [
+            {
+              "toolCallId": "tc-2",
+              "name": "read_skill",
+              "arguments": {
+                "name": "dialogue-scenes"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "开场轮，无需检索历史。直接构建场景：一个刚穿越的年轻人第一次踏进公会，办理注册。\n\n",
+          "finishReason": "tool_calls",
+          "usage": {
+            "promptTokens": 6664,
+            "completionTokens": 512,
+            "totalTokens": 7176,
+            "cacheReadTokens": 51
+          },
+          "toolCalls": [
+            {
+              "toolCallId": "tc-3",
+              "name": "finish_round",
+              "arguments": {
+                "prose": "（门轴发出一声粘腻的呻吟，一股混着汗味、草药和陈年麦酒气味的暖风扑在你脸上。公会大厅比漫画里画的还要吵，靠墙的长桌上摆着十几只没洗的木杯，一个穿皮甲的兽人正把脚翘在桌沿上抠指甲，坐在他对面的精灵则皱着眉把椅子往外挪了三公分。）\n\n（正对面是一条横过来的长柜台，柜台面被无数人的胳膊肘磨出一层油光。柜台后面坐着三个人，最左边那个矮人正趴着打呼，中间那个抱着一摞羊皮纸跑得飞快，只有最右边的人抬起了头。）\n\n（一个女人，二十七八的样子，深棕色的头发在脑后扎成一束，衬衫袖口卷到手肘，小臂上印着一圈旧烫伤。她放下手里的鹅毛笔，笔尖在墨水瓶沿上磕了两下，抬眼把你从头顶看到脚底，在鞋上多停了一秒。）\n\n\"注册。\"她说，\"对，就这儿。\"\n\n（她单手把柜台底下一叠纸抽出来，啪地拍在台面上，纸角翘起来一半。那纸闻着有一股新鞣的酸味。）\n\n\"先说好，第一次登记不收钱，第二个月开始每年两枚银币。你要是不打算活过第二个月，现在转身走还来得及。\"\n\n（她说到这儿自己先笑了一下，嘴角只提了一点，笑纹很浅。旁边趴着的矮人翻了个身，呼噜声换了个调。）\n\n\"名字。\"\n\n（她重新拿起笔，笔尖悬在纸上，眼睛还看着你，等着。柜台后面那摞纸的最上面一张留着一道洇开的旧墨迹，像谁写过又急着擦掉了。）\n"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "\n\n",
+          "finishReason": "tool_calls",
+          "usage": {
+            "promptTokens": 7149,
+            "completionTokens": 512,
+            "totalTokens": 7661,
+            "cacheReadTokens": 1254
+          },
+          "toolCalls": [
+            {
+              "toolCallId": "tc-4",
+              "name": "record_event_memory",
+              "arguments": {
+                "importance": 3,
+                "what": "穿越者南极被泥头车撞死后抵达异世界，摸到最近一座冒险者公会并向前台要求注册冒险者，被女接待员接下登记申请。",
+                "where": "某城镇的冒险者公会大厅",
+                "who": "南极、公会前台女接待员"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "\n\n",
+          "finishReason": "tool_calls",
+          "usage": {
+            "promptTokens": 7350,
+            "completionTokens": 512,
+            "totalTokens": 7862,
+            "cacheReadTokens": 1331
+          },
+          "toolCalls": [
+            {
+              "toolCallId": "tc-5",
+              "name": "update_facts",
+              "arguments": {
+                "deltas": [
+                  {
+                    "action": "create_entity",
+                    "confidence": 5,
+                    "entity_type": "character",
+                    "primary_name": "南极",
+                    "reason": "主角首次登场",
+                    "value": "从现代地球被泥头车撞死后穿越到异世界的青年，看过大量动漫，对异世界规则有一定先验认知；初到异世界即找到冒险者公会要求注册。外貌性格尚未展开。暂为无等级、无技能的注册申请者。重要度设为高（主角）。"
+                  },
+                  {
+                    "action": "create_entity",
+                    "confidence": 4,
+                    "entity_type": "character",
+                    "primary_name": "公会前台女接待员",
+                    "reason": "首个NPC，公会前台",
+                    "value": "冒险者公会前台接待员，约二十七八岁，深棕色长发扎成一束，衬衫袖口卷到手肘，小臂有一圈旧烫伤。语气直白带点冷幽默，管理登记事务，熟知公会收费规则（首次登记免费，次年起每年两枚银币）。暂时无名。"
+                  },
+                  {
+                    "action": "create_entity",
+                    "confidence": 4,
+                    "entity_type": "location",
+                    "primary_name": "冒险者公会大厅",
+                    "reason": "开场场景",
+                    "value": "某城镇的冒险者公会大厅，内有长柜台、靠墙长桌、未洗木杯；气味混杂汗味、草药与陈年麦酒；大厅吵闹，有兽人、精灵等各族冒险者聚集；柜台后有三名工作人员（打呼的矮人、跑腿的、接待女）。"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "\n\n",
+          "finishReason": "tool_calls",
+          "usage": {
+            "promptTokens": 7979,
+            "completionTokens": 512,
+            "totalTokens": 8491,
+            "cacheReadTokens": 1254
+          },
+          "toolCalls": [
+            {
+              "toolCallId": "tc-6",
+              "name": "finish_round",
+              "arguments": {
+                "prose": "（门轴发出一声粘腻的呻吟，一股混着汗味、草药和陈年麦酒气味的暖风扑在你脸上。公会大厅比漫画里画的还要吵，靠墙的长桌上摆着十几只没洗的木杯，一个穿皮甲的兽人正把脚翘在桌沿上抠指甲，坐在他对面的精灵则皱着眉把椅子往外挪了三公分。）\n\n（正对面是一条横过来的长柜台，柜台面被无数人的胳膊肘磨出一层油光。柜台后面坐着三个人，最左边那个矮人正趴着打呼，中间那个抱着一摞羊皮纸跑得飞快，只有最右边的人抬起了头。）\n\n（一个女人，二十七八的样子，深棕色的头发在脑后扎成一束，衬衫袖口卷到手肘，小臂上印着一圈旧烫伤。她放下手里的鹅毛笔，笔尖在墨水瓶沿上磕了两下，抬眼把你从头顶看到脚底，在鞋上多停了一秒。）\n\n\"注册。\"她说，\"对，就这儿。\"\n\n（她单手把柜台底下一叠纸抽出来，啪地拍在台面上，纸角翘起来一半。那纸闻着有一股新鞣的酸味。）\n\n\"先说好，第一次登记不收钱，第二个月开始每年两枚银币。你要是不打算活过第二个月，现在转身走还来得及。\"\n\n（她说到这儿自己先笑了一下，嘴角只提了一点，笑纹很浅。旁边趴着的矮人翻了个身，呼噜声换了个调。）\n\n\"名字。\"\n\n（她重新拿起笔，笔尖悬在纸上，眼睛还看着你，等着。柜台后面那摞纸的最上面一张留着一道洇开的旧墨迹，像谁写过又急着擦掉了。）\n"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "embeddings": [],
+  "expectations": {
+    "proseContains": [
+      "（门轴发出一声粘腻的呻吟，一股混着汗味、草药和陈年麦酒气味的"
+    ],
+    "entityNames": [
+      "南极",
+      "公会前台女接待员",
+      "冒险者公会大厅"
+    ],
+    "eventSummaryContains": [
+      "穿越者南极被泥头车撞死后抵达异世界，摸到"
+    ],
+    "nextTurn": 2,
+    "messageRoles": [
+      "user",
+      "assistant"
+    ]
+  }
+}

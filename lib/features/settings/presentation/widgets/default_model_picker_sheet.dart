@@ -28,6 +28,13 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///   返回 false 取消选择
 /// - [onModelSelected] 签名改为支持 null（清除语义）
 ///
+/// **选择回执**：[onModelSelected] 正常完成=
+/// 选择成功（关闭 sheet + 成功 snackbar）；**抛出异常=选择失败**（sheet
+/// 保持打开可就地重试，不关闭、不弹成功提示——错误说明由调用方承担，
+/// 如演示绑定失败 snackbar）。并发点击按序次仲裁：只有**最新一次**选择
+/// 的结果驱动关闭与提示，被取代的迟到结果静默让位——快速连点/选择中途
+/// 关闭都不会重复 pop 或弹过期提示。正式路径不抛异常，行为与此前一致。
+///
 /// 2026-07-21 复用扩展：新增 [title] / [onModelSelected] / [successMessage]
 /// 参数，支持复用于"会话标题模型"等场景。未提供时走默认的 setDefaultModel 路径。
 ///
@@ -45,6 +52,7 @@ class DefaultModelPickerSheet extends ConsumerStatefulWidget {
     this.clearLabel,
     this.clearSuccessMessage,
     this.onBeforeSelect,
+    this.hintText,
     super.key,
   });
 
@@ -89,6 +97,11 @@ class DefaultModelPickerSheet extends ConsumerStatefulWidget {
   /// 清除操作不触发此钩子（清除无需确认，由 [clearLabel] 自身语义承担）。
   final Future<bool> Function(String presetId, String modelId)? onBeforeSelect;
 
+  /// 列表顶部说明文字（可选）。非 null 时在第一个分组上方渲染一条简短
+  /// 说明横幅——供演示作用域标注「仿真模型」语义；正式模型选择不传，
+  /// 零视觉变化。提示不抢焦点、不拦截列表点击。
+  final String? hintText;
+
   @override
   ConsumerState<DefaultModelPickerSheet> createState() =>
       _DefaultModelPickerSheetState();
@@ -96,6 +109,9 @@ class DefaultModelPickerSheet extends ConsumerStatefulWidget {
 
 class _DefaultModelPickerSheetState
     extends ConsumerState<DefaultModelPickerSheet> {
+  /// 选择序次：每次发起选择递增；只有最新序次的结果驱动 pop/提示。
+  int _selectSeq = 0;
+
   @override
   void initState() {
     super.initState();
@@ -195,18 +211,26 @@ class _DefaultModelPickerSheetState
     List<_ProviderGroupData> groups,
     Translations t,
   ) {
+    // 顶部可选说明横幅（演示语义标注；正式调用不传则零渲染）
+    final hint = widget.hintText;
+    final extraCount =
+        (hint != null ? 1 : 0) + (widget.clearLabel != null ? 1 : 0);
     return ListView.builder(
       padding: const EdgeInsets.all(SimpleSpacing.sLg),
-      itemCount: groups.length + (widget.clearLabel != null ? 1 : 0),
+      itemCount: groups.length + extraCount,
       itemBuilder: (context, index) {
-        // 顶部"清除/使用全局"按钮
-        if (widget.clearLabel != null && index == 0) {
+        // 顶部说明横幅
+        if (hint != null && index == 0) {
+          return _HintBanner(text: hint);
+        }
+        // "清除/使用全局"按钮
+        if (widget.clearLabel != null && index == (hint != null ? 1 : 0)) {
           return _ClearSelectionTile(
             label: widget.clearLabel!,
             onTap: () => _handleClear(context),
           );
         }
-        final groupIndex = widget.clearLabel != null ? index - 1 : index;
+        final groupIndex = index - extraCount;
         final group = groups[groupIndex];
         return _ProviderGroup(
           presetId: group.preset.presetId,
@@ -221,11 +245,17 @@ class _DefaultModelPickerSheetState
   }
 
   /// 处理模型选择：onBeforeSelect 钩子 → 持久化 → 关闭 sheet → snackbar
+  ///
+  /// 回执语义（见类头注）：提交抛出异常=失败（保持打开可
+  /// 重试，不弹成功）；正常完成=成功。序次仲裁：处理期间用户又点了
+  /// 其他项时，本次结果已过期——静默让位（不 pop、不提示），由最新
+  /// 一次选择决定导航；sheet 已被手动关闭时同样不再 pop。
   Future<void> _handleSelect(
     BuildContext context,
     _ProviderGroupData group,
     ModelInfo model,
   ) async {
+    final seq = ++_selectSeq;
     // 选择前确认钩子（如嵌入模型切换确认）
     if (widget.onBeforeSelect != null) {
       final confirmed = await widget.onBeforeSelect!(
@@ -235,18 +265,25 @@ class _DefaultModelPickerSheetState
       if (!confirmed) return; // 用户取消，不关闭 sheet
     }
 
-    if (widget.onModelSelected != null) {
-      await widget.onModelSelected!(
-        group.preset.presetId,
-        model.modelId,
-      );
-    } else {
-      await ref.read(settingsNotifierProvider.notifier).setDefaultModel(
-            presetId: group.preset.presetId,
-            modelId: model.modelId,
-          );
+    try {
+      if (widget.onModelSelected != null) {
+        await widget.onModelSelected!(
+          group.preset.presetId,
+          model.modelId,
+        );
+      } else {
+        await ref.read(settingsNotifierProvider.notifier).setDefaultModel(
+              presetId: group.preset.presetId,
+              modelId: model.modelId,
+            );
+      }
+    } catch (_) {
+      // 失败回执：保持打开可重试；成功提示绝不出现。错误说明由调用方
+      // 展示（如演示作用域的绑定失败 snackbar）
+      return;
     }
-    if (!context.mounted) return;
+    if (seq != _selectSeq) return; // 已被更新的选择请求取代：静默让位
+    if (!context.mounted) return; // sheet 已被手动关闭：不再 pop/提示
     Navigator.of(context).pop();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -262,16 +299,22 @@ class _DefaultModelPickerSheetState
     );
   }
 
-  /// 处理清除选择：返回 (null, null) 给调用方
+  /// 处理清除选择：返回 (null, null) 给调用方（同样的序次仲裁防重复 pop）
   Future<void> _handleClear(BuildContext context) async {
-    if (widget.onModelSelected != null) {
-      await widget.onModelSelected!(null, null);
-    } else {
-      await ref.read(settingsNotifierProvider.notifier).setDefaultModel(
-            presetId: null,
-            modelId: null,
-          );
+    final seq = ++_selectSeq;
+    try {
+      if (widget.onModelSelected != null) {
+        await widget.onModelSelected!(null, null);
+      } else {
+        await ref.read(settingsNotifierProvider.notifier).setDefaultModel(
+              presetId: null,
+              modelId: null,
+            );
+      }
+    } catch (_) {
+      return;
     }
+    if (seq != _selectSeq) return;
     if (!context.mounted) return;
     Navigator.of(context).pop();
     if (widget.clearSuccessMessage != null) {
@@ -287,6 +330,50 @@ class _DefaultModelPickerSheetState
         ),
       );
     }
+  }
+}
+
+/// 顶部可选说明横幅（[DefaultModelPickerSheet.hintText]）。
+///
+/// 视觉：surfaceVariant 底 + info 图标，与模型项同族但不发出点击语义；
+/// 不吸收指针事件以外的任何交互，列表滚动/点击不受影响。
+class _HintBanner extends StatelessWidget {
+  const _HintBanner({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.lm.palette;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: SimpleSpacing.sMd),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(
+          horizontal: SimpleSpacing.sMd,
+          vertical: SimpleSpacing.sSm,
+        ),
+        decoration: BoxDecoration(
+          color: colors.surfaceVariant,
+          borderRadius: BorderRadius.circular(
+            context.lmUi.radius(LmCorner.md),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.info_outline, size: 16, color: colors.muted),
+            const SizedBox(width: SimpleSpacing.sSm),
+            Expanded(
+              child: Text(
+                text,
+                style: SimpleTextStyles.bodySm.copyWith(color: colors.muted),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

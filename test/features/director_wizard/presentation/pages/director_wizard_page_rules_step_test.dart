@@ -234,6 +234,63 @@ void main() {
     expect(find.textContaining(identity), findsOneWidget, reason: '兜底为同选项拼装结果');
   });
 
+  for (final person in ['留空', '第一人称', '第二人称', '第三人称']) {
+    testWidgets('模型请求共用抽象选项块并准确传入人称：$person', (tester) async {
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final fake = FakeWizardSettingsNotifier(
+        initialPresets: [keyedPreset()],
+        keyedPresetIds: const {'preset-1'},
+      );
+      final llm = await pumpToRulesStep(tester, fake: fake);
+      await tester.tap(find.text('捏一个自己的世界'));
+      await tester.pumpAndSettle();
+      await answerWizardQuiz(
+        tester,
+        question: '想在一个什么样的世界里玩？',
+        option: '历史架空',
+        dismissSheet: false,
+      );
+      await tester.enterText(find.byType(TextField), '只围绕普通人的日常生活');
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      await answerWizardQuiz(
+        tester,
+        question: '喜欢什么样的讲述文风？',
+        option: '轻松幽默',
+      );
+      await answerWizardQuiz(
+        tester,
+        question: '故事用什么视角讲？',
+        option: person,
+      );
+      await tester.ensureVisible(find.text('让模型替你写'));
+      await tester.tap(find.text('让模型替你写'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('开始写'));
+      await tester.pumpAndSettle();
+
+      final request = llm.requests.single;
+      final input = request.messages.last['content']! as String;
+      final rules = t.directorWizard.rules;
+      expect(input, contains(rules.blocks.genre.altHistory));
+      expect(input, contains(rules.blocks.style.humorous));
+      expect(input, contains('只围绕普通人的日常生活'));
+      expect(input, isNot(contains('庙堂')));
+      expect(input, isNot(contains('江湖')));
+      expect(
+        input,
+        contains(person == '留空' ? rules.genPersonNone : '人称要求：$person'),
+      );
+      if (person == '留空') {
+        expect(input, isNot(matches('第[一二三]人称')));
+        expect(input, isNot(contains('自由发挥')));
+      }
+    });
+  }
+
   testWidgets('开关关闭：就用这个 不弹命名框不建模板', (tester) async {
     final fake = FakeWizardSettingsNotifier(
       initialPresets: [keyedPreset()],
@@ -566,10 +623,12 @@ class _GenLlmService implements LlmService {
   final Completer<void>? gate;
 
   int callCount = 0;
+  final requests = <LlmRequest>[];
 
   @override
   Future<LlmResponse> chat(LlmRequest request) async {
     callCount++;
+    requests.add(request);
     if (gate != null) await gate!.future;
     if (llmFails) throw Exception('llm down');
     return const LlmResponse(content: '模型生成的世界设定ABC');

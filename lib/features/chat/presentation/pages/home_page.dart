@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
@@ -12,11 +11,13 @@ import 'package:lmstory/core/theme/system/lm_button_metrics.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/core/tutorial/spotlight_target.dart';
 import 'package:lmstory/features/advanced/presentation/advanced_mode_flag.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/presentation/widgets/continuing_story_card.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
 import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
 import 'package:lmstory/features/settings/presentation/pages/provider_list_page.dart';
 import 'package:lmstory/features/settings/presentation/pages/settings_page.dart';
@@ -226,26 +227,47 @@ class _HomePageState extends ConsumerState<HomePage> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
+            final wizardAvailable = ref.watch(advancedModeFlagProvider) &&
+                widget.onDirectorWizard != null;
+            final extraBannersHeight =
+                (!_hasAnyApiKey ? 96.0 : 0.0) + (wizardAvailable ? 80.0 : 0.0);
+            final minHeightForStory =
+                (520.0 + extraBannersHeight) * textScale;
             final showStory = !_isLoading &&
                 !_loadFailed &&
                 _continuingStory != null &&
-                constraints.maxHeight >=
-                    (_hasAnyApiKey ? 480 : 610) * textScale;
+                constraints.maxHeight >= minHeightForStory;
             final compactLayout = showStory ||
                 constraints.maxHeight < LmLayout.homeCompactHeight * textScale;
             final featured = showStory ? _continuingStory : null;
+            final storyCardCompact =
+                constraints.maxHeight < (720.0 + extraBannersHeight) * textScale;
+
+            // 极限短屏兜底：当非弹性元素总高度超过视口时，高度下界保护以允许纵向滑动，
+            // 杜绝 RenderFlex 底部溢出。
+            final minFixedRequired = (
+                80.0 +
+                (!_hasAnyApiKey ? 88.0 : 0.0) +
+                (featured != null ? (storyCardCompact ? 96.0 : 270.0) : 0.0) +
+                (compactLayout ? 60.0 : 72.0) +
+                (wizardAvailable ? 72.0 : 0.0) +
+                56.0 +
+                105.0
+            ) * textScale;
             return RefreshIndicator(
               onRefresh: _loadRecentSessions,
               child: RepaintBoundary(
                 child: CustomScrollView(
-                  // 首页内容恒定一屏：唯一滚动子项的高度恒等于视口高度，
-                  // 滚动范围恒为 0，页面不可上下滑动；唯一保留的手势是
-                  // 顶部 overscroll 触发的下拉刷新（内容不足一屏时同样可用）。
+                  // 首页内容固定一屏优先；在极限短屏或大字号下，
+                  // 最小所需高度自适应扩展并允许纵向滚动，杜绝 RenderFlex 底部溢出。
                   physics: const AlwaysScrollableScrollPhysics(),
                   slivers: [
                     SliverToBoxAdapter(
                       child: SizedBox(
-                        height: constraints.maxHeight,
+                        height: math.max(
+                          constraints.maxHeight,
+                          minFixedRequired,
+                        ),
                         child: Center(
                           child: ConstrainedBox(
                             constraints: BoxConstraints(
@@ -268,8 +290,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                     ),
                                     child: ContinuingStoryCard(
                                       session: featured,
-                                      compact: constraints.maxHeight <
-                                          720 * textScale,
+                                      compact: storyCardCompact,
                                       onTap: () => widget.onSessionSelected(
                                         featured,
                                       ),
@@ -576,70 +597,74 @@ class _HomePageState extends ConsumerState<HomePage> {
     LmPalette colors, {
     required VoidCallback onTap,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.primaryDim,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-        border: Border.all(color: colors.primary, width: 1.5),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(
-            context.lmUi.radius(LmCorner.lg),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(SimpleSpacing.sMd),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                minHeight: LmButtonMetrics.minInteractiveHeight,
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: colors.primary,
-                      borderRadius: BorderRadius.circular(
-                        context.lmUi.radius(LmCorner.md),
+    // Spotlight 语义目标（教程定位用；无教程活动零开销）
+    return SpotlightTarget(
+      id: DemoTargetIds.homeWizardCard,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.primaryDim,
+          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
+          border: Border.all(color: colors.primary, width: 1.5),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(
+              context.lmUi.radius(LmCorner.lg),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(SimpleSpacing.sMd),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: LmButtonMetrics.minInteractiveHeight,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: colors.primary,
+                        borderRadius: BorderRadius.circular(
+                          context.lmUi.radius(LmCorner.md),
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.auto_awesome,
+                        color: colors.surface,
+                        size: 22,
                       ),
                     ),
-                    child: Icon(
-                      Icons.auto_awesome,
-                      color: colors.surface,
-                      size: 22,
-                    ),
-                  ),
-                  const SizedBox(width: SimpleSpacing.sMd),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          t.directorWizard.entryTitle,
-                          style: SimpleTextStyles.title3.copyWith(
-                            color: colors.ink,
-                            fontWeight: FontWeight.w600,
+                    const SizedBox(width: SimpleSpacing.sMd),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            t.directorWizard.entryTitle,
+                            style: SimpleTextStyles.title3.copyWith(
+                              color: colors.ink,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Text(
-                          t.directorWizard.entryDesc,
-                          style: SimpleTextStyles.caption.copyWith(
-                            color: colors.muted,
+                          Text(
+                            t.directorWizard.entryDesc,
+                            style: SimpleTextStyles.caption.copyWith(
+                              color: colors.muted,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  Icon(Icons.chevron_right, color: colors.muted),
-                ],
+                    Icon(Icons.chevron_right, color: colors.muted),
+                  ],
+                ),
               ),
             ),
           ),
@@ -855,23 +880,29 @@ class _HomePageState extends ConsumerState<HomePage> {
         // 剩余高度一行也放不下（短屏/横屏把 5 条全裁掉）时不再留空白——
         // 给一行指路提示（固定一屏形态不动，完整列表在侧边栏）。
         if (visibleCount == 0) {
+          if (constraints.maxHeight < 24) {
+            return const SizedBox.shrink();
+          }
           return Center(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.menu_open_outlined, size: 14, color: colors.muted),
-                const SizedBox(width: SimpleSpacing.sXs),
-                Flexible(
-                  child: Text(
-                    t.chat.home.recentAllInSidebar,
-                    style: SimpleTextStyles.caption.copyWith(
-                      color: colors.muted,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.menu_open_outlined, size: 14, color: colors.muted),
+                  const SizedBox(width: SimpleSpacing.sXs),
+                  Flexible(
+                    child: Text(
+                      t.chat.home.recentAllInSidebar,
+                      style: SimpleTextStyles.caption.copyWith(
+                        color: colors.muted,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           );
         }

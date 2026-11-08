@@ -151,6 +151,7 @@ class FactsMergeService {
       protocol: namingConfig.protocol,
       providerOptions: namingConfig.providerOptions,
       reasoningEffort: ReasoningEffort.disabled,
+      purpose: LlmPurposes.memoryMerge,
     );
 
     final stopwatch = Stopwatch()..start();

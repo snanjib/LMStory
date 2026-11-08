@@ -97,6 +97,7 @@ class SuggestReplyGenerator {
       // 用户 network.* 超时透传（照抄标题生成先例）
       connectTimeout: connectTimeout,
       readTimeout: readTimeout,
+      purpose: LlmPurposes.suggestReply,
     );
 
     try {

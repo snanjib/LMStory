@@ -11,11 +11,14 @@ import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/experience_memory_tab.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/factual_memory_tab.dart';
+import 'package:lmstory/core/tutorial/spotlight_target.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/presentation/pages/advanced_chat_page.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
+import 'package:lmstory/features/demo/presentation/demo_bridge.dart';
 import 'package:lmstory/features/intermediate/presentation/pages/intermediate_chat_page.dart';
 import 'package:lmstory/features/memory/domain/services/facts_merge_service.dart';
 import 'package:lmstory/features/memory/domain/services/memory_index_health.dart';
@@ -110,10 +113,15 @@ class _MemoryBrowserPageState extends ConsumerState<MemoryBrowserPage>
       llmService: ref.read(llmServiceProvider),
     );
     final resolver = ref.read(configurationResolverProvider);
+    final isDemo = ref.watch(demoBridgeProvider) != null;
 
     return Scaffold(
       backgroundColor: context.scaffoldBgOf(colors.bg),
       appBar: AppBar(
+        leading: const SpotlightTarget(
+          id: DemoTargetIds.memoryBackButton,
+          child: BackButton(),
+        ),
         title: Text(
           t.intermediate.memoryBrowser.title,
           style: LmNarrativeTextStyles.narrativeDisplay.copyWith(
@@ -132,13 +140,19 @@ class _MemoryBrowserPageState extends ConsumerState<MemoryBrowserPage>
         bottom: TabBar(
           controller: _tabController,
           tabs: [
-            Tab(
-              icon: const Icon(Icons.history_outlined, size: 18),
-              text: t.intermediate.memoryBrowser.tabExperiences,
+            SpotlightTarget(
+              id: DemoTargetIds.memoryEpisodicTab,
+              child: Tab(
+                icon: const Icon(Icons.history_outlined, size: 18),
+                text: t.intermediate.memoryBrowser.tabExperiences,
+              ),
             ),
-            Tab(
-              icon: const Icon(Icons.account_tree_outlined, size: 18),
-              text: t.intermediate.memoryBrowser.tabFacts,
+            SpotlightTarget(
+              id: DemoTargetIds.memoryFactualTab,
+              child: Tab(
+                icon: const Icon(Icons.account_tree_outlined, size: 18),
+                text: t.intermediate.memoryBrowser.tabFacts,
+              ),
             ),
           ],
           labelColor: colors.primary,
@@ -161,9 +175,13 @@ class _MemoryBrowserPageState extends ConsumerState<MemoryBrowserPage>
             child: TabBarView(
               controller: _tabController,
               children: [
-                ExperienceMemoryTab(sessionId: widget.session.sessionId),
+                ExperienceMemoryTab(
+                  sessionId: widget.session.sessionId,
+                  readOnly: isDemo,
+                ),
                 FactualMemoryTab(
                   sessionId: widget.session.sessionId,
+                  readOnly: isDemo,
                   mergeService: mergeService,
                   // 归并模型=会话当前生成模型（2026-08-26 修正）：
                   // 与主管线同源，避免读旧「总结」快照调死已下架模型；

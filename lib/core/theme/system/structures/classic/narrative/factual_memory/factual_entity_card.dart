@@ -4,6 +4,8 @@ import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/factual_memory/factual_attribute_row.dart';
+import 'package:lmstory/core/tutorial/spotlight_target.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
@@ -30,6 +32,8 @@ class FactualEntityTypeGroup extends StatelessWidget {
     required this.onDeleteAttribute,
     this.selectedIds,
     this.onToggleSelect,
+    this.readOnly = false,
+    this.isFirstGroup = false,
     super.key,
   });
 
@@ -51,6 +55,8 @@ class FactualEntityTypeGroup extends StatelessWidget {
   final void Function(FactualAttribute) onDeleteAttribute;
   final Set<String>? selectedIds;
   final void Function(FactualEntity)? onToggleSelect;
+  final bool readOnly;
+  final bool isFirstGroup;
 
   String get _typeLabel {
     switch (type) {
@@ -86,12 +92,15 @@ class FactualEntityTypeGroup extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        ...entities.map((entity) {
-          return FactualEntityCard(
+        ...entities.asMap().entries.map((entry) {
+          final index = entry.key;
+          final entity = entry.value;
+          final card = FactualEntityCard(
             entity: entity,
             attributes: attributesByEntity[entity.entityId] ?? const [],
             colors: colors,
             t: t,
+            readOnly: readOnly,
             onEdit: () => onEditEntity(entity),
             onDelete: () => onDeleteEntity(entity),
             onRestore: () => onRestoreEntity(entity),
@@ -106,6 +115,13 @@ class FactualEntityTypeGroup extends StatelessWidget {
             onToggleSelect:
                 onToggleSelect == null ? null : () => onToggleSelect!(entity),
           );
+          if (isFirstGroup && index == 0 && readOnly) {
+            return SpotlightTarget(
+              id: DemoTargetIds.memoryFactualItem,
+              child: card,
+            );
+          }
+          return card;
         }),
       ],
     );
@@ -129,6 +145,7 @@ class FactualEntityCard extends StatefulWidget {
     this.selected = false,
     this.onToggleSelect,
     this.onToggleInjection,
+    this.readOnly = false,
     super.key,
   });
 
@@ -150,6 +167,7 @@ class FactualEntityCard extends StatefulWidget {
   final void Function(FactualAttribute) onDeleteAttribute;
   final bool selected;
   final VoidCallback? onToggleSelect;
+  final bool readOnly;
 
   @override
   State<FactualEntityCard> createState() => _FactualEntityCardState();
@@ -320,8 +338,9 @@ class _FactualEntityCardState extends State<FactualEntityCard> {
               style: LmNarrativeTextStyles.caption
                   .copyWith(color: widget.colors.muted),
             ),
-            PopupMenuButton<String>(
-              icon: Icon(Icons.more_vert, color: widget.colors.muted, size: 18),
+            if (!widget.readOnly)
+              PopupMenuButton<String>(
+                icon: Icon(Icons.more_vert, color: widget.colors.muted, size: 18),
               color: widget.colors.surfaceElevated,
               onSelected: (value) {
                 switch (value) {
@@ -500,27 +519,28 @@ class _FactualEntityCardState extends State<FactualEntityCard> {
             ..._attributeRows(),
 
           // 新增属性按钮
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: widget.onAddAttribute,
-              icon: Icon(Icons.add, size: 16, color: widget.colors.primary),
-              label: Text(
-                widget.t.intermediate.memoryBrowser.addAttributeTitle,
-                style: LmNarrativeTextStyles.caption
-                    .copyWith(color: widget.colors.primary),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: LmSpacing.sXs,
-                  vertical: LmSpacing.s2xs,
+          if (!widget.readOnly)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: widget.onAddAttribute,
+                icon: Icon(Icons.add, size: 16, color: widget.colors.primary),
+                label: Text(
+                  widget.t.intermediate.memoryBrowser.addAttributeTitle,
+                  style: LmNarrativeTextStyles.caption
+                      .copyWith(color: widget.colors.primary),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                minimumSize: const Size(0, 32),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: LmSpacing.sXs,
+                    vertical: LmSpacing.s2xs,
+                  ),
+                  minimumSize: const Size(0, 32),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -542,6 +562,7 @@ class _FactualEntityCardState extends State<FactualEntityCard> {
           baselineKeys: baselineKeys,
           colors: widget.colors,
           t: widget.t,
+          readOnly: widget.readOnly,
           onEdit: () => widget.onEditAttribute(attr),
           onDelete: () => widget.onDeleteAttribute(attr),
         ),

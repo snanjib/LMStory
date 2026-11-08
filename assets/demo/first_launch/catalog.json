@@ -1,0 +1,60 @@
+{
+  "catalogFormatVersion": 1,
+  "candidates": [
+    {
+      "id": "glm-5.3",
+      "sourceModelId": "glm-5.3",
+      "virtualModelId": "demo-narrator-glm",
+      "locale": "zh-CN",
+      "assetPath": "assets/demo/first_launch/zh-CN.json",
+      "packSha256": "af3b8dae18869d68dc107511239381157a490661d8e72a7caa9c956cb95c4c3b",
+      "isDefault": true,
+      "displayNameZh": "仿真 · GLM-5.3",
+      "displayNameEn": "Sim · GLM-5.3"
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "sourceModelId": "deepseek-v4.1-flash",
+      "virtualModelId": "demo-narrator-deepseek-v4.1-flash",
+      "locale": "zh-CN",
+      "assetPath": "assets/demo/first_launch/zh-CN/deepseek-v4.1-flash.json",
+      "packSha256": "9f1f03acbc0d2a2562b5e12fab0a51b8369515c791f2822db50ebb1064072428",
+      "isDefault": false,
+      "displayNameZh": "仿真 · DeepSeek-V4.1-Flash",
+      "displayNameEn": "Sim · DeepSeek-V4.1-Flash"
+    },
+    {
+      "id": "glm-5.3-flash",
+      "sourceModelId": "glm-5.3-flash",
+      "virtualModelId": "demo-narrator-glm-5.3-flash",
+      "locale": "zh-CN",
+      "assetPath": "assets/demo/first_launch/zh-CN/glm-5.3-flash.json",
+      "packSha256": "861b8940728076a6d1f83013ad4ade38fdcdb62822e7f2d9d8a060643e8954ac",
+      "isDefault": false,
+      "displayNameZh": "仿真 · GLM-5.3-Flash",
+      "displayNameEn": "Sim · GLM-5.3-Flash"
+    },
+    {
+      "id": "kimi-k3.1-pro",
+      "sourceModelId": "kimi-k3.1-pro",
+      "virtualModelId": "demo-narrator-kimi-k3.1-pro",
+      "locale": "zh-CN",
+      "assetPath": "assets/demo/first_launch/zh-CN/kimi-k3.1-pro.json",
+      "packSha256": "739e9ca66536edaa8d5bf03ee1ad6d3ef520481d883ac1ec5b5266767533a225",
+      "isDefault": false,
+      "displayNameZh": "仿真 · Kimi-K3.1-Pro",
+      "displayNameEn": "Sim · Kimi-K3.1-Pro"
+    },
+    {
+      "id": "mimo-v2.6-flash",
+      "sourceModelId": "mimo-v2.6-flash",
+      "virtualModelId": "demo-narrator-mimo-v2.6-flash",
+      "locale": "zh-CN",
+      "assetPath": "assets/demo/first_launch/zh-CN/mimo-v2.6-flash.json",
+      "packSha256": "bc5ec61b2c7274c97f6932053c27ed495708ae96dad4f93137abbf8a66c7b5a8",
+      "isDefault": false,
+      "displayNameZh": "仿真 · MiMo-V2.6-Flash",
+      "displayNameEn": "Sim · MiMo-V2.6-Flash"
+    }
+  ]
+}

@@ -248,6 +248,7 @@ class LlmRequest {
     this.nonStreamingTimeout,
     this.cancelToken,
     this.cacheBreakpointIndex,
+    this.purpose,
   });
 
   /// API 供应商 baseUrl（未经过 `ApiUrlResolver` 解析）
@@ -341,6 +342,12 @@ class LlmRequest {
   /// null = 不额外标记历史端缓存断点。
   final int? cacheBreakpointIndex;
 
+  /// 发起本次调用的业务用途标识（[LlmPurposes] 常量）
+  ///
+  /// 仅作元数据：供调用观测与离线回放按用途匹配响应；null = 调用方
+  /// 未标注（回放场景下按未匹配处理，正常链路无行为差异）。
+  final String? purpose;
+
   /// LLM 协议类型（决定适配器分发目标）
   ///
   /// 默认 [LlmProtocol.openaiCompatible]，兼容 v0.1 调用方（未显式传 protocol 时
@@ -396,8 +403,33 @@ class LlmRequest {
       nonStreamingTimeout: nonStreamingTimeout,
       cancelToken: cancelToken ?? this.cancelToken,
       cacheBreakpointIndex: cacheBreakpointIndex,
+      purpose: purpose,
     );
   }
+}
+
+/// LLM 调用用途常量（[LlmRequest.purpose] 取值域）
+///
+/// 字符串常量而非 enum：值对象不强迫全调用点闭集，新增用途零迁移。
+/// 传输层不消费此字段；观测与离线回放按它匹配。
+abstract final class LlmPurposes {
+  /// 导演 Agent 单步（AgentRunner 经网关发起）
+  static const String agentStep = 'agent_step';
+
+  /// 会话自动标题
+  static const String sessionTitle = 'session_title';
+
+  /// 推荐回复
+  static const String suggestReply = 'suggest_reply';
+
+  /// 向导世界观 AI 代写
+  static const String worldPrompt = 'world_prompt';
+
+  /// 上下文压缩
+  static const String compaction = 'compaction';
+
+  /// 记忆归并/整合
+  static const String memoryMerge = 'memory_merge';
 }
 
 /// LLM 服务抽象接口（Domain 层）

@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-/// 世界观问卷：叙事人称（null = 留空，由模型自由发挥）。
+/// 世界观问卷：叙事人称（null = 项目规则不写入人称或视角约定）。
 enum WorldPerson { first, second, third }
 
 /// 三题问卷答案（题材/文风/人称，各带自定义输入）。
