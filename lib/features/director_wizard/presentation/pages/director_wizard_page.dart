@@ -25,8 +25,10 @@ import 'package:lmstory/features/settings/data/provider_templates.dart';
 import 'package:lmstory/features/settings/domain/entities/model_capability.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/settings/presentation/widgets/default_model_picker_sheet.dart';
+import 'package:lmstory/features/settings/presentation/widgets/manual_model_id_confirmation.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/director_setting_rows.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
+import 'package:lmstory/features/templates/presentation/support/template_l10n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -852,6 +854,7 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
             colors: colors,
             label: t.directorWizard.model.manualModelId,
             onChanged: _wizard.setManualModelId,
+            autocorrect: false,
           ),
           const SizedBox(height: SimpleSpacing.sSm),
           Align(
@@ -859,7 +862,16 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
             child: OutlinedButton(
               onPressed: wizard.manualModelId.trim().isEmpty
                   ? null
-                  : () => _wizard.useManualModel(),
+                  : () async {
+                      final id = wizard.manualModelId.trim();
+                      final confirmed = await confirmManualModelId(context, id);
+                      if (!mounted ||
+                          !confirmed ||
+                          _manualModelCtrl.text.trim() != id) {
+                        return;
+                      }
+                      await _wizard.useManualModel();
+                    },
               child: Text(t.directorWizard.model.useManual),
             ),
           ),
@@ -1136,27 +1148,31 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
       children: [
         SpotlightTarget(
           id: DemoTargetIds.wizardEmbeddingChoice,
-          child: WizardOptionRow(
-            title: t.directorWizard.embedding.optionSetupTitle,
-            description: t.directorWizard.embedding.optionSetupDesc,
-            icon: Icons.memory,
-            selected: _embSetupExpanded ||
-                wizard.embeddingChoice == WizardEmbeddingChoice.change,
-            onTap: () => setState(
-              () => _embSetupExpanded = !_embSetupExpanded,
-            ),
+          child: Column(
+            children: [
+              WizardOptionRow(
+                title: t.directorWizard.embedding.optionSetupTitle,
+                description: t.directorWizard.embedding.optionSetupDesc,
+                icon: Icons.memory,
+                selected: _embSetupExpanded ||
+                    wizard.embeddingChoice == WizardEmbeddingChoice.change,
+                onTap: () => setState(
+                  () => _embSetupExpanded = !_embSetupExpanded,
+                ),
+              ),
+              const SizedBox(height: SimpleSpacing.sSm),
+              WizardOptionRow(
+                title: t.directorWizard.embedding.optionSkipTitle,
+                description: t.directorWizard.embedding.optionSkipDesc,
+                icon: Icons.arrow_forward,
+                selected: wizard.embeddingChoice == WizardEmbeddingChoice.skip,
+                onTap: () {
+                  setState(() => _embSetupExpanded = false);
+                  _wizard.skipEmbedding();
+                },
+              ),
+            ],
           ),
-        ),
-        const SizedBox(height: SimpleSpacing.sSm),
-        WizardOptionRow(
-          title: t.directorWizard.embedding.optionSkipTitle,
-          description: t.directorWizard.embedding.optionSkipDesc,
-          icon: Icons.arrow_forward,
-          selected: wizard.embeddingChoice == WizardEmbeddingChoice.skip,
-          onTap: () {
-            setState(() => _embSetupExpanded = false);
-            _wizard.skipEmbedding();
-          },
         ),
         if (_embSetupExpanded) ...[
           _buildEmbeddingPicker(colors, t, wizard, settings),
@@ -1379,6 +1395,7 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
             colors: colors,
             label: t.directorWizard.embedding.manualEmbModelId,
             onChanged: _wizard.setEmbManualModelId,
+            autocorrect: false,
           ),
           const SizedBox(height: SimpleSpacing.sSm),
           Align(
@@ -1387,7 +1404,15 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
               onPressed: wizard.embManualModelId.trim().isEmpty
                   ? null
                   : () async {
+                      final id = wizard.embManualModelId.trim();
+                      final confirmed = await confirmManualModelId(context, id);
+                      if (!mounted ||
+                          !confirmed ||
+                          _embManualCtrl.text.trim() != id) {
+                        return;
+                      }
                       await _wizard.useEmbManualModel();
+                      if (!mounted) return;
                       await _writeSelectedEmbedding();
                     },
               child: Text(t.directorWizard.model.useManual),
@@ -1521,35 +1546,28 @@ class _DirectorWizardPageState extends ConsumerState<DirectorWizardPage> {
           colors: colors,
           label: t.directorWizard.rules.templateSection,
         ),
-        for (final tpl in templates) ...[
-          if (tpl.templateId == 'builtin-isekai-narrator')
-            SpotlightTarget(
-              id: DemoTargetIds.wizardTemplateItem,
-              child: _ModelRow(
-                colors: colors,
-                modelId: tpl.name,
-                displayName: null,
-                selected: false,
-                onTap: () => _wizard.selectRulesTemplate(
-                  templateId: tpl.templateId,
-                  content: tpl.content,
-                ),
-              ),
-            )
-          else
-            _ModelRow(
-              colors: colors,
-              modelId: tpl.name,
-              displayName: null,
-              selected: false,
-              onTap: () => _wizard.selectRulesTemplate(
-                templateId: tpl.templateId,
-                content: tpl.content,
-              ),
-            ),
-        ],
+        for (final tpl in templates) _rulesTemplateRow(tpl, colors, t),
       ],
     );
+  }
+
+  Widget _rulesTemplateRow(
+    Template template,
+    LmPalette colors,
+    Translations t,
+  ) {
+    final row = _ModelRow(
+      colors: colors,
+      modelId: template.localizedName(t),
+      displayName: null,
+      selected: false,
+      onTap: () => _wizard.selectRulesTemplate(
+        templateId: template.templateId,
+        content: template.localizedContent(t),
+      ),
+    );
+    if (template.templateId != 'builtin-isekai-narrator') return row;
+    return SpotlightTarget(id: DemoTargetIds.wizardTemplateItem, child: row);
   }
 
   /// 路 B 答题（2026-10-19 方案 C 重构）：每题一张摘要卡，点开单题弹层
@@ -2918,6 +2936,7 @@ class _WizardTextField extends StatelessWidget {
     required this.label,
     required this.onChanged,
     this.obscureText = false,
+    this.autocorrect = true,
     this.enabled = true,
     this.maxLines,
   });
@@ -2927,6 +2946,7 @@ class _WizardTextField extends StatelessWidget {
   final String label;
   final ValueChanged<String> onChanged;
   final bool obscureText;
+  final bool autocorrect;
   final bool enabled;
 
   /// 多行输入（缺省单行；角色描述等多段文本用）
@@ -2946,6 +2966,8 @@ class _WizardTextField extends StatelessWidget {
           controller: controller,
           onChanged: onChanged,
           obscureText: obscureText,
+          autocorrect: autocorrect,
+          enableSuggestions: autocorrect,
           enabled: enabled,
           // obscureText 断言要求 maxLines==1；多行仅对明文输入开放
           maxLines: obscureText ? 1 : maxLines,

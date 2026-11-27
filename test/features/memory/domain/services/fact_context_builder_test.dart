@@ -37,6 +37,8 @@ void main() {
     bool archived = false,
     ForceInjectTarget forceInject = ForceInjectTarget.none,
     bool injectionDisabled = false,
+    DateTime? updatedAt,
+    int? updatedTurn,
   }) =>
       FactualEntity(
         entityId: id,
@@ -50,6 +52,8 @@ void main() {
         isArchived: archived,
         forceInject: forceInject,
         injectionDisabled: injectionDisabled,
+        updatedAt: updatedAt,
+        updatedTurn: updatedTurn,
       );
 
   group('enabled=false 边界', () {
@@ -198,7 +202,7 @@ void main() {
       expect(result.facts.last.isKeywordMatched, isTrue);
     });
 
-    test('关键实体保底注入，不参与 injectionMaxEntities 截断', () async {
+    test('DEC-06：关键实体计入 injectionMaxEntities 总量（不再保底绕过）', () async {
       repo.entitiesById = {
         'ent_001': entity(
           id: 'ent_001',
@@ -227,8 +231,15 @@ void main() {
         directiveInjectionTitle: '【常驻指令】',
       );
 
-      // 关键实体保底注入（v0.2.3）：不再被 injectionMaxEntities 截断
-      expect(result.facts, hasLength(3));
+      // DEC-06 语义变更：自动资料池（关键 + 本轮填充）总量 ≤
+      // injectionMaxEntities。同分同活跃度 → entityId 稳定序：A、B 入，C 裁。
+      //（v0.2.3 旧语义「关键实体保底绕过 injectionMaxEntities」已废止）
+      expect(result.facts, hasLength(2));
+      expect(
+        result.facts.map((f) => f.entity.primaryName).toList(),
+        ['A', 'B'],
+      );
+      expect(result.factBlock, isNot(contains('C')));
     });
 
     test('关键实体和关键词命中同一实体 → 去重', () async {
@@ -932,6 +943,395 @@ void main() {
 
       expect(result.facts, isEmpty, reason: '停用词条不因 FTS/LIKE 命中整体回注');
       expect(result.factBlock, '【世界设定】');
+    });
+  });
+
+  // DEC-06 自动资料数量收口：无条件自动携带的关键档案最多
+  // key_entity_auto_cap（默认 10）份，且计入 injectionMaxEntities
+  //（默认 20）总量；forceWorld/forceDirective 是用户显式常驻通道，
+  // 各自 forceInjectSafetyCap（50）独立安全帽，不计入 20 自动池。
+  group('DEC-06 自动资料数量收口', () {
+    test('30 个关键实体 + 默认配置 → 自动注入恰好 keyEntityAutoCap=10 份', () async {
+      String kid(int i) => 'ent_k${i.toString().padLeft(2, '0')}';
+      repo.entitiesById = {
+        for (var i = 0; i < 30; i++)
+          kid(i): entity(
+            id: kid(i),
+            type: FactualEntityType.character,
+            name: '关键实体$i',
+            importance: 5,
+          ),
+      };
+      final result = await builder.buildFactBlock(
+        sessionId: 's1',
+        keywords: const ClassifiedKeywords(),
+        config: const FactualConfig(), // cap=10, max=20
+        injectionTitle: '【世界设定】',
+        directiveInjectionTitle: '【常驻指令】',
+      );
+
+      // 关键实体受 keyEntityAutoCap 收口：同分同活跃度 → entityId 稳定序
+      expect(result.facts, hasLength(10));
+      expect(result.facts.every((f) => f.isKeyEntity), isTrue);
+      expect(result.factBlock, contains('关键实体0'));
+      expect(result.factBlock, contains('关键实体9'));
+      expect(result.factBlock, isNot(contains('关键实体10')));
+      expect(result.factBlock, isNot(contains('关键实体29')));
+    });
+
+    test('30 个关键实体 + 15 个本轮命中 → 关键(≤10) + 填充 = 总量 ≤ 20', () async {
+      repo.entitiesById = {
+        for (var i = 0; i < 30; i++)
+          'ent_k$i': entity(
+            id: 'ent_k$i',
+            type: FactualEntityType.character,
+            name: '关键实体$i',
+            importance: 5,
+          ),
+        for (var i = 0; i < 15; i++)
+          'ent_m$i': entity(
+            id: 'ent_m$i',
+            type: FactualEntityType.character,
+            name: '配角$i',
+            importance: 2,
+            createdTurn: 40 + i,
+          ),
+      };
+      final result = await builder.buildFactBlock(
+        sessionId: 's1',
+        keywords: const ClassifiedKeywords(
+          characters: [
+            '配角0',
+            '配角1',
+            '配角2',
+            '配角3',
+            '配角4',
+            '配角5',
+            '配角6',
+            '配角7',
+            '配角8',
+            '配角9',
+            '配角10',
+            '配角11',
+            '配角12',
+            '配角13',
+            '配角14',
+          ],
+        ),
+        config: const FactualConfig(), // cap=10, max=20
+        injectionTitle: '【世界设定】',
+        directiveInjectionTitle: '【常驻指令】',
+      );
+
+      // 关键 10（cap）+ 填充 10（20 - 10 剩余配额）= 20，不得绕过总量
+      expect(result.facts, hasLength(20));
+      expect(result.facts.where((f) => f.isKeyEntity), hasLength(10));
+      expect(result.facts.where((f) => f.isKeywordMatched), hasLength(10));
+    });
+
+    test('排序：importance DESC → 活跃（updatedAt 新者）在前 → 裁掉早创建占位者', () async {
+      repo.entitiesById = {
+        // 创建更早（createdTurn 默认 1）、从未更新：长期占位者，应被裁
+        'ent_a': entity(
+          id: 'ent_a',
+          type: FactualEntityType.character,
+          name: '早创建占位者',
+          importance: 5,
+        ),
+        // 创建晚且近期有更新：活跃者优先
+        'ent_z': entity(
+          id: 'ent_z',
+          type: FactualEntityType.character,
+          name: '近期活跃者',
+          importance: 5,
+          createdTurn: 2,
+          updatedAt: t.add(const Duration(days: 5)),
+          updatedTurn: 9,
+        ),
+      };
+      final result = await builder.buildFactBlock(
+        sessionId: 's1',
+        keywords: const ClassifiedKeywords(),
+        config: const FactualConfig(keyEntityAutoCap: 1),
+        injectionTitle: '【世界设定】',
+        directiveInjectionTitle: '【常驻指令】',
+      );
+
+      expect(result.facts, hasLength(1));
+      expect(result.facts.single.entity.primaryName, '近期活跃者');
+      expect(result.factBlock, isNot(contains('早创建占位者')));
+    });
+
+    test('排序：importance 更高者优先于更活跃的低分者', () async {
+      repo.entitiesById = {
+        'ent_active': entity(
+          id: 'ent_active',
+          type: FactualEntityType.character,
+          name: '活跃低分',
+          importance: 5,
+          updatedAt: t.add(const Duration(days: 9)),
+        ),
+        'ent_high': entity(
+          id: 'ent_high',
+          type: FactualEntityType.character,
+          name: '高分静态',
+          importance: 6,
+        ),
+      };
+      final result = await builder.buildFactBlock(
+        sessionId: 's1',
+        keywords: const ClassifiedKeywords(),
+        config: const FactualConfig(keyEntityAutoCap: 1),
+        injectionTitle: '【世界设定】',
+        directiveInjectionTitle: '【常驻指令】',
+      );
+
+      expect(result.facts.single.entity.primaryName, '高分静态');
+    });
+
+    test('本轮相关晚创建实体不被早创建无关关键实体挤掉（关键词命中路径）', () async {
+      repo.entitiesById = {
+        // 11 个关键实体：超 cap(10) 的第 11 个计入总量后被裁，
+        // 不得挤占本轮命中的晚创建相关实体
+        for (var i = 0; i < 11; i++)
+          'ent_k${i.toString().padLeft(2, '0')}': entity(
+            id: 'ent_k${i.toString().padLeft(2, '0')}',
+            type: FactualEntityType.character,
+            name: '关键$i',
+            importance: 5,
+          ),
+        'ent_late': entity(
+          id: 'ent_late',
+          type: FactualEntityType.character,
+          name: '晚创建相关配角',
+          importance: 2,
+          createdTurn: 50,
+        ),
+      };
+      final result = await builder.buildFactBlock(
+        sessionId: 's1',
+        keywords: const ClassifiedKeywords(characters: ['晚创建相关配角']),
+        config: const FactualConfig(), // cap=10, max=20
+        injectionTitle: '【世界设定】',
+        directiveInjectionTitle: '【常驻指令】',
+      );
+
+      // 关键 10 + 本轮命中 1 = 11；超帽关键（关键10）被裁，
+      // 晚创建相关实体保留
+      expect(result.facts, hasLength(11));
+      expect(
+        result.facts.map((f) => f.entity.primaryName),
+        contains('晚创建相关配角'),
+      );
+      expect(result.factBlock, isNot(contains('关键10')));
+    });
+
+    test('关键 < cap 时，本轮相关资料用满剩余配额', () async {
+      repo.entitiesById = {
+        for (var i = 0; i < 3; i++)
+          'ent_k$i': entity(
+            id: 'ent_k$i',
+            type: FactualEntityType.character,
+            name: '关键$i',
+            importance: 5,
+          ),
+        for (var i = 0; i < 25; i++)
+          'ent_m$i': entity(
+            id: 'ent_m$i',
+            type: FactualEntityType.character,
+            name: '配角$i',
+            importance: 2,
+          ),
+      };
+      final matchedNames = [for (var i = 0; i < 25; i++) '配角$i'];
+      final result = await builder.buildFactBlock(
+        sessionId: 's1',
+        keywords: ClassifiedKeywords(characters: matchedNames),
+        config: const FactualConfig(), // cap=10, max=20
+        injectionTitle: '【世界设定】',
+        directiveInjectionTitle: '【常驻指令】',
+      );
+
+      // 3 关键 + 17 填充 = 20（用满 injectionMaxEntities）
+      expect(result.facts, hasLength(20));
+      expect(result.facts.where((f) => f.isKeyEntity), hasLength(3));
+      expect(result.facts.where((f) => f.isKeywordMatched), hasLength(17));
+    });
+
+    test('forceInject 常驻通道不计入自动池总量，且与自动池实体级去重', () async {
+      repo.entitiesById = {
+        // 10 个关键实体占满 cap；其中两个同时挂显式通道开关，
+        // 不得在两通道重复出现
+        for (var i = 0; i < 10; i++)
+          'ent_k$i': entity(
+            id: 'ent_k$i',
+            type: FactualEntityType.character,
+            name: '关键$i',
+            importance: 5,
+            forceInject: i == 0
+                ? ForceInjectTarget.world
+                : (i == 1
+                    ? ForceInjectTarget.directive
+                    : ForceInjectTarget.none),
+          ),
+        // 纯显式通道实体：不占 20 自动池，照常注入
+        'ent_fw': entity(
+          id: 'ent_fw',
+          type: FactualEntityType.lore,
+          name: '常驻世界书条目',
+          importance: 2,
+          forceInject: ForceInjectTarget.world,
+        ),
+        'ent_fd': entity(
+          id: 'ent_fd',
+          type: FactualEntityType.lore,
+          name: '常驻指令条目',
+          importance: 2,
+          forceInject: ForceInjectTarget.directive,
+        ),
+        // 15 个本轮命中：填满 20 总量的剩余 10 席
+        for (var i = 0; i < 15; i++)
+          'ent_m$i': entity(
+            id: 'ent_m$i',
+            type: FactualEntityType.character,
+            name: '配角$i',
+            importance: 2,
+          ),
+      };
+      final matchedNames = [for (var i = 0; i < 15; i++) '配角$i'];
+      final result = await builder.buildFactBlock(
+        sessionId: 's1',
+        keywords: ClassifiedKeywords(characters: matchedNames),
+        config: const FactualConfig(), // cap=10, max=20, safetyCap=50
+        injectionTitle: '【世界设定】',
+        directiveInjectionTitle: '【常驻指令】',
+      );
+
+      // 自动池（关键 + 填充）= 20，两通道实体在池外照常注入
+      final autoPool =
+          result.facts.where((f) => f.isKeyEntity || f.isKeywordMatched);
+      expect(autoPool, hasLength(20));
+      expect(result.factBlock, contains('常驻世界书条目'));
+      expect(result.factBlock, contains('常驻指令条目'));
+      // 同一实体跨通道只出现一次（关键+world / 关键+directive 不重复占位）
+      final ids = result.facts.map((f) => f.entity.entityId).toList();
+      expect(ids.toSet().length, ids.length, reason: '实体级去重：不得重复出现');
+      expect(result.facts, hasLength(22)); // 20 自动池 + 2 纯显式通道
+    });
+  });
+
+  // DEC-06：buildKnownEntitiesBlock 总量对齐 injectionMaxEntities——
+  // focus 全保留（本轮更新目标防重复建档），base 按统一排序填剩余配额。
+  group('DEC-06 buildKnownEntitiesBlock 总量收口', () {
+    String bid(int i) => 'ent_b${i.toString().padLeft(2, '0')}';
+
+    FactualEntity base(String id, {int importance = 4, DateTime? updatedAt}) =>
+        entity(
+          id: id,
+          type: FactualEntityType.character,
+          name: '基地角色$id',
+          importance: importance,
+          updatedAt: updatedAt,
+        );
+
+    int countEntityLines(String block) =>
+        block.split('\n').where((l) => l.startsWith('- [')).length;
+
+    test('无 focus：base 超量时按统一排序取前 injectionMaxEntities', () async {
+      repo.entitiesById = {
+        // 25 个 importance=4（>= baseThreshold）：超 max=20 截断到 20。
+        // 旧语义「超量收紧到关键(>=5)」→ 空清单；新语义按排序保留 20。
+        for (var i = 0; i < 25; i++) bid(i): base(bid(i)),
+      };
+      final block = await builder.buildKnownEntitiesBlock(
+        sessionId: 's1',
+        config: const FactualConfig(), // threshold=5, max=20
+      );
+
+      expect(countEntityLines(block), 20);
+      expect(block, contains('ent_b00'));
+      expect(block, contains('ent_b19'));
+      expect(block, isNot(contains('ent_b20')));
+      expect(block, isNot(contains('ent_b24')));
+    });
+
+    test('focus 全保留（即使低分）+ base 按统一排序填剩余配额', () async {
+      repo.entitiesById = {
+        for (var i = 0; i < 15; i++) bid(i): base(bid(i)),
+        for (var i = 0; i < 8; i++)
+          'ent_f$i': entity(
+            id: 'ent_f$i',
+            type: FactualEntityType.location,
+            name: '焦点$i',
+            importance: 1, // 远低于 baseThreshold=4
+          ),
+      };
+      final block = await builder.buildKnownEntitiesBlock(
+        sessionId: 's1',
+        config: const FactualConfig(), // max=20
+        focusEntityIds: const [
+          'ent_f0',
+          'ent_f1',
+          'ent_f2',
+          'ent_f3',
+          'ent_f4',
+          'ent_f5',
+          'ent_f6',
+          'ent_f7',
+        ],
+      );
+
+      // 8 focus 全保留 + 12 base 填充 = 20（总量 ≤ injectionMaxEntities）
+      expect(countEntityLines(block), 20);
+      for (var i = 0; i < 8; i++) {
+        expect(block, contains('焦点$i'));
+      }
+      expect(block, contains('ent_b11'));
+      expect(block, isNot(contains('ent_b12')));
+      expect(block, isNot(contains('ent_b14')));
+    });
+
+    test('base 填充排序：importance DESC → updatedAt 新者在前', () async {
+      repo.entitiesById = {
+        // base() 默认 importance=4：静态占位者 vs 近期更新者的同分对比
+        'ent_b_stale': base('ent_b_stale'),
+        'ent_b_active': base(
+          'ent_b_active',
+          updatedAt: t.add(const Duration(days: 3)),
+        ),
+        'ent_b_key': base('ent_b_key', importance: 5),
+        for (var i = 0; i < 8; i++)
+          'ent_f$i': entity(
+            id: 'ent_f$i',
+            type: FactualEntityType.location,
+            name: '焦点$i',
+            importance: 1,
+          ),
+      };
+      // max=10：8 focus 全保留 → base 剩 2 席，取排序前两名
+      final block = await builder.buildKnownEntitiesBlock(
+        sessionId: 's1',
+        config: const FactualConfig(injectionMaxEntities: 10),
+        focusEntityIds: const [
+          'ent_f0',
+          'ent_f1',
+          'ent_f2',
+          'ent_f3',
+          'ent_f4',
+          'ent_f5',
+          'ent_f6',
+          'ent_f7',
+        ],
+      );
+
+      expect(countEntityLines(block), 10);
+      expect(block, contains('ent_b_key'), reason: 'importance 最高者优先');
+      expect(
+        block,
+        contains('ent_b_active'),
+        reason: '同分时 updatedAt 新者在前，挤掉静态占位者',
+      );
+      expect(block, isNot(contains('ent_b_stale')));
     });
   });
 }

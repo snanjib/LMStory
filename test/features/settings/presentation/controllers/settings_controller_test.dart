@@ -457,6 +457,7 @@ class _StubPresetRepository implements ApiPresetRepository {
     required String name,
     String baseUrl = '',
     LlmProtocol protocol = LlmProtocol.openaiCompatible,
+    bool omitSamplingParams = true,
   }) async =>
       throw UnimplementedError();
 

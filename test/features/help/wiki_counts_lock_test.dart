@@ -4,7 +4,9 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/meta/app_meta.dart';
+import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
+import 'package:lmstory/features/help/presentation/pages/version_history_wiki_page.dart';
 import 'package:lmstory/features/help/presentation/widgets/wiki_data.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -16,9 +18,42 @@ import 'package:lmstory/i18n/strings.g.dart';
 /// 为 N」）。本测试对账「文案数字 = 实物数量」，改实物者必须同步文案，
 /// 漂移在 CI 即红。
 void main() {
-  setUpAll(() {
-    LocaleSettings.setLocale(AppLocale.zhCn);
+  setUpAll(() async {
+    await LocaleSettings.setLocale(AppLocale.enUs);
+    await LocaleSettings.setLocale(AppLocale.zhCn);
   });
+
+  for (final (locale, milestoneTitle, finalDetail) in [
+    (AppLocale.zhCn, '记忆与正文一致性修复批', '长会话失败续跑不再丢失压缩摘要'),
+    (
+      AppLocale.enUs,
+      'Memory and prose consistency',
+      'preserves the compaction summary'
+    ),
+  ]) {
+    testWidgets('Version history shows the memory milestone in ${locale.name}',
+        (
+      tester,
+    ) async {
+      LocaleSettings.setLocaleSync(locale);
+      addTearDown(() => LocaleSettings.setLocaleSync(AppLocale.zhCn));
+      await tester.pumpWidget(
+        TranslationProvider(
+          child: MaterialApp(
+            theme:
+                ThemeCatalog.assemble(ThemeCatalog.defaults, Brightness.dark),
+            home: const VersionHistoryWikiPage(),
+          ),
+        ),
+      );
+
+      final milestone = find.textContaining('2026-11-08 $milestoneTitle');
+      await tester.scrollUntilVisible(milestone, 450, maxScrolls: 90);
+      final text = tester.widget<Text>(milestone);
+      expect(text.data, contains(finalDetail));
+      expect(text.maxLines, isNull);
+    });
+  }
 
   testWidgets('Wiki 入口数：功能索引宣称数 = buildWikiSections 实际数', (
     tester,

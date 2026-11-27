@@ -7,7 +7,8 @@ import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
-import 'package:lmstory/features/memory/domain/services/fact_applier.dart';
+import 'package:lmstory/features/memory/domain/services/attribute_schema.dart';
+import 'package:lmstory/i18n/factual_labels.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 // 从 factual_memory_tab.dart 拆出（原 _AttributeEditResult /
@@ -97,12 +98,12 @@ class _FactualAttributeEditDialogState
   bool get _isCustom => _selectedAttrKey == null;
 
   /// 显示用的属性键文本（编辑模式只读展示）
-  String _displayAttrKey() {
+  String _displayAttrKey(Translations t) {
     final a = widget.attribute;
     if (a == null) return '';
-    final label = AttributeSchema.labelFor(widget.entityType, a.attrKey);
+    final label = factualAttributeLabel(t, widget.entityType, a.attrKey);
     if (label != null) return label;
-    return '${a.attrKey}（${Translations.of(context).intermediate.memoryBrowser.fieldCustomAttrKey}）';
+    return t.intermediate.memoryBrowser.attributeLabels.custom(key: a.attrKey);
   }
 
   /// 将属性值从存储格式解码为显示格式
@@ -247,7 +248,7 @@ class _FactualAttributeEditDialogState
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        _displayAttrKey(),
+                        _displayAttrKey(t),
                         style: LmNarrativeTextStyles.input.copyWith(
                           color: colors.ink,
                         ),
@@ -286,7 +287,7 @@ class _FactualAttributeEditDialogState
                       DropdownMenuItem(
                         value: key,
                         child: Text(
-                          AttributeSchema.labelFor(widget.entityType, key) ??
+                          factualAttributeLabel(t, widget.entityType, key) ??
                               key,
                         ),
                       ),

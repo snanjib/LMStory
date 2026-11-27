@@ -1,5 +1,18 @@
 import 'package:lmstory/features/settings/domain/entities/data_management_models.dart';
 
+/// SQLite 数据域，覆盖的范围由已校验的导入内容决定。
+enum BackupDataDomain {
+  sessions,
+  presets,
+  characterCards,
+  worldbooks,
+  userTemplates,
+  agentEvents,
+}
+
+/// 受影响的数据域在覆盖前的状态，用于判断快照需求并验证事务回退。
+typedef BackupOverwriteState = ({bool hasData, String fingerprint});
+
 /// 数据备份仓储接口
 ///
 /// 专用于数据导入/导出的批量数据访问，提供跨表的原始数据读写能力。
@@ -15,6 +28,20 @@ import 'package:lmstory/features/settings/domain/entities/data_management_models
 /// - BLOB 字段（embedding）：base64 编码字符串
 /// - JSON 字符串字段（tags/aliases 等）：保持原始 JSON 字符串
 abstract class BackupRepository {
+  /// 在同一 SQLite 事务执行备份读写及使用同一个库的仓储调用。
+  ///
+  /// 整份备份覆盖在此事务内读回旧数据、清理并恢复。
+  /// 各会话使用嵌套保存点。
+  Future<T> runInTransaction<T>(Future<T> Function() action);
+
+  /// 读取本次覆盖可能删除或替换的数据，包含会话的派生索引。
+  Future<BackupOverwriteState> readOverwriteState(
+    Set<BackupDataDomain> domains,
+  );
+
+  /// 检查旧版会话中显式保存的消息 ID 是否已存在。
+  Future<bool> containsMessageId(String id);
+
   /// 导出单个会话的所有关联数据（跨全部表）
   ///
   /// 返回的 Map 包含以下 key：
@@ -27,7 +54,8 @@ abstract class BackupRepository {
   /// - factualAttributes: factual_attributes 行列表
   /// - factualHistory: factual_memory_history 行列表
   /// - intermediateArtifacts: intermediate_round_artifacts 行列表
-  /// - failureLogs: failure_logs 行列表（仅该会话）
+  /// - messageVariants: message_variants 行列表
+  /// - agentEvents: agent_events 行列表
   Future<Map<String, dynamic>> exportSessionData(String sessionId);
 
   /// 导出所有会话的所有关联数据
@@ -48,7 +76,8 @@ abstract class BackupRepository {
   /// 8. 重建 FTS5 索引
   ///
   /// [data] 为 [exportSessionData] 返回格式的 Map。
-  /// [mode] 为追加或覆盖模式。追加模式下 sessionId 已存在则跳过，返回 0。
+  /// [mode] 为追加或覆盖模式。活动经历归属冲突抛出
+  /// [BackupExperienceIdConflictException]，该会话变更回滚。
   ///
   /// 返回**实际插入的消息条数**（修复 2026-08-23：OR IGNORE 撞 ID 时
   /// 行被静默跳过，按备份长度计数会虚报——现以 sqlite changes() 为准；

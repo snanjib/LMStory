@@ -3,6 +3,7 @@ import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/agent/agent_workbench_reminder.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/features/advanced/domain/services/engineering_context_mode.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 事件日志存取抽象。
@@ -21,8 +22,19 @@ abstract class AgentEventLogStore {
     List<AgentDurableEvent> events,
   );
 
-  /// 删除指定轮的全部事件（轮轨迹清理，advanced_chat_controller 消费）
-  Future<bool> deleteTurnEvents(String sessionId, int turn);
+  /// 从指定轮或更晚的首个非冻结事件起截断日志。[rollbackStory] 可在同一数据库事务中先回退
+  /// 正文和记忆，跨越工程上下文开启点时由 [captureHistory] 读取新历史。
+  /// 返回是否删掉冻结前缀。
+  Future<bool> deleteTurnEvents(
+    String sessionId,
+    int turn, {
+    Future<void> Function()? rollbackStory,
+    Future<EngineeringEnterCapture> Function(String epochId)? captureHistory,
+  });
+
+  /// 读取全部纪元边界事件（mode/epoch 行，seq 升序）——三态解析的廉价
+  /// 预检通道：列非 true 且无纪元证据的会话即普通旧会话。
+  Future<List<AgentDurableEvent>> readModeEpochEvents(String sessionId);
 
   /// 滚动保留最近 [keepTurns] 轮（批 I 事件日志保留，runner 冷路径消费）
   Future<int> trimToRecentTurns(String sessionId, int keepTurns);
@@ -30,6 +42,24 @@ abstract class AgentEventLogStore {
   /// 按序号精确删除事件（：孤儿 surface 事件回收——
   /// 只清无轮归属的 surface 事件，log-only 留痕不动）
   Future<void> deleteAtSeqs(String sessionId, List<int> seqs);
+}
+
+/// Narrow reads for checking the ledger when a session opens.
+abstract interface class AgentLogMaintenanceStore
+    implements AgentEventLogStore {
+  Future<T> runLogMaintenance<T>(Future<T> Function() operation);
+
+  Future<List<AgentDurableEvent>> readEngineeringModeEvidence(String sessionId);
+
+  Future<List<AgentDurableEvent>> readRecoveryCompactionEvents(
+    String sessionId,
+  );
+
+  Future<({bool hasDanglingTurn, List<int> orphanSeqs})> probeTurnRecovery(
+    String sessionId,
+  );
+
+  Future<List<AgentDurableEvent>> readLatestUsageEvent(String sessionId);
 }
 
 /// 中断半截正文补账事件（悬挂轮修复与失败真续跑共用）
@@ -118,7 +148,7 @@ List<AgentDurableEvent> resumeRepairEvents({
         data: (AgentToolResultData(
           callId: call.callId,
           toolName: call.toolName,
-          output: AgentLogRecoveryService.legacyInterruptedOutput,
+          output: AgentLogRecoveryService.interruptedOutput,
           isError: true,
           title: toolPlaceholderTitle,
         ).toJson())
@@ -153,6 +183,51 @@ AgentMessage? _lastNonSystemMessage(AgentSurfaceProjection projection) {
   return null;
 }
 
+/// 崩溃恢复：未闭合压缩操作收敛（cancelled 优先——已有作废记录则以
+/// cancelled 收敛，否则 interrupted）。恢复器在轮修复前调用；表面不变。
+Future<void> recoverUnclosedCompactions(
+  AgentEventLogStore repository,
+  String sessionId,
+) async {
+  final events = repository is AgentLogMaintenanceStore
+      ? await repository.readRecoveryCompactionEvents(sessionId)
+      : await repository.readEvents(sessionId);
+  await _closeUnfinishedCompaction(repository, sessionId, events);
+}
+
+Future<bool> _closeUnfinishedCompaction(
+  AgentEventLogStore repository,
+  String sessionId,
+  List<AgentDurableEvent> events,
+) async {
+  String? openOpId;
+  final cancelledOps = <String>{};
+  for (final e in events) {
+    if (e.type == AgentEventTypes.compactionStart) {
+      final id = e.data['opId'];
+      if (id is String) openOpId = id;
+    } else if (e.type == AgentEventTypes.compactionEnd ||
+        e.type == AgentEventTypes.compactionUndo) {
+      final id = e.data['opId'] ?? e.data['targetOpId'];
+      if (id is String && id == openOpId) openOpId = null;
+    } else if (e.type == AgentEventTypes.compactionCancel) {
+      final id = e.data['opId'];
+      if (id is String) cancelledOps.add(id);
+    }
+  }
+  if (openOpId == null) return false;
+  await repository.appendAll(sessionId, [
+    AgentDurableEvent(
+      type: AgentEventTypes.compactionEnd,
+      data: {
+        'opId': openOpId,
+        'error': cancelledOps.contains(openOpId) ? 'cancelled' : 'interrupted',
+      },
+    ),
+  ]);
+  return true;
+}
+
 /// Agent 会话恢复器（dsh 崩溃恢复纪律，设计报告 §7.3）
 ///
 /// 打开会话时检查事件日志是否存在悬挂轮（turn/begin 无对应 turn/end）：
@@ -167,7 +242,13 @@ class AgentLogRecoveryService {
   })  : _repository = repository,
         _logger = logger;
 
-  /// 崩溃恢复写入的未执行输出（历史存量协议值）
+  /// 崩溃恢复写入的占位输出（HAR-07 中性化：与 i18n
+  /// `advanced.process.interruptedToolOutput` 同文——中断时操作是否已
+  /// 执行无法确认，不诱导模型/用户盲目重试，需基于当前状态重新判断）
+  static const String interruptedOutput =
+      '（应用中断，此操作是否已执行无法确认；如仍需要请基于当前状态重新判断后再操作）';
+
+  /// 历史存量协议值（仅识别兼容：旧日志的占位仍可被 UI 转译，不再写入）
   static const String legacyInterruptedOutput = '（应用中断，未执行；如仍需要请在后续轮次重试）';
   static const String legacyInterruptedShortOutput = '（应用中断，未执行…）';
   static const String legacyInterruptedEnglishOutput =
@@ -187,7 +268,8 @@ class AgentLogRecoveryService {
   /// 判定是否为崩溃恢复或中断占位输出（UI 渲染层据此转为当前 locale 的文案）
   static bool isInterruptedOutput(String output) {
     final trimmed = output.trim();
-    return trimmed == legacyInterruptedOutput ||
+    return trimmed == interruptedOutput ||
+        trimmed == legacyInterruptedOutput ||
         trimmed == legacyInterruptedShortOutput ||
         trimmed == legacyInterruptedEnglishOutput ||
         trimmed == '（本轮已中断，未执行）' ||
@@ -205,7 +287,31 @@ class AgentLogRecoveryService {
 
   /// 恢复会话：先回收孤儿 surface 事件，再修复悬挂轮，返回是否执行了修复
   Future<bool> recover(String sessionId) async {
-    final events = await _repository.readEvents(sessionId);
+    final store = _repository;
+    if (store is AgentLogMaintenanceStore) {
+      return store.runLogMaintenance(() async {
+        // 先收敛未闭合压缩，再在同一事务内读取更新后的尾部。
+        await recoverUnclosedCompactions(store, sessionId);
+        final probe = await store.probeTurnRecovery(sessionId);
+        if (!probe.hasDanglingTurn) {
+          return _deleteOrphanSurfaceEvents(sessionId, probe.orphanSeqs);
+        }
+        // 悬挂轮需要投影才能正确配对工具调用。
+        return _recoverTurns(sessionId, await store.readEvents(sessionId));
+      });
+    }
+    final events = await store.readEvents(sessionId);
+    final didWrite = await _closeUnfinishedCompaction(store, sessionId, events);
+    return _recoverTurns(
+      sessionId,
+      didWrite ? await store.readEvents(sessionId) : events,
+    );
+  }
+
+  Future<bool> _recoverTurns(
+    String sessionId,
+    List<AgentDurableEvent> events,
+  ) async {
     if (events.isEmpty) return false;
 
     // 找最后一个主轮 turn/begin，检查其后是否有主轮 turn/end。
@@ -239,8 +345,8 @@ class AgentLogRecoveryService {
       }
     }
     if (lastMainTurnEndIndex != -1) {
-      // 最后主轮已闭合：其后若还有 surface 事件，是下一轮 bootstrap
-      // 落账后、turn/begin 未写即崩溃的尾部孤儿（悬挂判定管不到这段）。
+      // 最后主轮已闭合：检查下一轮 bootstrap 落账后、turn/begin 未写
+      // 即崩溃的尾部孤儿。
       return _reclaimOrphanSurfaceEvents(
         sessionId,
         events,
@@ -272,7 +378,7 @@ class AgentLogRecoveryService {
       final data = AgentToolResultData(
         callId: call.callId,
         toolName: call.toolName,
-        output: legacyInterruptedOutput,
+        output: interruptedOutput,
         isError: true,
         title: t.advanced.process.interruptedToolPlaceholder,
       ).toJson();
@@ -334,11 +440,21 @@ class AgentLogRecoveryService {
   }) async {
     final orphanSeqs = <int>[];
     for (final e in events.skip(from)) {
-      if (e.surfaceOp == null) continue;
+      // 模式切换和回退重建的快照归属纪元，允许在轮与轮之间落账。
+      if (e.surfaceOp == null || e.type == AgentEventTypes.modeCapture) {
+        continue;
+      }
       final seq = e.seq;
       if (seq == null) continue;
       orphanSeqs.add(seq);
     }
+    return _deleteOrphanSurfaceEvents(sessionId, orphanSeqs);
+  }
+
+  Future<bool> _deleteOrphanSurfaceEvents(
+    String sessionId,
+    List<int> orphanSeqs,
+  ) async {
     if (orphanSeqs.isEmpty) return false;
     await _repository.deleteAtSeqs(sessionId, orphanSeqs);
     _logger?.info(

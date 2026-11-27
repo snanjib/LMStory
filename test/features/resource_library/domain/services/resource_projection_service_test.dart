@@ -1,5 +1,8 @@
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
+import 'package:lmstory/features/chat/data/database/app_database.dart';
+import 'package:lmstory/features/memory/data/repositories/factual_repository_impl.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/memory/domain/entities/force_inject_target.dart';
@@ -70,7 +73,8 @@ void main() {
       expect(character.source, FactualSource.card);
       expect(character.sourceRef, 'card_1');
       expect(character.createdTurn, 0);
-      expect(character.importance, 5);
+      // 导入角色默认 3 分：与 AI 对话建档同级，不占关键实体常驻配额
+      expect(character.importance, 3);
 
       final lore = repo.entitiesById.values.firstWhere(
         (e) => e.type == FactualEntityType.lore,
@@ -158,6 +162,37 @@ void main() {
       );
       // 角色实体 1 个，内嵌同名词条跳过，总数 1
       expect(count, 1);
+    });
+
+    test('导入角色（importance=3）经 findByName 主名/别名可查（真实现内存库）', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final realRepo = FactualRepositoryImpl(database: db);
+      final realService = ResourceProjectionService(repository: realRepo);
+
+      await realService.applyCharacterCard(
+        sessionId: 's_real',
+        cardId: 'card_1',
+        defaultCharacterName: '未命名角色',
+        duplicateErrorMessage: '已存在同名角色',
+        card: card(),
+      );
+
+      // 主名可查：3 分不建档的话这一步就是空——低分不等于不可见
+      final byPrimary = await realRepo.findByName('s_real', ['女主']);
+      expect(byPrimary, hasLength(1));
+      expect(byPrimary.single.importance, 3);
+
+      // 补别名后别名同样可查（findByName 与 importance 无关，锚定
+      // 后续 add_alias 更新路径不受低分影响）
+      await realRepo.updateEntityAliases(
+        byPrimary.single.entityId,
+        ['阿女主'],
+        1,
+      );
+      final byAlias = await realRepo.findByName('s_real', ['阿女主']);
+      expect(byAlias, hasLength(1));
+      expect(byAlias.single.primaryName, '女主');
     });
   });
 

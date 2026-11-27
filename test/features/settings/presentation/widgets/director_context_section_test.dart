@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/advanced_config.dart';
 import 'package:lmstory/core/config/config_loader.dart';
+import 'package:lmstory/core/config/intermediate_config.dart'
+    show ContextBudget;
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/widgets/commit_slider.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/director_context_section.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -18,11 +21,21 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///   advanced.contextBudget.compactionTriggerRatio 覆盖。
 class _CapturingSettingsRepository implements SettingsRepository {
   final Map<String, Object?> written = {};
+  int writeAttempts = 0;
+  bool rejectWrite = false;
 
   @override
-  Future<AppConfig> getResolvedConfig() async => const AppConfig(
+  Future<AppConfig> getResolvedConfig() async => AppConfig(
         version: '0.1',
-        broadcastChat: BroadcastChatConfig(),
+        broadcastChat: const BroadcastChatConfig(),
+        advanced: AdvancedConfig(
+          contextBudget: ContextBudget(
+            compactionTriggerRatio:
+                written['advanced.contextBudget.compactionTriggerRatio']
+                        as double? ??
+                    0.5,
+          ),
+        ),
       );
 
   @override
@@ -30,6 +43,8 @@ class _CapturingSettingsRepository implements SettingsRepository {
 
   @override
   Future<void> setUserOverride(String key, dynamic value) async {
+    writeAttempts++;
+    if (rejectWrite) throw StateError('Fixture rejected the write');
     written[key] = value;
   }
 
@@ -48,14 +63,16 @@ void main() {
     LocaleSettings.setLocale(AppLocale.zhCn);
   });
 
-  testWidgets('单一旋钮双显示；token 输入反推百分比写覆盖', (tester) async {
-    final repo = _CapturingSettingsRepository();
+  Future<void> pumpSection(
+    WidgetTester tester,
+    _CapturingSettingsRepository repo,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           settingsRepositoryProvider.overrideWithValue(repo),
-          advancedConfigProvider
-              .overrideWith((ref) async => const AdvancedConfig()),
+          advancedGlobalContextWindowProvider
+              .overrideWith((ref) async => 96000),
         ],
         child: TranslationProvider(
           child: MaterialApp(
@@ -67,6 +84,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+  }
+
+  testWidgets('单一旋钮双显示，token 输入反推百分比写覆盖', (tester) async {
+    final repo = _CapturingSettingsRepository();
+    await pumpSection(tester, repo);
 
     // 主面：唯一旋钮 + 双显示（默认 50%，回退窗口 96000 → 48k）
     expect(find.text('上下文压缩阈值'), findsOneWidget);
@@ -97,5 +119,46 @@ void main() {
       repo.written['advanced.contextBudget.compactionTriggerRatio'],
       0.75,
     );
+    expect(find.text('75%'), findsOneWidget);
+  });
+
+  testWidgets('全局阈值预览，取消和保存失败回退，成功后重开保留', (tester) async {
+    final repo = _CapturingSettingsRepository();
+    await pumpSection(tester, repo);
+
+    Future<TestGesture> preview() async {
+      final bounds = tester.getRect(find.byType(CommitSlider));
+      final thumb = bounds.centerLeft + Offset(bounds.width * 0.4, 0);
+      final gesture = await tester.startGesture(thumb);
+      await gesture.moveBy(const Offset(60, 0));
+      await gesture.moveTo(bounds.centerRight - const Offset(2, 0));
+      await tester.pump();
+      expect(find.text('≈ 76.8k tokens'), findsOneWidget);
+      return gesture;
+    }
+
+    final cancelled = await preview();
+    await cancelled.cancel();
+    await tester.pump();
+    expect(repo.writeAttempts, 0);
+    expect(find.text('≈ 48k tokens'), findsOneWidget);
+
+    repo.rejectWrite = true;
+    final failed = await preview();
+    await failed.up();
+    await tester.pumpAndSettle();
+    expect(repo.writeAttempts, 1);
+    expect(find.text(t.advanced.settings.saveFailed), findsOneWidget);
+    expect(find.text('≈ 48k tokens'), findsOneWidget);
+
+    repo.rejectWrite = false;
+    final saved = await preview();
+    await saved.up();
+    await tester.pumpAndSettle();
+    expect(repo.writeAttempts, 2);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpSection(tester, repo);
+    expect(find.text('80%'), findsOneWidget);
+    expect(find.text('≈ 76.8k tokens'), findsOneWidget);
   });
 }

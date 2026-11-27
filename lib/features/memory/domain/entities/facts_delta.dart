@@ -43,7 +43,13 @@ enum FactAction {
   ///
   /// 必填字段：entityId, reason, confidence
   /// 归档后实体不再注入 prompt，但保留记录供历史回顾。
-  archiveEntity;
+  archiveEntity,
+
+  /// 动态调整实体重要度（1-5）
+  ///
+  /// 必填字段：entityId（或按 primaryName 定位）, importance(1-5), confidence
+  /// 可选字段：reason
+  setImportance;
 
   /// 从 JSON 字符串解析（用于工具调用响应解析）
   static FactAction fromString(String value) {
@@ -60,6 +66,8 @@ enum FactAction {
         return FactAction.addAlias;
       case 'archive_entity':
         return FactAction.archiveEntity;
+      case 'set_importance':
+        return FactAction.setImportance;
       default:
         throw ArgumentError.value(
           value,
@@ -84,6 +92,8 @@ enum FactAction {
         return 'add_alias';
       case FactAction.archiveEntity:
         return 'archive_entity';
+      case FactAction.setImportance:
+        return 'set_importance';
     }
   }
 
@@ -124,6 +134,7 @@ class FactsDelta {
     this.reason,
     this.importance,
     this.isCuration = false,
+    this.skipFrequencyGuard = false,
   });
 
   /// 从 JSON 反序列化（用于解析 extract_facts 工具调用响应）
@@ -138,6 +149,7 @@ class FactsDelta {
         reason: json['reason'] as String?,
         importance: json['importance'] as int?,
         isCuration: json['isCuration'] as bool? ?? false,
+        skipFrequencyGuard: json['skipFrequencyGuard'] as bool? ?? false,
       );
 
   /// 动作类型
@@ -203,6 +215,10 @@ class FactsDelta {
   /// 不新增 FactAction 枚举值（记忆库约束），仅作为 delta 元数据。
   final bool isCuration;
 
+  /// 仅豁免单实体 3 轮更新频率上限（用于维护阶段批量校准），
+  /// 不放开 schema 白名单或关键属性置信度门。
+  final bool skipFrequencyGuard;
+
   /// 序列化为 JSON（用于审计日志或调试输出）
   Map<String, dynamic> toJson() => {
         'action': action.toJsonString(),
@@ -215,6 +231,7 @@ class FactsDelta {
         if (reason != null) 'reason': reason,
         if (importance != null) 'importance': importance,
         if (isCuration) 'isCuration': isCuration,
+        if (skipFrequencyGuard) 'skipFrequencyGuard': skipFrequencyGuard,
       };
 
   /// 从 JSON 数组反序列化（用于解析 extract_facts 工具调用的 deltas 参数）

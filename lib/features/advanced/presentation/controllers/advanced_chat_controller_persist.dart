@@ -23,9 +23,17 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
   /// V2 变更（Phase 6 Step 6.4）：从 [round] 读取 `replyText` / `eventSummary`，
   /// 不再通过方法参数传入（由 summarizing 阶段写入 round）。
   Future<void> _runPersistPhase(RoundContext round) async {
+    // 待发按钮可能在最后一个模型响应返回时仍在等写入。
+    await _queueWrite;
     // 取消检查点：persisting 入口
-    // _round 身份验证 + isCancelled 双重检查
-    if (_streamRunner.isCancelled || _round != round) return;
+    // _round 身份验证 + isCancelled 双重检查；任务二维护期已锁定正文时放行收敛提交
+    final allowMaintenanceConvergence = state.inMaintenancePhase &&
+        (round.replyText?.trim().isNotEmpty ?? false);
+    if (!mounted ||
+        (_streamRunner.isCancelled && !allowMaintenanceConvergence) ||
+        _round != round) {
+      return;
+    }
 
     final eventSummary = round.eventSummary!;
     final reply = round.replyText ?? '';
@@ -132,7 +140,7 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
           errorText: '[macro] $e',
         );
       }
-      if (_round != round) return;
+      if (!mounted || _round != round) return;
     }
 
     final indexForRetrieval = !importanceBelowStorageThreshold;
@@ -186,10 +194,12 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
         : null;
 
     try {
+      final turns = {turnNumber};
+      final sessionId = assistantMsg.sessionId;
+      _historyRevision++;
       final PersistRoundResult persistResult;
-      if (isRegenerate) {
-        //  重新生成：user_N 已存在，只写 assistant + 事件摘要
-        // 事实层 deltas 同事务写入（DOC-11 §8.2， 修复 2026-07-20）
+      if (userMsg == null) {
+        // 重生成保留原 user，新稿成为下一变体。
         persistResult = await _persistenceService.persistRegeneratedRound(
           assistantMessage: assistantMsg,
           eventSummary: eventSummary,
@@ -199,30 +209,40 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
           factsDeltas: round.factsDeltas,
           factualConfig: round.config.memory.factual,
           compaction: compaction,
-          // 新版记为下一变体并移指针（旧版已在删除阶段前快照）
           recordVariant: true,
           variantSourceInput: round.userInput,
         );
       } else {
-        // 普通发送/编辑重发：写 user + assistant + 事件摘要
-        // 事实层 deltas 同事务写入（DOC-11 §8.2， 修复 2026-07-20）
-        // 编辑重发时旧版已在删除阶段前快照为变体行，service 侧按
-        // 「该轮已存在变体行」自动把新内容记为变体并移指针。
-        persistResult = await _persistenceService.persistRound(
-          userMessage: userMsg!,
-          assistantMessage: assistantMsg,
-          eventSummary: eventSummary,
-          embedding: embedding,
-          artifacts: artifacts,
-          indexForRetrieval: indexForRetrieval,
-          factsDeltas: round.factsDeltas,
-          factualConfig: round.config.memory.factual,
-          compaction: compaction,
-          variantSourceInput: round.userInput,
-        );
+        // 普通发送和编辑重发写入消息对；重发时已有旧稿快照。
+        Future<PersistRoundResult> persist() =>
+            _persistenceService.persistRound(
+              userMessage: userMsg,
+              assistantMessage: assistantMsg,
+              eventSummary: eventSummary,
+              embedding: embedding,
+              artifacts: artifacts,
+              indexForRetrieval: indexForRetrieval,
+              factsDeltas: round.factsDeltas,
+              factualConfig: round.config.memory.factual,
+              compaction: compaction,
+              variantSourceInput: round.userInput,
+            );
+        if (_retainedInput == round.userInput) {
+          persistResult = await _runHistoryTransaction(() async {
+            final result = await persist();
+            await _chatRepository.clearDirectorPendingInputIfMatches(
+              sessionId,
+              round.userInput,
+            );
+            return result;
+          });
+          _retainedInput = null;
+        } else {
+          persistResult = await persist();
+        }
       }
       // 轮次身份验证：DB 写入是 async，期间用户可能 cancel + 发新消息
-      if (_round != round) return;
+      if (!mounted || _round != round) return;
 
       // 叙事时间已在 persistRound / persistRegeneratedRound 事务内更新
       // （2026-08-05 从此处移入事务，避免"消息成功但叙事时间失败"的不一致状态）
@@ -252,23 +272,23 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
           ? [...state.messages, userMsg, assistantMsg]
           : [...state.messages, assistantMsg];
 
-      // 收稿后刷新内存变体面——variantsByTurn 此前
-      // 只有 loadHistory/切换变体/删除变体三个写点，persist 成功既不重载
-      // 变体表也不回写指针（内存 artifacts 构造时 currentVariantIndex 默认
-      // null，DB 指针由 service 内 UPDATE 完成不回传），首刷重生成后切换器
-      //（variants.length>1 && currentVariantIndex!=null）不渲染，
-      // 主流程（重生成→切换）不可达，仅重开会话可见。每轮一次轻查（变体
-      // 行小、loadHistory 同款全量读），同时覆盖编辑重发路径（旧版变体由
-      // 删除阶段保留在 DB）与删轮后的内存收缩。
-      final allVariants = await _persistenceService.loadMessageVariants(
-        state.session.sessionId,
-      );
-      final updatedVariantsByTurn = allVariants;
-      final turnVariants = allVariants[turnNumber] ?? const [];
-      // 编辑重发轮该轮也有变体行（service 侧已记录+移指针），
-      // 与重生成同取最新变体序号；普通发送轮变体表为空不受影响。
+      // 仅刷新本轮变体。正文与事实已经提交，读回失败时仍正常收稿。
+      StoryHistoryTurnDetails? detail;
+      try {
+        detail = await _readHistoryDetails(sessionId, turns);
+      } catch (error) {
+        _logger.warn(
+          'Reload variants after persist failed',
+          detail: 'errorType=${error.runtimeType}',
+        );
+      }
+      if (!mounted || _round != round) return;
+      final updatedVariantsByTurn = detail == null
+          ? state.variantsByTurn
+          : _replaceHistoryRows(state.variantsByTurn, turns, detail.variants);
       final newVariantIndex =
-          turnVariants.isNotEmpty ? turnVariants.last.variantIndex : null;
+          detail?.artifacts[turnNumber]?.currentVariantIndex ??
+              detail?.variants[turnNumber]?.lastOrNull?.variantIndex;
 
       // 把本轮 artifacts 写入 state.artifactsByTurnNumber
       // 重新生成场景：覆盖原 turnNumber 的 entry；普通场景：新增 entry
@@ -279,8 +299,99 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
           currentVariantIndex: newVariantIndex,
         );
 
+      // 刚完成请求的实报输入不含本轮新回复；下一轮请求会带上它。
+      // 按同一材料边界增量调整「当前预计」并保持 estimated，不能让已完成
+      // 的输入原样冒充下一次预计。
+      final replyText = assistantMsg.content ?? '';
+
+      // 正文版本绑定留痕（生成事实，入账后不可改写）：persist 成功即写
+      // ——变体切换的身份核对（先 attemptId 后 proseHash）与证据资格判定
+      // 读它。写失败不阻断收稿（留痕缺失时切换按保守遮蔽、证据按未核对）。
+      final bindingAttemptId = _directorRunner.currentAttemptId;
+      if (bindingAttemptId != null && detail != null) {
+        try {
+          await agentEventLogRepository?.appendAll(
+            sessionId,
+            [
+              replayBindingEvent(
+                turn: turnNumber,
+                attemptId: bindingAttemptId,
+                variantIndex: newVariantIndex ?? 0,
+                prose: replyText,
+                userInput: round.userInput,
+                chatMessageId: assistantMsg.messageId,
+              ),
+            ],
+          );
+        } catch (e) {
+          _logger.warn('Replay binding ledger write failed', detail: '$e');
+        }
+      }
+      if (!mounted ||
+          !identical(_round, round) ||
+          state.session.sessionId != sessionId) {
+        return;
+      }
+      final engineeringOpen =
+          state.engineeringMode == EngineeringRuntimeMode.normalOpen;
+      var carriedEstimate = state.contextEstimate;
+      // 工程模式由轮运行器按最终投影估算。关闭态的正文已提交，估算失败
+      // 时下一次请求的用量显示未知，保留本轮实报及收稿反馈。
+      if (!engineeringOpen && replyText.isNotEmpty) {
+        try {
+          final replyTokens = await _tokenCounter.countTokens(replyText);
+          if (replyTokens > 0) {
+            carriedEstimate = carriedEstimate?.shift(
+              removedTokens: 0,
+              addedTokens: replyTokens,
+              at: DateTime.now(),
+            );
+          }
+        } catch (error) {
+          _logger.warn(
+            'Estimate committed director reply failed',
+            detail: 'errorType=${error.runtimeType}',
+          );
+          carriedEstimate = const ContextUsageEstimate.unknown();
+        }
+        if (!mounted ||
+            !identical(_round, round) ||
+            state.session.sessionId != sessionId) {
+          return;
+        }
+      }
+      // 构成图同步到同一材料修订：历史段按落库后的完整消息重建；上一轮
+      // 指令已随用户消息迁入历史，下一轮指令尚未产生，清空以免重复计入。
+      // 工程上下文模式（开启态）：构成图在轮尾由 runner 按最终投影单点
+      // 闭合（含本轮工具轨迹/正文）；此处不再按「旧基线+reply」
+      // 部分覆写（会漏本轮工作且被闭合值立即取代）。
+      final carriedChars = state.contextSegmentChars == null
+          ? null
+          : engineeringOpen
+              ? null
+              : {
+                  ...state.contextSegmentChars!,
+                  'history': newMessages.fold<int>(
+                    0,
+                    (sum, m) => sum + (m.content?.length ?? 0),
+                  ),
+                  'directive': 0,
+                };
+
+      final summaries = state.usageSummariesByTurn;
+      if (detail != null) {
+        _loadedHistoryTurns.add(turnNumber);
+      } else {
+        _loadedHistoryTurns.remove(turnNumber);
+      }
       state = state.copyWith(
         phase: IntermediatePhase.idle,
+        factWriteWarning: persistResult.factWriteFailureCount > 0
+            ? (
+                turnNumber: turnNumber,
+                count: persistResult.factWriteFailureCount
+              )
+            : null,
         messages: newMessages,
         // + 修复：同步刷新 session.messageCount，避免下游依赖
         // （如消息窗口判定 / 历史会话卡片显示）拿到过期值。
@@ -304,12 +415,20 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
         embeddingDegradedForRound: false,
         retryCounts: {},
         artifactsByTurnNumber: updatedArtifacts, // 保留本轮 artifacts
+        usageSummariesByTurn: summaries == null
+            ? null
+            : {...summaries, turnNumber: artifacts.agentWorkSummary},
+        // 当前预计按新回复材料增量调整（reported → estimated）
+        contextEstimate: carriedEstimate,
+        contextSegmentChars: carriedChars,
         // 收稿同步内存变体表（DB 为准，切换器立即可达）
         variantsByTurn: updatedVariantsByTurn,
         // 新轮 summary 自带 lastPromptTokens（上下文用量指示 §3.2），
         // 旧会话回填值作废
         backfilledPromptTokens: null,
         backfilledCacheReadTokens: null,
+        backfilledTotalInputTokens: null,
+        backfilledUsageWarnings: null,
         // v0.3 导演模式：本轮工具步骤已随 artifacts 持久化，清空 live 列表，
         // 避免时间线渲染时既按 artifacts 画一遍、又按 live agentSteps 追加一遍。
         clearAgentSteps: true,
@@ -326,14 +445,20 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
       // 轮次完成，清理上下文
       _round = null;
 
+      // 事件日志收尾也属于当前轮。由操作释放时启动待发轮。
+      _dispatchQueuedOnRelease =
+          state.queuedMessage != null && !_streamRunner.isCancelled;
+
       // 首轮 persist 成功后异步生成会话标题（不阻塞 UI）
       // 仅普通发送场景（非重新生成）+ 首轮 + titleGenerator 已注入时触发
       // 2026-07-21 重构：标题生成独立于业务模型，统一走 common.title_model 配置
       if (!isRegenerate && turnNumber == 1 && _titleGenerator != null) {
         unawaited(
-          _autoNameSession(
-            userInput: round.userInput,
-            assistantReply: reply,
+          _sessionOperations.runBackgroundWrite(
+            () => _autoNameSession(
+              userInput: round.userInput,
+              assistantReply: reply,
+            ),
           ),
         );
       }
@@ -343,16 +468,18 @@ extension AdvancedChatControllerPersist on AdvancedChatController {
       // 重新生成会删除下游记忆（context 收缩），无需触发提炼。
       if (!isRegenerate && _consolidator != null) {
         unawaited(
-          _maybeConsolidateMemories(
-            contextWindow: round.contextWindow,
-            maxTokens: _outputTokenReserveFor(
-              round.settings.maxTokens,
-              modelMaxOutput: round.generatingNamingConfig.maxOutputTokens,
+          _sessionOperations.runBackgroundWrite(
+            () => _maybeConsolidateMemories(
+              contextWindow: round.contextWindow,
+              maxTokens: _outputTokenReserveFor(
+                round.settings.maxTokens,
+                modelMaxOutput: round.generatingNamingConfig.maxOutputTokens,
+              ),
+              consolidationConfig: round.config.consolidation,
+              namingConfig: round.namingConfig,
+              embeddingConfig: round.embeddingConfig,
+              consolidationPrompt: round.config.prompts.consolidationPrompt,
             ),
-            consolidationConfig: round.config.consolidation,
-            namingConfig: round.namingConfig,
-            embeddingConfig: round.embeddingConfig,
-            consolidationPrompt: round.config.prompts.consolidationPrompt,
           ),
         );
       }

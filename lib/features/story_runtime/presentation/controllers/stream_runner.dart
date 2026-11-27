@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:lmstory/core/network/http_client.dart' show CancellationToken;
+import 'package:lmstory/core/network/http_client.dart'
+    show CancellationToken, CancelledException;
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 import 'package:lmstory/features/intermediate/domain/services/incremental_json_parser.dart';
@@ -106,6 +107,24 @@ class ToolCallResult {
   }
 }
 
+class _StreamOperation {
+  _StreamOperation(this.onCancel) {
+    token.bind(onCancel);
+  }
+
+  final void Function() onCancel;
+  final token = CancellationToken();
+  StreamSubscription<LlmStreamEvent>? subscription;
+  Future<void>? _subscriptionCancellation;
+
+  Future<void> cancelSubscription() {
+    if (subscription == null) return Future<void>.value();
+    // cancel 和调用方的 finally 共用首次取消的 Future，等待同一次回收完成。
+    return _subscriptionCancellation ??=
+        subscription?.cancel() ?? Future<void>.value();
+  }
+}
+
 /// LLM 流式执行 + 取消管理封装（Phase 5 Step 5.2 提取）
 ///
 /// 从 `IntermediateChatController` 提取，负责：
@@ -124,20 +143,48 @@ class StreamRunner {
 
   final LlmService _llmService;
 
-  /// 当前流式订阅（取消用）
-  StreamSubscription<LlmStreamEvent>? _currentSubscription;
+  /// 最近启动的请求（停止入口只作用于该请求）。
+  _StreamOperation? _currentOperation;
 
-  /// 当前请求取消令牌
-  CancellationToken? _currentCancelToken;
-
-  /// 取消标志（R1：防止 cancel 与流式 onDone 竞态）
+  /// 供控制器在阶段边界查询的取消标志；流事件按各自令牌判断。
   bool _isCancelled = false;
 
   /// 是否已取消（控制器在各阶段边界检查，提前 return）
   bool get isCancelled => _isCancelled;
 
   /// 是否正在流式订阅中（recoverIfStuck 据此判断是否卡死）
-  bool get isStreaming => _currentSubscription != null;
+  bool get isStreaming => _currentOperation?.subscription != null;
+
+  _StreamOperation _startOperation<T>(Completer<T> completer) {
+    final operation = _StreamOperation(() {
+      if (!completer.isCompleted) {
+        // 取消订阅不会触发 onDone，需要主动结束等待结果的调用方。
+        completer.completeError(const CancelledException('Request cancelled'));
+      }
+    });
+    _currentOperation = operation;
+    return operation;
+  }
+
+  Future<void> _finishOperation(_StreamOperation operation) async {
+    operation.token.unbind(operation.onCancel);
+    try {
+      await operation.cancelSubscription();
+    } catch (_) {
+      if (operation.token.isCancelled) {
+        throw const CancelledException('Request cancelled');
+      }
+      rethrow;
+    } finally {
+      if (identical(_currentOperation, operation)) {
+        _currentOperation = null;
+      }
+    }
+    // 完成事件与订阅回收之间仍可取消；此时不能把旧请求当作成功返回。
+    if (operation.token.isCancelled) {
+      throw const CancelledException('Request cancelled');
+    }
+  }
 
   /// 运行一次 LLM 流式请求，返回展示正文与 JSON 载荷
   ///
@@ -155,9 +202,7 @@ class StreamRunner {
   ///   让用户在 JSON 模式下也能看到 draft/reply 的实时生成（而非等到完整 JSON 接收后）。
   /// 调用方拿到完整 JSON 后用 [parseDraftJsonResult] / [parseReviseJsonResult] 解析。
   ///
-  /// 取消语义：内部创建 [CancellationToken] 并赋值给 [_currentCancelToken]，
-  /// 通过 `request.copyWith` 注入到 effectiveRequest；订阅存入
-  /// [_currentSubscription]，[cancel] / [cleanup] 时双保险取消。
+  /// 每次请求独立持有取消令牌和订阅；[cancel] / [cleanup] 只停止当前请求。
   Future<StreamResult> run({
     required LlmRequest request,
     required String marker,
@@ -170,41 +215,70 @@ class StreamRunner {
     final jsonBuffer = StringBuffer(); // jsonFallback 模式专用
     // 流式字段值跟踪（用于增量计算）
     var lastStreamedField = '';
-    final cancelToken = CancellationToken();
-    _currentCancelToken = cancelToken;
-
     // 2026-08-04：统一阶段标签日志
     final logger = Logger('Intermediate.$phaseLabel');
     final stopwatch = Stopwatch()..start();
 
-    final effectiveRequest = request.copyWith(cancelToken: cancelToken);
     final completer = Completer<StreamResult>();
+    final operation = _startOperation(completer);
+    final cancelToken = operation.token;
+    final effectiveRequest = request.copyWith(cancelToken: cancelToken);
 
-    _currentSubscription = _llmService.streamChat(effectiveRequest).listen(
-      (event) {
-        if (_isCancelled) return;
-        if (event is LlmTextDelta) {
-          if (jsonFallback) {
-            jsonBuffer.write(event.content);
-            // JSON 模式下流式显示指定字段（如 draft/reply）
-            if (jsonStreamField != null) {
-              final current = IncrementalJsonParser.extractStringField(
-                jsonBuffer.toString(),
-                jsonStreamField,
-              );
-              if (current != null &&
-                  current.length > lastStreamedField.length) {
-                // 计算增量：当前值比上次多出的部分
-                final delta = current.substring(lastStreamedField.length);
-                lastStreamedField = current;
-                if (delta.isNotEmpty) onDelta(delta);
+    try {
+      operation.subscription = _llmService.streamChat(effectiveRequest).listen(
+        (event) {
+          if (cancelToken.isCancelled) return;
+          if (event is LlmTextDelta) {
+            if (jsonFallback) {
+              jsonBuffer.write(event.content);
+              // JSON 模式下流式显示指定字段（如 draft/reply）
+              if (jsonStreamField != null) {
+                final current = IncrementalJsonParser.extractStringField(
+                  jsonBuffer.toString(),
+                  jsonStreamField,
+                );
+                if (current != null &&
+                    current.length > lastStreamedField.length) {
+                  // 计算增量：当前值比上次多出的部分
+                  final delta = current.substring(lastStreamedField.length);
+                  lastStreamedField = current;
+                  if (delta.isNotEmpty) onDelta(delta);
+                }
+              }
+            } else {
+              final display = parser.feed(event.content);
+              if (display.isNotEmpty) onDelta(display);
+            }
+          } else if (event is LlmStreamDone) {
+            if (!completer.isCompleted) {
+              if (jsonFallback) {
+                completer.complete(
+                  StreamResult('', jsonBuffer.toString().trim()),
+                );
+              } else {
+                completer.complete(
+                  StreamResult(parser.displayText, parser.jsonPayload),
+                );
               }
             }
-          } else {
-            final display = parser.feed(event.content);
-            if (display.isNotEmpty) onDelta(display);
+          } else if (event is LlmStreamError) {
+            if (!completer.isCompleted) {
+              completer.completeError(
+                StreamErrorException(
+                  event.message,
+                  code: event.code,
+                  retryAfter: event.retryAfter,
+                ),
+              );
+            }
           }
-        } else if (event is LlmStreamDone) {
+        },
+        onError: (Object e, StackTrace stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(e, stackTrace);
+          }
+        },
+        onDone: () {
           if (!completer.isCompleted) {
             if (jsonFallback) {
               completer.complete(
@@ -216,39 +290,8 @@ class StreamRunner {
               );
             }
           }
-        } else if (event is LlmStreamError) {
-          if (!completer.isCompleted) {
-            completer.completeError(
-              StreamErrorException(
-                event.message,
-                code: event.code,
-                retryAfter: event.retryAfter,
-              ),
-            );
-          }
-        }
-      },
-      onError: (Object e, StackTrace stackTrace) {
-        if (!completer.isCompleted) {
-          completer.completeError(e, stackTrace);
-        }
-      },
-      onDone: () {
-        if (!completer.isCompleted) {
-          if (jsonFallback) {
-            completer.complete(
-              StreamResult('', jsonBuffer.toString().trim()),
-            );
-          } else {
-            completer.complete(
-              StreamResult(parser.displayText, parser.jsonPayload),
-            );
-          }
-        }
-      },
-    );
-
-    try {
+        },
+      );
       final result = await completer.future;
       // 2026-08-04：流结束后记录汇总日志（无碎片，单条汇总）
       stopwatch.stop();
@@ -281,9 +324,7 @@ class StreamRunner {
       }
       return result;
     } finally {
-      await _currentSubscription?.cancel();
-      _currentSubscription = null;
-      _currentCancelToken = null;
+      await _finishOperation(operation);
     }
   }
 
@@ -314,9 +355,6 @@ class StreamRunner {
     final thinkingBuffer = StringBuffer();
     // LlmStreamDone 携带的 usage（onDone 兜底完成时也可用）
     LlmUsage? doneUsage;
-    final cancelToken = CancellationToken();
-    _currentCancelToken = cancelToken;
-
     // 2026-08-04：统一阶段标签日志（替代 per-delta 碎片日志）
     final logger = Logger('Intermediate.$phaseLabel');
     final stopwatch = Stopwatch()..start();
@@ -341,23 +379,56 @@ class StreamRunner {
       }
     }
 
-    final effectiveRequest = request.copyWith(cancelToken: cancelToken);
     final completer = Completer<StreamResult>();
+    final operation = _startOperation(completer);
+    final cancelToken = operation.token;
+    final effectiveRequest = request.copyWith(cancelToken: cancelToken);
 
-    _currentSubscription = _llmService.streamChat(effectiveRequest).listen(
-      (event) {
-        if (_isCancelled) return;
-        if (event is LlmTextDelta) {
-          buffer.write(event.content);
-          if (event.content.isNotEmpty) onDelta(event.content);
-        } else if (event is LlmThinkingDelta) {
-          thinkingBuffer.write(event.content);
-          // 2026-08-04：移除 per-delta 调试日志（碎片化严重，流结束后汇总记录见下方）
-          if (onThinkingDelta != null && event.content.isNotEmpty) {
-            onThinkingDelta(event.content);
+    try {
+      operation.subscription = _llmService.streamChat(effectiveRequest).listen(
+        (event) {
+          if (cancelToken.isCancelled) return;
+          if (event is LlmTextDelta) {
+            buffer.write(event.content);
+            if (event.content.isNotEmpty) onDelta(event.content);
+          } else if (event is LlmThinkingDelta) {
+            thinkingBuffer.write(event.content);
+            // 2026-08-04：移除 per-delta 调试日志（碎片化严重，流结束后汇总记录见下方）
+            if (onThinkingDelta != null && event.content.isNotEmpty) {
+              onThinkingDelta(event.content);
+            }
+          } else if (event is LlmStreamDone) {
+            doneUsage = event.usage;
+            if (!completer.isCompleted) {
+              completer.complete(
+                StreamResult(
+                  buffer.toString().trim(),
+                  null,
+                  thinkingContent: thinkingBuffer.isEmpty
+                      ? null
+                      : thinkingBuffer.toString().trim(),
+                  usage: doneUsage,
+                ),
+              );
+            }
+          } else if (event is LlmStreamError) {
+            if (!completer.isCompleted) {
+              completer.completeError(
+                StreamErrorException(
+                  event.message,
+                  code: event.code,
+                  retryAfter: event.retryAfter,
+                ),
+              );
+            }
           }
-        } else if (event is LlmStreamDone) {
-          doneUsage = event.usage;
+        },
+        onError: (Object e, StackTrace stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(e, stackTrace);
+          }
+        },
+        onDone: () {
           if (!completer.isCompleted) {
             completer.complete(
               StreamResult(
@@ -370,40 +441,8 @@ class StreamRunner {
               ),
             );
           }
-        } else if (event is LlmStreamError) {
-          if (!completer.isCompleted) {
-            completer.completeError(
-              StreamErrorException(
-                event.message,
-                code: event.code,
-                retryAfter: event.retryAfter,
-              ),
-            );
-          }
-        }
-      },
-      onError: (Object e, StackTrace stackTrace) {
-        if (!completer.isCompleted) {
-          completer.completeError(e, stackTrace);
-        }
-      },
-      onDone: () {
-        if (!completer.isCompleted) {
-          completer.complete(
-            StreamResult(
-              buffer.toString().trim(),
-              null,
-              thinkingContent: thinkingBuffer.isEmpty
-                  ? null
-                  : thinkingBuffer.toString().trim(),
-              usage: doneUsage,
-            ),
-          );
-        }
-      },
-    );
-
-    try {
+        },
+      );
       final result = await completer.future;
       // 2026-08-04：流结束后记录汇总日志（无碎片，单条汇总）
       stopwatch.stop();
@@ -436,33 +475,27 @@ class StreamRunner {
       }
       return result;
     } finally {
-      await _currentSubscription?.cancel();
-      _currentSubscription = null;
-      _currentCancelToken = null;
+      await _finishOperation(operation);
     }
   }
 
   /// 取消当前流式请求（停止 SSE 订阅 + 取消令牌）
   ///
-  /// 置 [isCancelled] = true 防止后续 onDone 回调误触发；
+  /// 置 [isCancelled] = true 供控制器在阶段边界检查；
   /// 双保险取消订阅与令牌。控制器 `IntermediateChatController.cancel`
   /// 调用本方法后还需重置自身的 _round / 降级标志 / state。
   ///
-  /// **竞态安全**：`await _currentSubscription?.cancel` 期间，
-  /// 调用方可能已启动新轮次并设置了新的 subscription/token。
-  /// 使用 `identical` 检查确保只清空"本轮"的引用，不误清新轮次的。
+  /// 等待订阅回收时如果启动了新请求，仅清除仍属于本次请求的引用。
   Future<void> cancel() async {
     _isCancelled = true;
-    final sub = _currentSubscription;
-    final token = _currentCancelToken;
-    token?.cancel();
-    await sub?.cancel();
-    // 仅在引用未变时清空（防止新轮次已设置的 subscription 被误清）
-    if (identical(_currentSubscription, sub)) {
-      _currentSubscription = null;
-    }
-    if (identical(_currentCancelToken, token)) {
-      _currentCancelToken = null;
+    final operation = _currentOperation;
+    operation?.token.cancel();
+    try {
+      await operation?.cancelSubscription();
+    } finally {
+      if (identical(_currentOperation, operation)) {
+        _currentOperation = null;
+      }
     }
   }
 
@@ -476,10 +509,12 @@ class StreamRunner {
   /// 与 [cancel] 的差异：不置 [isCancelled]（保留已取消语义供边界检查），
   /// 仅取消底层订阅与令牌。供 dispose / clearRound / deletePendingUserMessage 调用。
   void cleanup() {
-    _currentCancelToken?.cancel();
-    _currentSubscription?.cancel();
-    _currentSubscription = null;
-    _currentCancelToken = null;
+    final operation = _currentOperation;
+    operation?.token.cancel();
+    operation?.cancelSubscription();
+    if (identical(_currentOperation, operation)) {
+      _currentOperation = null;
+    }
   }
 
   // ==================== 工具调用模式（Phase 6 Step 6.1 新增）====================
@@ -547,37 +582,67 @@ class StreamRunner {
       }
     }
 
-    final cancelToken = CancellationToken();
-    _currentCancelToken = cancelToken;
-
-    final effectiveRequest = request.copyWith(cancelToken: cancelToken);
     final completer = Completer<ToolCallResult>();
+    final operation = _startOperation(completer);
+    final cancelToken = operation.token;
+    final effectiveRequest = request.copyWith(cancelToken: cancelToken);
 
-    _currentSubscription = _llmService.streamChat(effectiveRequest).listen(
-      (event) {
-        if (_isCancelled) return;
-        if (event is LlmToolCallStart) {
-          // 保留首个 toolCallId（单工具场景下即唯一 ID；多工具异常场景取首个）
-          if (firstToolCallId.isEmpty) {
-            firstToolCallId = event.toolCallId;
+    try {
+      operation.subscription = _llmService.streamChat(effectiveRequest).listen(
+        (event) {
+          if (cancelToken.isCancelled) return;
+          if (event is LlmToolCallStart) {
+            // 保留首个 toolCallId（单工具场景下即唯一 ID；多工具异常场景取首个）
+            if (firstToolCallId.isEmpty) {
+              firstToolCallId = event.toolCallId;
+            }
+            argsBuffers.putIfAbsent(event.toolCallId, StringBuffer.new);
+            // 记录 toolName（用于多工具并行调用按 name 索引参数）
+            toolNamesById[event.toolCallId] = event.name;
+          } else if (event is LlmToolCallArgs) {
+            argsBuffers
+                .putIfAbsent(event.toolCallId, StringBuffer.new)
+                .write(event.argsDelta);
+          } else if (event is LlmToolCallComplete) {
+            // Complete 事件优先级最高（已解析），按 toolCallId 索引存储
+            completeArgumentsById[event.toolCallId] = event.arguments;
+            toolNamesById[event.toolCallId] = event.name;
+          } else if (event is LlmTextDelta) {
+            fallbackBuffer.write(event.content);
+            if (onTextDelta != null) onTextDelta(event.content);
+          } else if (event is LlmThinkingDelta) {
+            thinkingBuffer.write(event.content);
+          } else if (event is LlmStreamDone) {
+            if (!completer.isCompleted) {
+              completer.complete(
+                _buildToolCallResult(
+                  completeArgumentsById: completeArgumentsById,
+                  argsBuffers: argsBuffers,
+                  toolNamesById: toolNamesById,
+                  firstToolCallId: firstToolCallId,
+                  fallbackBuffer: fallbackBuffer,
+                  thinkingBuffer: thinkingBuffer,
+                ),
+              );
+            }
+          } else if (event is LlmStreamError) {
+            if (!completer.isCompleted) {
+              completer.completeError(
+                StreamErrorException(
+                  event.message,
+                  code: event.code,
+                  retryAfter: event.retryAfter,
+                ),
+              );
+            }
           }
-          argsBuffers.putIfAbsent(event.toolCallId, StringBuffer.new);
-          // 记录 toolName（用于多工具并行调用按 name 索引参数）
-          toolNamesById[event.toolCallId] = event.name;
-        } else if (event is LlmToolCallArgs) {
-          argsBuffers
-              .putIfAbsent(event.toolCallId, StringBuffer.new)
-              .write(event.argsDelta);
-        } else if (event is LlmToolCallComplete) {
-          // Complete 事件优先级最高（已解析），按 toolCallId 索引存储
-          completeArgumentsById[event.toolCallId] = event.arguments;
-          toolNamesById[event.toolCallId] = event.name;
-        } else if (event is LlmTextDelta) {
-          fallbackBuffer.write(event.content);
-          if (onTextDelta != null) onTextDelta(event.content);
-        } else if (event is LlmThinkingDelta) {
-          thinkingBuffer.write(event.content);
-        } else if (event is LlmStreamDone) {
+        },
+        onError: (Object e, StackTrace stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(e, stackTrace);
+          }
+        },
+        onDone: () {
           if (!completer.isCompleted) {
             completer.complete(
               _buildToolCallResult(
@@ -590,40 +655,8 @@ class StreamRunner {
               ),
             );
           }
-        } else if (event is LlmStreamError) {
-          if (!completer.isCompleted) {
-            completer.completeError(
-              StreamErrorException(
-                event.message,
-                code: event.code,
-                retryAfter: event.retryAfter,
-              ),
-            );
-          }
-        }
-      },
-      onError: (Object e, StackTrace stackTrace) {
-        if (!completer.isCompleted) {
-          completer.completeError(e, stackTrace);
-        }
-      },
-      onDone: () {
-        if (!completer.isCompleted) {
-          completer.complete(
-            _buildToolCallResult(
-              completeArgumentsById: completeArgumentsById,
-              argsBuffers: argsBuffers,
-              toolNamesById: toolNamesById,
-              firstToolCallId: firstToolCallId,
-              fallbackBuffer: fallbackBuffer,
-              thinkingBuffer: thinkingBuffer,
-            ),
-          );
-        }
-      },
-    );
-
-    try {
+        },
+      );
       final result = await completer.future;
       // 2026-08-04：流结束后记录汇总日志
       stopwatch.stop();
@@ -661,9 +694,7 @@ class StreamRunner {
       }
       return result;
     } finally {
-      await _currentSubscription?.cancel();
-      _currentSubscription = null;
-      _currentCancelToken = null;
+      await _finishOperation(operation);
     }
   }
 

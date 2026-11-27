@@ -189,6 +189,47 @@ void main() {
   });
 
   group('append + getRecent', () {
+    test('原样保存内容仍建索引且保留来源，改动内容后撤销来源', () async {
+      final memory = await repo.appendExperience(
+        sessionId: 's1',
+        summary: '勇者收下信物',
+        what: '勇者收下信物',
+        importance: 2,
+        tags: const [],
+        turnNumber: 37,
+        indexForRetrieval: false,
+        hasVerifiedSourceTurn: true,
+      );
+      expect(await search(sessionId: 's1', query: '勇者收下'), isEmpty);
+
+      await repo.updateExperience(
+        memoryId: memory.memoryId,
+        sessionId: 's1',
+        summary: '勇者收下信物',
+        what: '勇者收下信物',
+        importance: 4,
+      );
+      expect(
+        (await search(sessionId: 's1', query: '勇者收下'))
+            .map((result) => result.memory.memoryId),
+        contains(memory.memoryId),
+      );
+      expect(
+        (await repo.getExperienceById(memory.memoryId))?.hasVerifiedSourceTurn,
+        isTrue,
+      );
+
+      await repo.updateExperience(
+        memoryId: memory.memoryId,
+        sessionId: 's1',
+        what: '勇者交出信物',
+      );
+      expect(
+        (await repo.getExperienceById(memory.memoryId))?.hasVerifiedSourceTurn,
+        isFalse,
+      );
+    });
+
     test('5. append + getRecent 往返（按 turnNumber 降序）', () async {
       for (var i = 1; i <= 3; i++) {
         await repo.appendExperience(

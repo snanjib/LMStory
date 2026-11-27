@@ -127,8 +127,13 @@ class RetrievedFact {
 ///
 /// **设计要点**：
 /// - 纯本地检索，无 LLM 调用（与经历层 retrieving 风格一致）
-/// - 关键实体优先（确保主角、关键角色等始终注入）
-/// - 关键词命中次之（按 importance 降序补充至 maxEntities 上限）
+/// - 关键实体优先（确保主角、关键角色等始终注入；DEC-06 起最多
+///   [FactualConfig.keyEntityAutoCap]（默认 10）份，且计入
+///   [FactualConfig.injectionMaxEntities] 总量，按 importance DESC →
+///   活跃度新者在前 → entityId 稳定序取前 N）
+/// - 关键词命中次之（补充自动池剩余配额至上限）
+/// - forceWorld/forceDirective 显式常驻通道不占自动池配额
+///   （各自 forceInjectSafetyCap 独立安全帽，实体级去重防重复占位）
 /// - 失败降级：异常时返回空结果，不阻塞经历层检索
 ///
 /// **与经历层检索的差异**：
@@ -257,16 +262,35 @@ class FactContextBuilder {
             )
           : const <FactualEntity>[];
 
-      // 步骤 3：合并去重
-      // 世界设定桶 = 关键实体 + forceWorld（保底始终注入）
+      // 步骤 3：DEC-06 自动资料数量收口——合并去重 + 分桶配额。
+      // 自动资料池 = 关键档案（≤ keyEntityAutoCap，计入总量）+ 本轮相关
+      // 填充，总量 ≤ injectionMaxEntities；forceWorld/forceDirective 是
+      // 用户显式常驻通道，各自 forceInjectSafetyCap 独立安全帽，不占
+      // 自动池配额（同实体跨通道只出现一次）。
+      //
+      // 关键档案排序在消费层做（不动仓储查询）：
+      // importance DESC → updatedAt/updatedTurn 新者在前（活跃者优先，
+      // 不能仅按创建早晚长期占位）→ entityId 稳定兜底。
       final keyEntityIds = keyEntities.map((e) => e.entityId).toSet();
-      final seenWorldIds = <String>{...keyEntityIds};
+      final autoKeyCap =
+          config.keyEntityAutoCap.clamp(0, config.injectionMaxEntities);
+      final autoKey = ([...keyEntities]
+            ..sort(FactualEntity.compareInjectionPriority))
+          .take(autoKeyCap)
+          .toList();
+
+      // 世界设定桶 = 关键档案 + forceWorld（显式常驻，不占自动池配额）；
+      // 被 cap 裁掉的关键实体若挂了显式开关，仍可经显式通道注入
+      final seenWorldIds = <String>{...autoKey.map((e) => e.entityId)};
       final forceWorldOnly =
           forceWorld.where((e) => seenWorldIds.add(e.entityId)).toList();
 
-      // 关键词命中（排除已见），作为世界设定桶的填充项
+      // 关键词命中（排除已见与常驻指令通道实体），作为自动池的填充项；
+      // 常驻指令通道实体不占自动池/填充位（按用户指定通道渲染）
+      final directiveEntityIds = forceDirective.map((e) => e.entityId).toSet();
       final nonKeyMatched = <FactualEntity>[];
       for (final e in [...matchedEntities, ...worldFacts, ...textMatched]) {
+        if (directiveEntityIds.contains(e.entityId)) continue;
         if (seenWorldIds.add(e.entityId)) {
           nonKeyMatched.add(e);
         }
@@ -286,27 +310,30 @@ class FactContextBuilder {
         );
       }
 
-      // 关键词命中只填充剩余配额（保底实体不占 injectionMaxEntities）
-      final remaining = (config.injectionMaxEntities -
-              keyEntities.length -
-              cappedForceWorld.length)
-          .clamp(0, config.injectionMaxEntities);
-      final worldFill = nonKeyMatched.take(remaining).toList();
+      // 本轮相关填充只补自动池剩余配额（关键档案计入总量；
+      // 显式通道独立，不再从配额中扣除）。autoKey.length ≤
+      // injectionMaxEntities（上方 clamp 保证），fillCapacity ≥ 0。
+      final fillCapacity = config.injectionMaxEntities - autoKey.length;
+      final worldFill = nonKeyMatched.take(fillCapacity).toList();
       final worldBucket = <FactualEntity>[
-        ...keyEntities,
+        ...autoKey,
         ...cappedForceWorld,
         ...worldFill,
       ];
 
-      // 常驻指令桶 = forceDirective，受兜底上限约束
-      final directiveBucket =
-          forceDirective.length > config.forceInjectSafetyCap
-              ? forceDirective.take(config.forceInjectSafetyCap).toList()
-              : forceDirective;
-      if (forceDirective.length > config.forceInjectSafetyCap) {
+      // 常驻指令桶 = forceDirective（扣除已入世界设定桶的实体——
+      // 自动池与显式通道实体级去重，不重复占位），受兜底上限约束
+      final worldInjectedIds = worldBucket.map((e) => e.entityId).toSet();
+      final directiveOnly = forceDirective
+          .where((e) => !worldInjectedIds.contains(e.entityId))
+          .toList();
+      final directiveBucket = directiveOnly.length > config.forceInjectSafetyCap
+          ? directiveOnly.take(config.forceInjectSafetyCap).toList()
+          : directiveOnly;
+      if (directiveOnly.length > config.forceInjectSafetyCap) {
         _logger.warn(
           'Force-inject directive entities exceed safety cap',
-          detail: 'count=${forceDirective.length}, '
+          detail: 'count=${directiveOnly.length}, '
               'cap=${config.forceInjectSafetyCap}',
         );
       }
@@ -388,13 +415,17 @@ class FactContextBuilder {
   /// entityId 和当前属性值，从而能正确发起 update_attr / append_list 等
   /// 属性修改 delta。
   ///
-  /// **注入策略**（DOC-11 §5.2）：
+  /// **注入策略**（DOC-11 §5.2，DEC-06 收口）：
   /// - 默认注入 importance >= (keyEntityImportanceThreshold - 1) 的未归档实体
-  /// - 实体数 > injectionMaxEntities 时，只注入 importance >=
-  ///   keyEntityImportanceThreshold 的关键实体（避免 prompt 过长）
+  /// - 总量对齐 injectionMaxEntities：本轮检索命中（focus）全保留
+  ///   （更新目标防重复建档，即使低分），base 按统一排序
+  ///   （importance DESC → updatedAt/updatedTurn 新者在前 → entityId 兜底，
+  ///   与 buildFactBlock 关键档案同口径）填剩余配额
+  /// - 世界书恒进通道维持 forceInjectSafetyCap 独立安全帽（v0.2.3 §5）
   ///
   /// 2026-07-22 修复：原硬编码 importance>=3 / >=4 / >20 改为读取 config
   /// 对应字段，与 buildFactBlock 的注入逻辑对齐。
+  /// DEC-06：原「超量时收紧到关键实体」分支移除，由统一 cap + 排序取代。
   ///
   /// **输出格式**：
   /// ```text
@@ -451,27 +482,18 @@ class FactContextBuilder {
               )
               .toList();
 
-      final List<FactualEntity> entities;
-      if (focusEntities.isEmpty) {
-        // 无本轮命中：沿用原截断逻辑（过多时只保留关键实体）
-        entities = baseFiltered.length > config.injectionMaxEntities
-            ? baseFiltered
-                .where(
-                  (e) => e.importance >= config.keyEntityImportanceThreshold,
-                )
-                .toList()
-            : baseFiltered;
-      } else {
-        // 有本轮命中：focus 全保留（本轮更新目标不能丢），baseFiltered 按
-        // importance 降序填充剩余配额，focus 排在前（本轮关注优先）
-        final remaining = config.injectionMaxEntities - focusEntities.length;
-        final baseSorted = [...baseFiltered]
-          ..sort((a, b) => b.importance.compareTo(a.importance));
-        final baseCapped = remaining > 0
-            ? baseSorted.take(remaining).toList()
-            : const <FactualEntity>[];
-        entities = [...focusEntities, ...baseCapped];
-      }
+      // DEC-06：总量对齐 injectionMaxEntities——focus 全保留（本轮更新
+      // 目标防重复建档，即使低分），base 按统一排序（importance DESC →
+      // updatedAt/updatedTurn 新者在前 → entityId 兜底，与 buildFactBlock
+      // 关键档案同一口径）填剩余配额。原「超量收紧到关键实体」分支由
+      // 统一 cap + 排序取代（不再出现「超量时 4 分实体全部蒸发」的悬崖）。
+      final remaining = config.injectionMaxEntities - focusEntities.length;
+      final baseSorted = [...baseFiltered]
+        ..sort(FactualEntity.compareInjectionPriority);
+      final baseCapped = remaining > 0
+          ? baseSorted.take(remaining).toList()
+          : const <FactualEntity>[];
+      final entities = [...focusEntities, ...baseCapped];
 
       // worldbookAlways 同帽——大书候选不再无界涌入更新步骤
       //（focus/关键实体配额逻辑不受影响）

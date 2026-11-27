@@ -1,7 +1,13 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/utils/file_log_sink.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/diagnostics/domain/entities/failure_log_entry.dart';
 import 'package:lmstory/features/diagnostics/domain/repositories/failure_log_repository.dart';
@@ -89,6 +95,7 @@ class _ConfigurableFailureLogRepo implements FailureLogRepository {
 Future<void> _pumpPage(
   WidgetTester tester, {
   _ConfigurableFailureLogRepo? repo,
+  bool settle = true,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -108,7 +115,40 @@ Future<void> _pumpPage(
     ),
   );
   // 等 addPostFrameCallback + load() 完成
-  await tester.pumpAndSettle();
+  if (settle) await tester.pumpAndSettle();
+}
+
+class _SaveLogPicker extends FilePicker {
+  _SaveLogPicker(this.path);
+
+  final String path;
+  int calls = 0;
+
+  @override
+  Future<String?> saveFile({
+    String? dialogTitle,
+    String? fileName,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Uint8List? bytes,
+    bool lockParentWindow = false,
+  }) async {
+    calls++;
+    expect(type, FileType.custom);
+    expect(allowedExtensions, ['log']);
+    return path;
+  }
+}
+
+Future<void> _waitFor(WidgetTester tester, bool Function() ready) async {
+  for (var attempt = 0; attempt < 160; attempt++) {
+    await tester.pump(const Duration(milliseconds: 25));
+    if (ready()) return;
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 15)));
+  }
+  expect(ready(), isTrue);
 }
 
 // ── 测试 ────────────────────────────────────────────────────────────
@@ -124,6 +164,176 @@ void main() {
     Logger.globalMinLevel = LogLevel.debug;
     Logger.clearSinks();
   });
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.macOS]) {
+    testWidgets(
+      'diagnostics export on $platform cleans the actual files',
+      (tester) async {
+        final dir = Directory.systemTemp.createTempSync('lmstory-log-export-');
+        final sink = FileLogSink(directoryPath: dir.path);
+        await tester.runAsync(sink.init);
+        Logger.addSink(sink);
+        addTearDown(() async {
+          Logger.removeSink(sink);
+          await sink.dispose();
+          await dir.delete(recursive: true);
+        });
+        final logfile =
+            sink.currentFilePath ?? fail('Log sink not initialized');
+        const oldUrl =
+            'raw:https://old-user:old-password@old.invalid/private-v2';
+        const newUrl = 'https://new.invalid/private-v4?tenant=new-query';
+        final oldSocket = SocketException(
+          'Failed host lookup: "old-lookup.invalid"',
+          osError: const OSError('No route to host', 65),
+          address: InternetAddress('198.51.100.42'),
+          port: 7443,
+        );
+        final oldest = File('$logfile.2')
+          ..writeAsStringSync(
+            '2026-01-01T08:00:01 [WARN] [Wire] request failed, '
+            'HTTP 401 $oldUrl?tenant=old-query | Authorization: Basic old-auth\n',
+          );
+        final rotated = File('$logfile.1')
+          ..writeAsStringSync(
+            '2026-01-01T08:00:02 [WARN] [Wire] retry delay=1200ms '
+            'https://retry.invalid/private-v3?token=retry-query '
+            'headers={"X-API-Key":"retry-auth with spaces"} | $oldSocket\n',
+          );
+        const Logger('Wire').error(
+          'request exhausted',
+          detail: 'HTTP 429 elapsed=1200ms $newUrl | apiKey=new-auth',
+          error: SocketException(
+            'Failed host lookup: "lookup.invalid"',
+            osError: const OSError('Connection refused', 61),
+            address: InternetAddress('203.0.113.21'),
+            port: 8443,
+          ),
+        );
+        const Logger('OptInPrompt').info('他推开院门，雨还在下。');
+        final current = File(logfile);
+        final newLog = current.readAsStringSync();
+        expect(newLog, contains('HTTP 429 elapsed=1200ms https://<endpoint>'));
+        expect(newLog, contains('apiKey=***'));
+        expect(newLog, contains('Failed host lookup: <host>'));
+        expect(newLog, contains('errno = 61), address = <host>, port = 8443'));
+        for (final private in [
+          'new.invalid',
+          'private-v4',
+          'new-auth',
+          'new-query',
+          'lookup.invalid',
+          '203.0.113.21',
+        ]) {
+          expect(newLog, isNot(contains(private)));
+        }
+        final sources = [oldest, rotated, current];
+        final sourceBytes =
+            sources.map((file) => file.readAsBytesSync()).toList();
+
+        final saved = File('${dir.path}/saved.log');
+        final picker = _SaveLogPicker(saved.path);
+        FilePicker.platform = picker;
+        final platformMessages = tester.binding.defaultBinaryMessenger;
+        const shareChannel = MethodChannel('dev.fluttercommunity.plus/share');
+        const pathsChannel = MethodChannel('plugins.flutter.io/path_provider');
+        List<int>? sharedBytes;
+        platformMessages
+          ..setMockMethodCallHandler(pathsChannel, (_) async => dir.path)
+          ..setMockMethodCallHandler(shareChannel, (call) async {
+            expect(call.method, 'shareFiles');
+            final arguments = call.arguments as Map<Object?, Object?>;
+            if (arguments['paths'] case [final String path]) {
+              expect(path, isNot(logfile));
+              sharedBytes = File(path).readAsBytesSync();
+              return 'test receiver';
+            }
+            fail('Expected one shared file');
+          });
+        addTearDown(() {
+          platformMessages
+            ..setMockMethodCallHandler(pathsChannel, null)
+            ..setMockMethodCallHandler(shareChannel, null);
+        });
+
+        final logs = t.settings.diagnostics.logs;
+        await _pumpPage(tester, settle: false);
+        await _waitFor(
+          tester,
+          () => find.text(logs.share).evaluate().isNotEmpty,
+        );
+        await tester.tap(find.text(logs.share).first);
+        final List<int> outputBytes;
+        if (platform == TargetPlatform.android) {
+          await tester.pumpAndSettle();
+          expect(find.text(logs.shareConfirmBody), findsOneWidget);
+          expect(sharedBytes, isNull);
+          await tester.tap(find.text(logs.shareConfirmAction).last);
+          await _waitFor(tester, () => sharedBytes != null);
+          await _waitFor(
+            tester,
+            () => dir.listSync().every((item) => item is File),
+          );
+          outputBytes =
+              sharedBytes ?? fail('Share platform did not read bytes');
+          expect(picker.calls, 0);
+        } else {
+          await _waitFor(
+            tester,
+            () => find.text(t.common.fileSaved.title).evaluate().isNotEmpty,
+          );
+          outputBytes = saved.readAsBytesSync();
+          expect(picker.calls, 1);
+          expect(sharedBytes, isNull);
+        }
+        final output = utf8.decode(outputBytes);
+        for (final private in [
+          'old-user',
+          'old-password',
+          'old.invalid',
+          'private-v2',
+          'old-query',
+          'old-auth',
+          'retry.invalid',
+          'private-v3',
+          'retry-query',
+          'retry-auth',
+          'new.invalid',
+          'private-v4',
+          'new-auth',
+          'new-query',
+          'lookup.invalid',
+          '203.0.113.21',
+          'old-lookup.invalid',
+          '198.51.100.42',
+        ]) {
+          expect(output, isNot(contains(private)));
+        }
+        for (final line in [
+          '2026-01-01T08:00:01 [WARN] [Wire]',
+          'HTTP 401 https://<endpoint> | Authorization: ***',
+          '2026-01-01T08:00:02 [WARN] [Wire]',
+          'retry delay=1200ms',
+          '"X-API-Key":"***"',
+          'SocketException: Failed host lookup: <host>',
+          'errno = 65), address = <host>, port = 7443',
+          'errno = 61), address = <host>, port = 8443',
+          'request exhausted',
+          '他推开院门，雨还在下。',
+        ]) {
+          expect(output, contains(line));
+        }
+        final oldestIndex = output.indexOf('===== app.log.2 =====');
+        final rotatedIndex = output.indexOf('===== app.log.1 =====');
+        final latestIndex = output.indexOf('===== app.log =====');
+        expect(oldestIndex, 0);
+        expect(rotatedIndex, greaterThan(oldestIndex));
+        expect(latestIndex, greaterThan(rotatedIndex));
+        expect(sources.map((file) => file.readAsBytesSync()), sourceBytes);
+      },
+      variant: TargetPlatformVariant({platform}),
+    );
+  }
 
   group('DiagnosticsPage - 页面骨架', () {
     testWidgets('1. AppBar 显示"诊断信息" + 5 个分组卡片标题', (tester) async {

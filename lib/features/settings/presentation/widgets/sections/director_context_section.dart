@@ -24,6 +24,28 @@ import 'package:lmstory/i18n/strings.g.dart';
 class DirectorContextSection extends ConsumerWidget {
   const DirectorContextSection({super.key});
 
+  Future<bool> _saveThreshold(BuildContext context, double ratio) async {
+    final container = ProviderScope.containerOf(context, listen: false);
+    try {
+      await container.read(settingsRepositoryProvider).setUserOverride(
+            'advanced.contextBudget.compactionTriggerRatio',
+            ratio,
+          );
+      final saved = await container.refresh(advancedConfigProvider.future);
+      if (saved.contextBudget.compactionTriggerRatio == ratio) return true;
+    } catch (_) {
+      // Show the same save failure for a rejected write or failed readback.
+    }
+    if (!context.mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(Translations.of(context).advanced.settings.saveFailed),
+      ),
+    );
+    return false;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final config = ref.watch(advancedConfigProvider).valueOrNull;
@@ -42,11 +64,8 @@ class DirectorContextSection extends ConsumerWidget {
           child: DirectorCompactionThresholdField(
             ratio: budget?.compactionTriggerRatio ?? 0.5,
             effectiveWindow: effectiveWindow,
-            onChanged: (v) => writeDirectorOverride(
-              ref,
-              'advanced.contextBudget.compactionTriggerRatio',
-              v,
-            ),
+            enabled: budget != null,
+            onChanged: (v) => _saveThreshold(context, v),
           ),
         ),
         directorSectionGap,

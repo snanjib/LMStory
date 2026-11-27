@@ -1,3 +1,9 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,6 +35,36 @@ void main() {
       ),
     );
   }
+
+  testWidgets(
+    '导入写库失败提示重试并省略异常里的 SQL 参数',
+    (tester) async {
+      const path = '/synthetic/card.json';
+      await IOOverrides.runZoned(
+        () async {
+          FilePicker.platform = _CardFilePicker(path);
+          final repo = _FailingCreateRepository();
+          await tester.pumpWidget(wrap(repo));
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.text('导入角色卡（JSON）'));
+          await tester.pumpAndSettle();
+
+          expect(repo.attemptedName, 'Ferry Pilot');
+          expect(find.text('导入失败：无法保存到资源库，请稍后重试。'), findsOneWidget);
+          expect(find.textContaining('INSERT INTO'), findsNothing);
+          expect(find.textContaining('fixture body'), findsNothing);
+          expect(find.text('Ferry Pilot'), findsNothing);
+          expect(find.text('测试卡'), findsOneWidget);
+        },
+        createFile: (requestedPath) {
+          expect(requestedPath, path);
+          return _SyntheticCardFile();
+        },
+      );
+    },
+    skip: kIsWeb,
+  );
 
   testWidgets('删除角色卡仓储抛错 → floating SnackBar 反馈删除失败，无异常逃逸', (tester) async {
     final repo = _FailingDeleteRepository();
@@ -62,7 +98,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('测试书'), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.delete_outline).last);
+    final deleteBook = find.byIcon(Icons.delete_outline).last;
+    await tester.ensureVisible(deleteBook);
+    await tester.pumpAndSettle();
+    await tester.tap(deleteBook);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('确定删除 "测试书"'), findsOneWidget);
@@ -193,6 +232,58 @@ void main() {
     expect(card.originalRawJson, '{}');
     expect(card.targetSummary, contains('测试卡'));
   });
+}
+
+class _CardFilePicker extends FilePicker {
+  _CardFilePicker(this.path);
+
+  final String path;
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    void Function(FilePickerStatus)? onFileLoading,
+    bool allowCompression = true,
+    int compressionQuality = 30,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+  }) async {
+    return FilePickerResult(
+      [PlatformFile(name: 'card.json', path: path, size: 0)],
+    );
+  }
+}
+
+class _SyntheticCardFile implements File {
+  @override
+  Future<Uint8List> readAsBytes() async => utf8.encode(
+        '{"name":"Ferry Pilot","description":"fixture body"}',
+      );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FailingCreateRepository extends _FailingDeleteRepository {
+  String? attemptedName;
+
+  @override
+  Future<CharacterCard> createCharacterCard({
+    required String name,
+    required String rawJson,
+    String? sourceFormat,
+  }) async {
+    attemptedName = name;
+    throw QueryException(
+      'INSERT INTO character_cards with parameters $rawJson',
+    );
+  }
 }
 
 /// 删除成功的仓储 fake（成功反馈测试用）

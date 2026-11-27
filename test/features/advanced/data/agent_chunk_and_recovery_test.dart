@@ -538,6 +538,14 @@ void main() {
     });
 
     test('isInterruptedOutput 识别存量各版本未执行输出与中断输出', () {
+      // HAR-07 新写入值（中性化，与 i18n interruptedToolOutput 同文）
+      expect(
+        AgentLogRecoveryService.isInterruptedOutput(
+          '（应用中断，此操作是否已执行无法确认；如仍需要请基于当前状态重新判断后再操作）',
+        ),
+        isTrue,
+      );
+      // 历史存量值仍识别（旧日志的 UI 转译不回退）
       expect(
         AgentLogRecoveryService.isInterruptedOutput(
           '（应用中断，未执行；如仍需要请在后续轮次重试）',
@@ -572,6 +580,20 @@ void main() {
       );
       expect(AgentLogRecoveryService.isInterruptedOutput('正常输出'), isFalse);
     });
+
+    test('HAR-07：恢复占位文案中性化（不诱导盲目重试，强调状态不确定）', () {
+      const output = AgentLogRecoveryService.interruptedOutput;
+      // 与 i18n interruptedToolOutput 同文（写=展示口径一致）
+      expect(
+        output,
+        '（应用中断，此操作是否已执行无法确认；如仍需要请基于当前状态重新判断后再操作）',
+      );
+      // 不诱导盲目重试、不断言「未执行」
+      expect(output, isNot(contains('请重试')));
+      expect(output, isNot(contains('未执行')));
+      // 识别器同步识别新值（写入的占位可被 UI 转译）
+      expect(AgentLogRecoveryService.isInterruptedOutput(output), isTrue);
+    });
   });
 }
 
@@ -599,7 +621,7 @@ class _CapturingEventLogRepository implements AgentEventLogRepository {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
-class _ScriptedEventLogRepository implements AgentEventLogRepository {
+class _ScriptedEventLogRepository implements AgentEventLogStore {
   _ScriptedEventLogRepository(this.scripted);
 
   final List<AgentDurableEvent> scripted;

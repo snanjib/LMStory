@@ -146,20 +146,9 @@ class AutoBackupManager {
 
   /// 覆盖导入前置快照。
   ///
-  /// 机制选择：**v3 JSON 全量导出**（与自动备份同管线）——崩溃安全
-  /// （纯读导出，无 WAL/checkpoint/锁问题）、可经既有「导入→backups/」
-  /// 路径回滚、跨 schema 版本可用；文件级 DB 拷贝需要 WAL checkpoint +
-  /// 应用持库状态下替换风险，且没有恢复 UI 路径，弃用（结论记档）。
-  /// 不含 API Key（同自动备份口径；键值存储独立于预设行，覆盖导入
-  /// 不删 Key，回滚后原 Key 仍在）。
-  ///
-  /// - 空库返回 null（无物可保护，不写无意义文件）
-  /// - 失败**向上抛**（fail-closed：与 [runIfNeeded] 的「失败仅记日志」
-  ///   不同口径——调用链据此中止覆盖导入，没有回滚网的覆盖不值得跑）
-  Future<File?> createPreImportSnapshot() async {
-    final sessions = await _chatRepository.getAllSessions();
-    if (sessions.isEmpty) return null;
-
+  /// v3 JSON 全量导出，含会话、配置及资源。调用方确定需要保护时执行，
+  /// 读回并验证无密钥的快照后才允许开始覆盖。任何失败均向上返回。
+  Future<File> createPreImportSnapshot() async {
     final json = await _dataManagementService.exportFullBackup(
       const DataExportOptions(
         includeSessions: true,
@@ -167,10 +156,17 @@ class AutoBackupManager {
         includePreferences: true,
       ),
     );
+    DataManagementService.validatePreImportSnapshot(json);
     final file = await _writeBackupFile(json, prefix: preImportFileNamePrefix);
+    if (await file.readAsString() != json) {
+      throw const FormatException(
+        'Could not read back the pre-import snapshot',
+      );
+    }
     await _rollingTrim(
       preImportFileNamePrefix,
       preImportKeepCount,
+      retainPath: file.path,
     );
     _logger.info(
       'Pre-import snapshot written',
@@ -242,7 +238,7 @@ class AutoBackupManager {
     } catch (_) {}
   }
 
-  /// 写入备份文件（时间戳文件名，秒级唯一）
+  /// 写入备份文件。预导入快照遇到同秒文件名时保留两个版本。
   Future<File> _writeBackupFile(String content, {String? prefix}) async {
     final dir = await backupsDirectory();
     final now = _clock();
@@ -252,10 +248,15 @@ class AutoBackupManager {
         '${now.hour.toString().padLeft(2, '0')}'
         '${now.minute.toString().padLeft(2, '0')}'
         '${now.second.toString().padLeft(2, '0')}';
-    final file = File(
-      '${dir.path}${Platform.pathSeparator}'
-      '${prefix ?? fileNamePrefix}$stamp.json',
-    );
+    final stem = '${dir.path}${Platform.pathSeparator}'
+        '${prefix ?? fileNamePrefix}$stamp';
+    var file = File('$stem.json');
+    if (prefix == preImportFileNamePrefix) {
+      var suffix = 1;
+      while (file.existsSync() || File('${file.path}.tmp').existsSync()) {
+        file = File('${stem}_${suffix++}.json');
+      }
+    }
     // temp+rename 原子写。直写目标名在写途中
     // 崩溃/断电会留半截 JSON——它 mtime 最新，滚动清理反而保留半截、
     // 挤掉完好的旧备份，回滚时 jsonDecode 失败。
@@ -266,9 +267,8 @@ class AutoBackupManager {
     } on FileSystemException {
       // Windows rename 到已存在路径失败：秒级撞名（force 连续备份）时
       // 先移除目标再改名
-      if (file.existsSync()) {
-        await file.delete();
-      }
+      if (prefix == preImportFileNamePrefix || !file.existsSync()) rethrow;
+      await file.delete();
       await tmp.rename(file.path);
     }
     return file;
@@ -283,18 +283,26 @@ class AutoBackupManager {
   /// 顺带清理超过 [tmpOrphanMaxAge]
   /// `*.json.tmp` 原子写孤儿（不限前缀——孤儿只可能产自本类的
   /// temp+rename 管线）。
-  Future<void> _rollingTrim(String prefix, int keepCount) async {
+  Future<void> _rollingTrim(
+    String prefix,
+    int keepCount, {
+    String? retainPath,
+  }) async {
     final dir = await backupsDirectory();
     await _cleanupTmpOrphans(dir);
     final files = dir
         .listSync()
         .whereType<File>()
         .where(
-          (f) => f.path.endsWith('.json') && _baseName(f).startsWith(prefix),
+          (f) =>
+              f.path != retainPath &&
+              f.path.endsWith('.json') &&
+              _baseName(f).startsWith(prefix),
         )
         .toList()
       ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-    for (final stale in files.skip(keepCount)) {
+    for (final stale
+        in files.skip(retainPath == null ? keepCount : keepCount - 1)) {
       try {
         stale.deleteSync();
       } catch (e) {

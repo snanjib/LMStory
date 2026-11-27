@@ -57,7 +57,16 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
     ErrorCategory? errorCategory,
     StoryRuntimeConfig? config,
   }) async {
-    if (_streamRunner.isCancelled) return;
+    if (!mounted || error is CancelledException || _streamRunner.isCancelled) {
+      return;
+    }
+
+    // MEM-06：检索链路失败（E104 / 检索异常）时附带记忆索引体检
+    //（fire-and-forget 记日志——不阻塞失败处理，不弹 UI；体检异常
+    // 在 _logMemoryIndexHealth 内全吞；与导演侧 _fail 同构）
+    if (errorCode == 'E104' || error is MemoryRetrievalUnavailableException) {
+      unawaited(_logMemoryIndexHealth('round-failed:$errorCode'));
+    }
 
     // 审查收官 /：上下文超限不进自动重试——超限重发同一
     // 载荷必然再超限（导演侧同款口径），且自动重试会复位  自愈旗标
@@ -149,15 +158,17 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
       //  诊断包：持久化失败上下文到 failure_logs 表（unawaited 不阻塞状态机）
       // 日志写入失败由 Repository 静默降级，不影响主流程
       unawaited(
-        _failureLogRepository.insertLog(
-          sessionId: state.session.sessionId,
-          mode: state.session.mode,
-          errorCategory: category.name,
-          errorCode: errorCode,
-          failedPhase: phase.name,
-          httpStatus: httpStatus,
-          errorMessage: message,
-          rawError: rawError,
+        _sessionOperations.runBackgroundWrite(
+          () => _failureLogRepository.insertLog(
+            sessionId: state.session.sessionId,
+            mode: state.session.mode,
+            errorCategory: category.name,
+            errorCode: errorCode,
+            failedPhase: phase.name,
+            httpStatus: httpStatus,
+            errorMessage: message,
+            rawError: rawError,
+          ),
         ),
       );
       // 2026-07-22 修复（问题 1-A）：不再清空 _round。
@@ -183,12 +194,13 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
       retryCounts: {...state.retryCounts, phase: retryCount},
     );
 
-    if (delay > Duration.zero) {
-      await Future<void>.delayed(delay);
+    if (delay > Duration.zero && !_streamRunner.isCancelled) {
+      await _sessionOperations.waitForRetry(delay);
     }
 
     // 取消或状态已变（用户操作）则放弃重试
-    if (_streamRunner.isCancelled ||
+    if (!mounted ||
+        _streamRunner.isCancelled ||
         state.phase != retryPhase ||
         _round == null) {
       return;
@@ -253,7 +265,9 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
   /// （pendingUserMessage，轮前失败场景保留）与消息列表尾部用户消息恢复
   /// 输入，不再静默 return（表现为失败横幅下「整轮重试」点击无响应）；
   /// 确实无可恢复输入时复位 idle 并记录日志。
-  Future<void> retry() async {
+  Future<void> retry() => _runSessionOperation<void>(null, _retry);
+
+  Future<void> _retry() async {
     if (state.phase != IntermediatePhase.failed) return;
     final input = state.userInput ?? _recoverRoundInput();
     if (input == null || input.isEmpty) {
@@ -329,7 +343,10 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
   ///
   /// 与 [retry] 的区别：retry 完全重跑全流程（含 extracting）；本方法从 retrieving
   /// 阶段续跑（keywords 已存在，复用）。
-  Future<void> continueWithFts5Only() async {
+  Future<void> continueWithFts5Only() =>
+      _runSessionOperation<void>(null, _continueWithFts5Only);
+
+  Future<void> _continueWithFts5Only() async {
     if (_round == null) return;
     if (state.phase != IntermediatePhase.failed) return;
     if (state.failureContext?.errorCode != 'E104') return;
@@ -368,7 +385,10 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
   /// 流式字段不在此时清空：summarizing 阶段不写流式缓冲，正文保持可见；
   /// 若 summarize/persist 再失败，_fail 仍能从流式缓冲重建快照（收稿
   /// 出口不丢）。
-  Future<void> acceptPartialReplyAsFinal() async {
+  Future<void> acceptPartialReplyAsFinal() =>
+      _runSessionOperation<void>(null, _acceptPartialReplyAsFinal);
+
+  Future<void> _acceptPartialReplyAsFinal() async {
     if (state.phase != IntermediatePhase.failed) return;
     if (_round == null) return;
     final failedPhase = state.failureContext?.failedPhase;
@@ -403,14 +423,17 @@ extension IntermediateChatControllerRetry on IntermediateChatController {
   /// 本方法会重新解析配置（用户可能通过会话设置修改了模型/温度等），
   /// 但保留已完成阶段的产出（generatedText/keywords/scoredMemories 等）。
   /// 配置解析失败时用旧配置兜底，不阻塞继续重试。
-  Future<void> continueFromFailed() async {
+  Future<void> continueFromFailed() =>
+      _runSessionOperation<void>(null, _continueFromFailed);
+
+  Future<void> _continueFromFailed() async {
     if (state.phase != IntermediatePhase.failed) return;
     // 轮前失败（草稿预检/配置加载/轮内
     // E010 发生在 _round 创建之前）无产出可续——按本方法文档语义
     // （extracting 失败等价于整轮重试）委托 [retry]，从 extracting
     // 重新开始，避免按钮静默 no-op。
     if (_round == null) {
-      await retry();
+      await _retry();
       return;
     }
     final failureContext = state.failureContext;

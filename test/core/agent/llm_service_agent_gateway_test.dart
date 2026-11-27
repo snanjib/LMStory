@@ -540,6 +540,58 @@ void main() {
       });
     });
 
+    // HAR-05 软着陆保形：step 级 toolChoice=none 透传，tools 保留——
+    // 软着陆步不清空 tools（空数组经网关转 null 省略 tools 键，该步
+    // 全前缀缓存 miss），改以 tool_choice=none 停用工具。
+    test('HAR-05：step toolChoice=none 透传且 tools 保留（软着陆保形）', () async {
+      final service = _FakeLlmService(
+        const [LlmTextDelta('收尾。'), LlmStreamDone()],
+      );
+      final gateway = LlmServiceAgentGateway(llmService: service);
+
+      await gateway.completeStep(
+        endpoint: _endpoint(baseUrl: 'https://api.openai.com/v1'),
+        request: const AgentStepRequest(
+          messages: [
+            {'role': 'user', 'content': 'hi'},
+          ],
+          tools: _testTools,
+          toolChoice: ToolChoice.none,
+          config: AgentCallConfig(),
+        ),
+        cancellation: AgentCancellationToken(),
+      );
+
+      final request = service.requests.single;
+      expect(request.tools, isNotNull, reason: 'tools 键不因软着陆被省略');
+      expect(request.toolChoice, ToolChoice.none);
+      expect(request.stream, isTrue);
+    });
+
+    test('HAR-05：toolChoice=none 的工具步在未知中转站仍走流式（无工具调用预期）', () async {
+      final service = _FakeLlmService(
+        const [LlmTextDelta('收尾。'), LlmStreamDone()],
+      );
+      final gateway = LlmServiceAgentGateway(llmService: service);
+
+      await gateway.completeStep(
+        endpoint: _endpoint(baseUrl: 'https://relay.unknown.io/v1'),
+        request: const AgentStepRequest(
+          messages: [
+            {'role': 'user', 'content': 'hi'},
+          ],
+          tools: _testTools,
+          toolChoice: ToolChoice.none,
+          config: AgentCallConfig(),
+        ),
+        cancellation: AgentCancellationToken(),
+      );
+
+      // 中转站「流式工具不可靠」回退非流式只针对工具步；toolChoice=none
+      // 无工具调用预期，保流式（软着陆收尾正文的流式交付不因保形回退）
+      expect(service.requests.single.stream, isTrue);
+    });
+
     test('取消令牌已触发 → 请求携带已取消的 HTTP 令牌', () async {
       final service = _FakeLlmService(const []);
       final gateway = LlmServiceAgentGateway(llmService: service);

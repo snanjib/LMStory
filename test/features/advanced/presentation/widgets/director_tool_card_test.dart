@@ -181,7 +181,7 @@ void main() {
       await tester.tap(find.text('回读原文 · 中断占位'));
       await tester.pumpAndSettle();
       expect(
-        find.text('（应用中断，未执行；如仍需要请在后续轮次重试）'),
+        find.text('（应用中断，此操作是否已执行无法确认；如仍需要请基于当前状态重新判断后再操作）'),
         findsOneWidget,
       );
     });
@@ -201,13 +201,48 @@ void main() {
         'Interrupted',
       );
       expect(
-        DirectorToolCard.localizedOutput('（应用中断，未执行…）', en),
-        '(Application interrupted, not executed; please retry in subsequent turns if still needed)',
+        DirectorToolCard.localizedOutput(
+          '（应用中断，未执行…）',
+          en,
+        ),
+        '(Application interrupted; whether this operation executed is uncertain. Re-judge from the current state before acting if still needed)',
       );
       expect(
-        DirectorToolCard.localizedOutput('（本轮已中断，未执行）', en),
-        '(Application interrupted, not executed; please retry in subsequent turns if still needed)',
+        DirectorToolCard.localizedOutput(
+          '（本轮已中断，未执行）',
+          en,
+        ),
+        '(Application interrupted; whether this operation executed is uncertain. Re-judge from the current state before acting if still needed)',
       );
+    });
+
+    testWidgets('10. list_facts 与 finish_maintenance 映射专属舞台动词', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          const Column(
+            children: [
+              DirectorToolCard(
+                step: AgentWorkStep(
+                  toolName: 'list_facts',
+                  title: '12 条动态实体',
+                ),
+              ),
+              DirectorToolCard(
+                step: AgentWorkStep(
+                  toolName: 'finish_maintenance',
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      expect(find.text('浏览设定目录 · 12 条动态实体'), findsOneWidget);
+      expect(find.text('完成校准'), findsOneWidget);
+
+      final en = TranslationsEnUs();
+      expect(stageVerbOf('list_facts', en), 'Browsing fact catalog');
+      expect(stageVerbOf('finish_maintenance', en), 'Completing maintenance');
     });
   });
 }

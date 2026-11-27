@@ -27,6 +27,7 @@ import 'package:lmstory/features/settings/domain/repositories/settings_repositor
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../helpers/home_sessions_fixture.dart';
 import '../../test_helpers/load_app_fonts.dart';
 
 const _surfaceKey = ValueKey('preview-surface');
@@ -303,6 +304,10 @@ ThemeData _previewTheme(LmAppearance appearance, Brightness brightness) {
 }
 
 class _ChatRepo implements ChatRepository {
+  @override
+  Future<HomeSessions> getHomeSessions() async =>
+      homeSessionsFixture(await getAllSessions());
+
   @override
   Future<List<ChatSession>> getAllSessions() async => [
         ChatSession(

@@ -31,3 +31,18 @@ abstract class SettingsRepository {
   /// 获取用户覆盖项数量
   Future<int> getUserOverrideCount();
 }
+
+/// 导入可用的独立存储操作。读取失败必须与键不存在区分，且读回应绕开缓存。
+abstract interface class SettingsImportStorage {
+  /// 保留偏好原值及恢复操作，后者需要读回确认包括原来未存储的状态。
+  Future<
+      ({
+        Map<String, dynamic> values,
+        Future<bool> Function() restore,
+      })> captureUserOverridesForImport();
+
+  Future<void> replaceUserOverridesForImport(Map<String, dynamic> values);
+  Future<String?> readApiKeyForImport(String presetId);
+  Future<void> writeApiKeyForImport(String presetId, String key);
+  Future<void> deleteApiKeyForImport(String presetId);
+}

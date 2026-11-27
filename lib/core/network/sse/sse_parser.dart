@@ -88,18 +88,58 @@ class SseUsage {
     this.completionTokens,
     this.totalTokens,
     this.cacheReadTokens,
+    this.cacheMissTokens,
+    this.reasoningTokens,
+    this.warnings = const [],
   });
 
   /// 从 JSON Map 创建
+  ///
+  /// 兼容 DeepSeek 的两套缓存字段：
+  /// - 标准：`prompt_tokens_details.cached_tokens`
+  /// - DeepSeek 原生：`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`
+  ///
+  /// 两者同时出现且冲突时保留标准字段并在 [warnings] 记录——不静默挑一个
+  /// 当作精确值（详情面板/诊断据此标注计量异常）。
   factory SseUsage.fromJson(Map<String, dynamic> json) {
     final promptDetails = json['prompt_tokens_details'];
+    final cached = promptDetails is Map<String, dynamic>
+        ? promptDetails['cached_tokens'] as int?
+        : null;
+    final cacheHit = json['prompt_cache_hit_tokens'] as int?;
+    final cacheMiss = json['prompt_cache_miss_tokens'] as int?;
+    final prompt = json['prompt_tokens'] as int? ??
+        ((cacheHit != null && cacheMiss != null) ? cacheHit + cacheMiss : null);
+    final completionDetails = json['completion_tokens_details'];
+    final reasoning = completionDetails is Map<String, dynamic>
+        ? completionDetails['reasoning_tokens'] as int?
+        : null;
+
+    final warnings = <String>[];
+    if (cached != null && cacheHit != null && cached != cacheHit) {
+      warnings.add(
+        'cached_tokens($cached) != prompt_cache_hit_tokens($cacheHit)',
+      );
+    }
+    if (prompt != null &&
+        cacheHit != null &&
+        cacheMiss != null &&
+        prompt != cacheHit + cacheMiss) {
+      warnings.add(
+        'prompt_tokens($prompt) != cache_hit+miss(${cacheHit + cacheMiss})',
+      );
+    }
+
     return SseUsage(
-      promptTokens: json['prompt_tokens'] as int?,
+      promptTokens: prompt,
       completionTokens: json['completion_tokens'] as int?,
       totalTokens: json['total_tokens'] as int?,
-      cacheReadTokens: promptDetails is Map<String, dynamic>
-          ? promptDetails['cached_tokens'] as int?
-          : null,
+      cacheReadTokens: cached ?? cacheHit,
+      cacheMissTokens: cached != null
+          ? (prompt != null && cached <= prompt ? prompt - cached : cacheMiss)
+          : cacheMiss,
+      reasoningTokens: reasoning,
+      warnings: warnings,
     );
   }
 
@@ -112,8 +152,18 @@ class SseUsage {
   /// 总 tokens 数（prompt + completion）
   final int? totalTokens;
 
-  /// 缓存命中读 token（OpenAI prompt_tokens_details.cached_tokens）
+  /// 缓存命中读 token（OpenAI prompt_tokens_details.cached_tokens /
+  /// DeepSeek prompt_cache_hit_tokens）
   final int? cacheReadTokens;
+
+  /// 缓存未命中输入 token（DeepSeek prompt_cache_miss_tokens；无则 null）
+  final int? cacheMissTokens;
+
+  /// 思考/推理 token（OpenAI completion_tokens_details.reasoning_tokens）
+  final int? reasoningTokens;
+
+  /// 计量字段冲突说明（空 = 无异常）
+  final List<String> warnings;
 }
 
 class StreamError extends SseEvent {

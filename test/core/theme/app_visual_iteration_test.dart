@@ -342,7 +342,10 @@ void main() {
             children: [
               const Expanded(child: SizedBox()),
               ChatModeInputArea(
-                onSend: (text, _) => sent = text,
+                onSend: (text, attachments) {
+                  sent = text;
+                  return true;
+                },
                 onCancel: () {},
                 isSending: false,
                 isStreaming: false,

@@ -41,6 +41,7 @@ class SuggestReplyOverlay extends StatelessWidget {
     required this.onClose,
     required this.onToggle,
     this.isFailed = false,
+    this.failureMessage,
     this.onRetry,
     super.key,
   });
@@ -56,6 +57,7 @@ class SuggestReplyOverlay extends StatelessWidget {
 
   /// 是否生成失败
   final bool isFailed;
+  final String? failureMessage;
 
   /// 点击候选回复回调（index 越界由调用方处理）
   final void Function(int index) onSelect;
@@ -246,7 +248,7 @@ class SuggestReplyOverlay extends StatelessWidget {
             ),
             const SizedBox(width: LmSpacing.sXs),
             Text(
-              t.intermediate.chat.suggestReply.failed,
+              failureMessage ?? t.intermediate.chat.suggestReply.failed,
               style: LmNarrativeTextStyles.caption.copyWith(
                 color: colors.error,
               ),

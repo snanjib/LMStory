@@ -1114,6 +1114,7 @@ class GenerationConfig {
 /// |--------|------|--------|------|
 /// | enabled | bool | true | 事实层总开关 |
 /// | key_entity_importance_threshold | int | 5 | 关键实体重要性门槛（>= 此值强制注入） |
+/// | key_entity_auto_cap | int | 10 | 无条件自动携带的关键档案份数上限（DEC-06） |
 /// | injection_max_entities | int | 20 | 注入 prompt 的最大实体数 |
 /// | modify_confidence_threshold | int | 4 | 修改关键属性的置信度门槛 |
 /// | max_updates_per_3turns | int | 4 | 同实体最近 3 轮最多更新次数 |
@@ -1122,6 +1123,7 @@ class FactualConfig {
   const FactualConfig({
     this.enabled = true,
     this.keyEntityImportanceThreshold = 5,
+    this.keyEntityAutoCap = 10,
     this.injectionMaxEntities = 20,
     this.forceInjectSafetyCap = 50,
     this.modifyConfidenceThreshold = 4,
@@ -1133,6 +1135,7 @@ class FactualConfig {
         enabled: json['enabled'] as bool? ?? true,
         keyEntityImportanceThreshold:
             json['key_entity_importance_threshold'] as int? ?? 5,
+        keyEntityAutoCap: json['key_entity_auto_cap'] as int? ?? 10,
         injectionMaxEntities: json['injection_max_entities'] as int? ?? 20,
         forceInjectSafetyCap: json['force_inject_safety_cap'] as int? ?? 50,
         modifyConfidenceThreshold:
@@ -1153,6 +1156,17 @@ class FactualConfig {
   /// 的未归档实体，无需 keywords 命中（DOC-11 §6.1 步骤 1）。
   /// 默认 5（2026-08-06：从4提升至5），仅主角级别每轮自动注入。
   final int keyEntityImportanceThreshold;
+
+  /// 无条件自动携带的关键档案份数上限（DEC-06，默认 10）
+  ///
+  /// importance >= [keyEntityImportanceThreshold] 的关键实体不再无界
+  /// 全量注入：消费层（FactContextBuilder.buildFactBlock / 导演
+  /// assembleDirectorCoreBlocks）按 importance DESC → updatedAt/updatedTurn
+  /// 新者在前 → entityId 稳定序排序后取前 N 份。关键档案计入
+  /// [injectionMaxEntities] 总量（关键 ≤ 本上限 + 本轮相关填充 = 总量）；
+  /// forceWorld/forceDirective 显式常驻通道不受此上限约束（各自
+  /// [forceInjectSafetyCap] 独立安全帽）。
+  final int keyEntityAutoCap;
 
   /// 注入 prompt 的最大实体数
   ///

@@ -3,6 +3,10 @@ import 'dart:convert';
 
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/llm/model_unavailability.dart';
+import 'package:lmstory/core/network/retry_after.dart'
+    show semanticCodeForStatus;
+import 'package:lmstory/core/utils/secret_redactor.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/stream_failure.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 结构化错误载荷。
@@ -28,7 +32,7 @@ class SimpleErrorPayload {
   /// 可操作建议
   final String? suggestion;
 
-  /// 原始错误详情（截断后）
+  /// 技术详情（脱敏并截断后）
   final String? detail;
 
   static const String prefix = 'lmerr:';
@@ -58,13 +62,18 @@ class SimpleErrorPayload {
     try {
       final decoded = jsonDecode(jsonPart);
       if (decoded is! Map<String, dynamic>) return null;
-      final message = decoded['message'];
-      if (message is! String || message.isEmpty) return null;
+      String? readString(String key) {
+        final value = decoded[key];
+        return value is String ? value : null;
+      }
+
+      final message = readString('message');
+      if (message == null || message.isEmpty) return null;
       return SimpleErrorPayload(
         message: message,
-        code: decoded['code'] as String?,
-        suggestion: decoded['suggestion'] as String?,
-        detail: decoded['detail'] as String?,
+        code: readString('code'),
+        suggestion: readString('suggestion'),
+        detail: readString('detail'),
       );
     } on FormatException {
       return null;
@@ -74,14 +83,11 @@ class SimpleErrorPayload {
 
 /// Simple 模式失败分类器（参考 StoryFailureClassifier）。
 ///
-/// 纯 Domain 层工具：将原始异常分流为分类字符串 + HTTP 状态 + 原始异常文本，
+/// 纯 Domain 层工具：将原始异常分流为分类字符串 + HTTP 状态 + 脱敏异常文本，
 /// 并提供错误码（S001-S009）映射和用户可见的友好提示文案。
 ///
 /// 设计要点：
-/// - [classifyError] 接收已知公开异常类型（[AppHttpException] /
-///   [TimeoutException]）；私有流错误异常按 toString() 含 "stream_error"
-///   或 "streamerror" 字符串特征识别（兼容 Simple 模式 STREAM_ERROR 和
-///   Intermediate 模式 StreamError 两种格式），不改类可见性。
+/// - [classifyError] 优先读取已知异常类型提供的状态和语义码，兼容旧流错误字符串。
 /// - [errorCodeFromCategory] 按分类映射 S001-S009（与中级 E010-E018 区分）。
 /// - [resolveMessage] 按分类提供通俗提示文案（i18n chat.failure.messages）。
 /// - [resolveSuggestion] 按分类提供可操作建议（i18n chat.failure.suggestedActions）。
@@ -107,7 +113,7 @@ class SimpleFailureClassifier {
   static const persist = 'persist';
   static const unknown = 'unknown';
 
-  /// 将原始异常分流为 (错误分类, HTTP 状态码, 原始异常文本)。
+  /// 将原始异常分流为 (错误分类, HTTP 状态码, 脱敏异常文本)。
   ///
   /// 分流规则（同 StoryFailureClassifier.classifyError）：
   /// - [AppHttpException]：
@@ -118,18 +124,17 @@ class SimpleFailureClassifier {
   ///   - code `connection_timeout`/`receive_timeout`/`send_timeout` → timeout
   ///   - code `connection_error` → network
   /// - [TimeoutException]（dart:async）→ timeout
-  /// - `_StreamErrorException`（toString 含 "StreamError"）→ network
+  /// - [StreamErrorException]：按 HTTP 状态或流错误语义码分流。
+  /// - 旧流错误字符串：沿用原有的状态码识别。
   /// - 其他 → unknown
   ///
-  /// `rawError` 为异常 toString() 截断前 2000 字符，供技术用户诊断。
-  ///
-  /// 截断长度演变： 初版 500 字符； 放宽到 2000 字符
-  /// （堆栈信息通常 > 500 字符，500 截断后丢失关键调用链）。
+  /// `rawError` 保留前 2000 字符的脱敏异常文本，供诊断使用。
   ({String category, int? httpStatus, String? rawError}) classifyError(
     Object error,
   ) {
     final String category;
     final int? httpStatus;
+    final errorText = error.toString();
 
     if (error is AppHttpException) {
       httpStatus = error.statusCode;
@@ -139,7 +144,7 @@ class SimpleFailureClassifier {
         category = auth;
       } else if (status == 429) {
         category = rateLimit;
-      } else if (isModelUnavailableText(error.toString())) {
+      } else if (isModelUnavailableText(errorText)) {
         // 网关在模型下线/无可用通道时返回
         // 400+文案，状态码判不出——对齐故事侧  口径归 server
         //（等待重试/换模型），此前落 unknown/S009 误导排查。
@@ -160,14 +165,12 @@ class SimpleFailureClassifier {
     } else if (error is TimeoutException) {
       httpStatus = null;
       category = timeout;
-    } else if (_isStreamError(error)) {
-      // 流错误识别：ChatModeController 将 LlmStreamError 包装为
-      // Exception('STREAM_ERROR: ...')（code 带下划线），Intermediate 模式
-      // 使用 StreamErrorException（toString 含 'StreamError' 无下划线）。
-      // 2026-07-30 修复：原 contains('streamerror') 无法匹配 'stream_error'
-      // （带下划线），导致 Simple 模式所有流错误落入 unknown（S009），
-      // 修复意图完全失效。改为同时匹配两种格式。
-      final result = _classifyStreamErrorString(error.toString());
+    } else if (error is StreamErrorException) {
+      final result = _classifyStreamError(error);
+      httpStatus = result.httpStatus;
+      category = result.category;
+    } else if (_isLegacyStreamError(errorText)) {
+      final result = _classifyStreamErrorString(errorText);
       httpStatus = result.httpStatus;
       category = result.category;
     } else {
@@ -175,34 +178,55 @@ class SimpleFailureClassifier {
       category = unknown;
     }
 
-    final rawError = _truncate(error.toString(), 2000);
+    final rawError = _truncate(
+      redactDiagnosticText(
+        error is StreamErrorException && error.code != null
+            ? '${error.code}: ${error.message}'
+            : errorText,
+      ),
+      2000,
+    );
     return (category: category, httpStatus: httpStatus, rawError: rawError);
   }
 
-  /// 判断异常是否为流错误。
-  ///
-  /// Simple 模式 ChatModeController 将 LlmStreamError 包装为
-  /// `Exception('STREAM_ERROR: ...')`，toString() 小写后含 `stream_error`。
-  /// Intermediate 模式使用 `StreamErrorException`，toString() 含 `StreamError`。
-  /// 两种格式都需匹配。
-  static bool _isStreamError(Object error) {
-    final text = error.toString().toLowerCase();
+  // SSE 传输层的 HTTP 错误前缀。只在开头匹配，避免把响应正文中
+  // 提到的状态码当成本次请求的 HTTP 状态。
+  static final _streamHttpFailure = RegExp(
+    '^(?:(?:(?:Anthropic|Gemini|Responses) )?stream interrupted: )?'
+    r'(?:AppHttpException: )?SSE request failed with status ([1-5]\d{2})\b',
+    caseSensitive: false,
+  );
+
+  ({String category, int? httpStatus}) _classifyStreamError(
+    StreamErrorException error,
+  ) {
+    final status = int.tryParse(
+      _streamHttpFailure.firstMatch(error.message)?.group(1) ?? '',
+    );
+    final statusOrNumericCode = status ?? int.tryParse(error.code ?? '') ?? 0;
+    final semantic = switch (statusOrNumericCode) {
+      >= 400 && <= 599 => semanticCodeForStatus(statusOrNumericCode),
+      _ => error.code,
+    };
+    final category = switch (semantic) {
+      'AUTH' => auth,
+      'RATE_LIMIT' => rateLimit,
+      'SERVER' => server,
+      _ when isModelUnavailableText(error.message) => server,
+      'BAD_REQUEST' || 'CONFIG' => config,
+      'FORMAT_ERROR' || 'PARSE_ERROR' => format,
+      'STREAM_ERROR' => network,
+      _ => unknown,
+    };
+    return (category: category, httpStatus: status);
+  }
+
+  static bool _isLegacyStreamError(String errorText) {
+    final text = errorText.toLowerCase();
     return text.contains('stream_error') || text.contains('streamerror');
   }
 
-  /// 从流错误信息字符串中解析 HTTP 状态码并分类。
-  ///
-  /// 2026-07-29 新增：流错误（LlmStreamError / _StreamErrorException）
-  /// 的 message 通常包含 "status XXX" 模式的 HTTP 状态码，例如：
-  /// "STREAM_ERROR: Stream interrupted: AppHttpException: SSE request
-  ///  failed with status 400 | Response: ..."
-  ///
-  /// 解析规则：
-  /// - 401/403 → auth（S003）
-  /// - 429 → rateLimit（S004）
-  /// - 400/其他 4xx → config（S001，参数验证错误通常是配置问题）
-  /// - 5xx → server（S005）
-  /// - 无状态码 → network（S002，真正的网络连接问题）
+  /// 兼容仅以字符串形式上抛的旧流错误。
   ({String category, int? httpStatus}) _classifyStreamErrorString(
     String errorText,
   ) {

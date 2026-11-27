@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_system_prompt.dart';
@@ -31,19 +32,22 @@ const Set<String> _retrievalTools = {
   'search_story',
   'search_story_text',
   'read_story',
+  'list_facts',
   'query_facts',
+  'query_memory_changes',
   'read_compact_summary',
 };
 
-/// 从单轮 artifacts 合成一行 trace（无可用痕迹时返回 null）
+/// 从单轮 artifacts 合成一行 trace（无可用痕迹或零工具轮返回 null）
 ///
-/// 无工具轮诚实标注「本轮无工具调用，直写正文」——不美化、不伪造；
-/// finish_round 是交付动作不算工作工具。
+/// 零工具轮不再输出占位行，避免长会话上下文堆积负向直写示范；
+/// finish_round / finish_maintenance 是交付控制动作，不计入工作工具。
 String? roundWorkTraceFor(StoryRoundArtifacts artifact) {
   final workSteps = artifact.agentSteps
       .where(
         (s) =>
             s.toolName != 'finish_round' &&
+            s.toolName != 'finish_maintenance' &&
             s.toolName != 'system' &&
             !s.isRunning,
       )
@@ -88,13 +92,11 @@ String? roundWorkTraceFor(StoryRoundArtifacts artifact) {
       workSteps.where((s) => s.toolName == 'spawn' && s.isSuccess).length;
   if (spawnCount > 0) segments.add('派子代理×$spawnCount');
 
-  // 标签统一用 workbench-reminder 包裹（与  轮尾自立纪律一致，
+  // 标签统一用 workbench-reminder 包裹（与轮尾自立纪律一致，
   // 声明「工作台提醒，非导演发言」；round-work 内层标签保留供模型定位轮号）
   if (segments.isEmpty) {
     if (workSteps.isEmpty) {
-      return wrapWorkbenchReminder(
-        '〈round-work n=${artifact.turnNumber}〉本轮无工具调用，直写正文〈/round-work〉',
-      );
+      return null;
     }
     // 有工具调用但全部失败/未归类：如实记调用数，不判"无工具"
     return wrapWorkbenchReminder(
@@ -233,4 +235,139 @@ int zeroMemoryRoundStreak(Map<int, StoryRoundArtifacts> artifacts) {
     streak++;
   }
   return streak;
+}
+
+// ==================== 记忆维护缺口与双周期调度 ====================
+
+/// 记忆维护周期调度计算结果
+class MaintenanceSchedule {
+  const MaintenanceSchedule({
+    required this.factsGap,
+    required this.anchorGap,
+    required this.eventGap,
+    required this.turnsSinceLastNudge,
+    required this.turnsSinceMajorReview,
+    required this.isMajorReviewRound,
+    required this.shouldIssueNudge,
+  });
+
+  /// 距上次成功调用 update_facts / merge_entities 的已完成轮数
+  final int factsGap;
+
+  /// 距上次成功调用 update_story_anchor 的已完成轮数
+  final int anchorGap;
+
+  /// 距上次成功调用 record_event_memory 的已完成轮数
+  final int eventGap;
+
+  /// 距上次发出轻量维护提示的轮数（从未发过为 null）
+  final int? turnsSinceLastNudge;
+
+  /// 距上次完成周期审查与维护任务的轮数（从未完成过按 currentTurn 计）
+  final int turnsSinceMajorReview;
+
+  /// 本轮是否进入大周期双任务模式
+  final bool isMajorReviewRound;
+
+  /// 本轮是否注入轻量维护缺口提示（大周期轮不叠加小提示）
+  final bool shouldIssueNudge;
+}
+
+/// 基于已持久化轮次 artifacts 确定性计算维护缺口与周期触发判定。
+///
+/// 仅统计轮号严格小于 [currentTurn] 的已提交轮次。任一轮中只要成功调用了
+/// 对应维护工具（含用户手动提醒促成的更新），对应维度缺口即清零。
+MaintenanceSchedule computeMaintenanceSchedule({
+  required Map<int, StoryRoundArtifacts> artifacts,
+  required int currentTurn,
+  int maintenanceGapInterval = 7,
+  int maintenanceNudgeCooldown = 4,
+  int majorReviewInterval = 50,
+}) {
+  final effectiveTurn = currentTurn < 1 ? 1 : currentTurn;
+  final priorTurns = artifacts.keys.where((t) => t < effectiveTurn).toList()
+    ..sort();
+
+  int? lastFactsTurn;
+  int? lastAnchorTurn;
+  int? lastEventTurn;
+  int? lastNudgeTurn;
+  int? lastMajorReviewTurn;
+
+  for (final turn in priorTurns) {
+    final artifact = artifacts[turn]!;
+    final steps = artifact.agentSteps;
+    final hasFactsUpdate = artifact.factsChanges.isNotEmpty ||
+        steps.any(
+          (s) =>
+              s.isSuccess &&
+              (s.toolName == 'update_facts' || s.toolName == 'merge_entities'),
+        );
+    if (hasFactsUpdate) lastFactsTurn = turn;
+
+    final hasAnchorUpdate = steps.any(
+      (s) => s.isSuccess && s.toolName == 'update_story_anchor',
+    );
+    if (hasAnchorUpdate) lastAnchorTurn = turn;
+
+    final hasEventUpdate = steps.any(
+      (s) => s.isSuccess && s.toolName == 'record_event_memory',
+    );
+    if (hasEventUpdate) lastEventTurn = turn;
+
+    final summary = artifact.agentWorkSummary;
+    if (summary?.maintenanceNudgeIssued ?? false) {
+      lastNudgeTurn = turn;
+    }
+    final completedMajorReview = (summary?.majorReviewCompleted ?? false) ||
+        steps.any(
+          (s) => s.isSuccess && s.toolName == 'finish_maintenance',
+        );
+    if (completedMajorReview) {
+      lastMajorReviewTurn = turn;
+    }
+  }
+
+  final hasPriorArtifacts = priorTurns.isNotEmpty;
+  final factsGap = !hasPriorArtifacts
+      ? 0
+      : (lastFactsTurn != null
+          ? effectiveTurn - 1 - lastFactsTurn
+          : effectiveTurn - 1);
+  final anchorGap = !hasPriorArtifacts
+      ? 0
+      : (lastAnchorTurn != null
+          ? effectiveTurn - 1 - lastAnchorTurn
+          : effectiveTurn - 1);
+  final eventGap = !hasPriorArtifacts
+      ? 0
+      : (lastEventTurn != null
+          ? effectiveTurn - 1 - lastEventTurn
+          : effectiveTurn - 1);
+  final turnsSinceLastNudge =
+      lastNudgeTurn == null ? null : effectiveTurn - lastNudgeTurn;
+  final turnsSinceMajorReview = lastMajorReviewTurn == null
+      ? effectiveTurn
+      : effectiveTurn - lastMajorReviewTurn;
+
+  final isMajorReviewRound = majorReviewInterval > 0 &&
+      effectiveTurn >= majorReviewInterval &&
+      turnsSinceMajorReview >= majorReviewInterval;
+  final maxGap = math.max(factsGap, math.max(anchorGap, eventGap));
+  final gapExceeded =
+      maintenanceGapInterval > 0 && maxGap >= maintenanceGapInterval;
+  final cooldownSatisfied = turnsSinceLastNudge == null ||
+      turnsSinceLastNudge >= maintenanceNudgeCooldown;
+  final shouldIssueNudge =
+      !isMajorReviewRound && gapExceeded && cooldownSatisfied;
+
+  return MaintenanceSchedule(
+    factsGap: factsGap,
+    anchorGap: anchorGap,
+    eventGap: eventGap,
+    turnsSinceLastNudge: turnsSinceLastNudge,
+    turnsSinceMajorReview: turnsSinceMajorReview,
+    isMajorReviewRound: isMajorReviewRound,
+    shouldIssueNudge: shouldIssueNudge,
+  );
 }

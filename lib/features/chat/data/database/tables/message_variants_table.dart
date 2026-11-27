@@ -52,6 +52,24 @@ class MessageVariantsTable extends Table {
   /// regenerate 变体与原始指令一致）
   TextColumn get sourceInput => text().nullable()();
 
+  /// 该变体的事实层原始 deltas JSON（自 artifacts.facts_deltas 复制）
+  ///
+  /// 切换变体时事实层回滚到轮前后按此确定性重放（不调 LLM）；
+  /// null = 该变体无派生资料（旧数据/无事实变更）。
+  TextColumn get factsDeltas => text().nullable()();
+
+  /// 该变体的经历记忆行快照 JSON（轮内 auto 行全列序列化，含向量）
+  ///
+  /// 切换变体时删除当前轮派生行后按此恢复（含 FTS/向量状态标记）；
+  /// null = 该变体无经历记忆派生。
+  TextColumn get experientialSnapshot => text().nullable()();
+
+  /// 该变体的事件摘要 JSON（自 artifacts.event_summary 复制，随变体走）
+  TextColumn get eventSummary => text().nullable()();
+
+  /// 该变体的事实层变更展示记录 JSON（自 artifacts.facts_changes 复制）
+  TextColumn get factsChanges => text().nullable()();
+
   /// 创建时间（毫秒时间戳）
   IntColumn get createdAt => integer()();
 }

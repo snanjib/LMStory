@@ -4,6 +4,9 @@ import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
 import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
 
+/// 导演轮内所处阶段（普通轮始终为 [writing]；大周期轮完成任务一后切 [maintenance]）
+enum AgentRoundPhase { writing, maintenance }
+
 /// Agent 轮草稿区（事务边界内的暂存，设计报告 §7.8）
 ///
 /// 一切写工具（update_facts / record_event_memory）在轮进行中只写草稿；
@@ -17,6 +20,15 @@ class AgentRoundDraft {
 
   /// 事实变更草稿（提交时经 FactApplier.applyDeltas 落库，全部守护生效）
   final List<FactsDelta> factsDeltas = [];
+
+  /// 暂存时点的属性基底快照（审批基底变化检测）
+  ///
+  /// key = `entityId|attrKey`（经 normalizeAttrKey 归一），value = 首次暂存
+  /// 该属性的 DB 当前 auto 行值（null = 当时无行）。提交时比对当前值：
+  /// 暂存（审批预览）之后被其他路径改动过的基底不静默覆盖——命中漂移的
+  /// update_attr delta 被剔除并留痕。clear_pending/replace_pending 与
+  /// [factsDeltas] 同步清空。
+  final Map<String, String?> factBaseSnapshots = {};
 
   /// 事件记忆草稿（5W1E；未调用 record_event_memory 时由控制器兜底合成）
   EventSummary? eventSummary;
@@ -57,6 +69,21 @@ class AgentRoundDraft {
   /// 伏笔对账提醒已用掉一次性豁免（清点轮 finish_round 首次拦截后置位，
   /// 二次提交放行；与 eventMemoryGateUsed 同构）
   bool foreshadowGateUsed = false;
+
+  /// 当前轮内所处阶段（普通轮始终为 writing；大周期轮完成任务一后切 maintenance）
+  AgentRoundPhase phase = AgentRoundPhase.writing;
+
+  /// 本轮是否启用大周期双任务接力（任务一正文 → 任务二周期审查与维护）
+  bool isMajorReviewRound = false;
+
+  /// 切入 maintenance 阶段后是否已调用过查/改/锚/事件工具
+  bool maintenanceCheckedOrUpdated = false;
+
+  /// 维护收尾门控一次性豁免（首次未巡检即调用 finish_maintenance 时置位）
+  bool maintenanceGateUsed = false;
+
+  /// 周期审查与维护是否已通过 finish_maintenance 正式完成
+  bool maintenanceCompleted = false;
 
   /// 剧情锚草稿（体验重构卡片 C：update_story_anchor 写入，提交时落库；
   /// null = 本轮未更新，持久化时继承会话当前锚）

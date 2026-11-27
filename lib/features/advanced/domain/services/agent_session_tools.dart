@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:lmstory/core/agent/agent_tool.dart';
+import 'package:lmstory/core/agent/agent_workbench_reminder.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/text/injection_guard.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_prose_contract.dart';
@@ -11,27 +12,41 @@ import 'package:lmstory/features/advanced/domain/services/agent_story_reader.dar
 import 'package:lmstory/features/advanced/domain/services/agent_style_lint.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_subagent.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_system_prompt.dart';
+import 'package:lmstory/features/advanced/domain/services/calc_agent_tools.dart';
+import 'package:lmstory/features/advanced/domain/services/retrieval_evidence.dart';
 import 'package:lmstory/features/advanced/domain/services/search_story_text_tool.dart';
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
+import 'package:lmstory/features/memory/data/migrations/relationship_split_migration.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_memory_changes_snapshot.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_memory_history.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/memory/domain/entities/scored_memory.dart';
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
 import 'package:lmstory/features/memory/domain/repositories/factual_repository.dart';
 import 'package:lmstory/features/memory/domain/services/fact_applier.dart';
 import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
+import 'package:lmstory/features/memory/domain/services/facts_delta_projection.dart';
 import 'package:lmstory/features/memory/domain/services/memory_query.dart';
 import 'package:lmstory/features/memory/domain/services/memory_retrieval_exception.dart';
 
+/// 记录本轮已调用工具，并在维护阶段标记已完成核对或同步。
+void _recordToolCall(
+  AgentRoundDraft draft,
+  String toolName, {
+  bool countsForMaintenance = false,
+}) {
+  draft.calledTools.add(toolName);
+  if (countsForMaintenance && draft.phase == AgentRoundPhase.maintenance) {
+    draft.maintenanceCheckedOrUpdated = true;
+  }
+}
+
 /// 工具集依赖包（控制器按会话组装，draft 每轮更换）
-///
-///  零工具轮升级闸门阈值：连续 ≥ 此轮数未调用 update_facts /
-/// record_event_memory 时，finish_round 的事件记忆豁免升级为"须在
-/// noEventReason 参数说明原因"（长会话退化治理设计 §3-S5，对 R5）。
 const int kZeroToolEscalateAfter = 3;
 
 class AgentToolDeps {
@@ -55,8 +70,12 @@ class AgentToolDeps {
     this.spawnToolFactory,
     this.zeroMemoryRoundStreak = 0,
     this.foreshadowCheckInterval = 8,
+    this.maintenanceExtraSteps = 6,
     this.embedQueryTimeout,
     this.retrievalProfile,
+    // 工程上下文模式（开启态）证据/暴露量闸门：null = 关闭态（旧闸门保留）
+    this.retrievalEvidenceGate,
+    this.eventExposureGate,
   });
 
   final String sessionId;
@@ -64,6 +83,14 @@ class AgentToolDeps {
   final FactualRepository factualRepository;
   final ExperienceRepository experienceRepository;
   final AgentStoryReader storyReader;
+
+  /// 开启态检索证据闸门：返回 null=通过；缺口→结构化拒绝。
+  final Future<EntityCoverageCheck?> Function(String prose)?
+      retrievalEvidenceGate;
+
+  /// 开启态事件记忆暴露量闸门：入参=本轮正文（暴露量输入采集
+  /// 用真实本轮正文）；返回 null=放行。
+  final Future<EventExposureCheck?> Function(String prose)? eventExposureGate;
 
   /// 最新宏摘要（常驻基线候选，read_compact_summary 用）
   final Future<List<ExperientialMemory>> Function() latestMacros;
@@ -111,10 +138,11 @@ class AgentToolDeps {
   /// advanced.embedding.timeout_ms 同源注入；null = 工具默认 15s）。
   final Duration? embedQueryTimeout;
 
-  /// 伏笔定期清点间隔轮数（清点轮 = 轮尾清点提醒 + finish_round 伏笔
-  /// 对账闸门；与 runner 轮尾装配共用 isForeshadowSweepRound 节奏源，
-  /// 来源 advanced.harness.foreshadow_check_interval；0 = 停用）。
+  /// 伏笔定期清点间隔轮数（保留以兼容旧构造函数；调度现由维护缺口与大周期接管）。
   final int foreshadowCheckInterval;
+
+  /// 大周期轮进入维护阶段时追加的独立步数配额（0 = 不追加）。
+  final int maintenanceExtraSteps;
 
   /// 会话「检索松紧度」快照（：runner 从 chat_sessions.
   /// retrieval_overrides 注入；null = 未物化，search_story 用内置默认）。
@@ -135,8 +163,11 @@ class AgentFactsDeltaInput {
     this.attrKey,
     this.value,
     this.reason,
+    this.originalReason,
     this.importance,
   });
+
+  static const int maxBatchSize = 8;
 
   final String action;
   final int confidence;
@@ -146,9 +177,10 @@ class AgentFactsDeltaInput {
   final String? attrKey;
   final String? value;
   final String? reason;
+  final String? originalReason;
   final int? importance;
 
-  FactsDelta? toFactsDelta() {
+  FactsDelta? toFactsDelta({bool skipFrequencyGuard = false}) {
     // FactAction.fromString 对未知值抛 ArgumentError：先按已知动作白名单
     // 预检（不捕获 Error），未知动作返回 null
     const knownActions = {
@@ -158,6 +190,7 @@ class AgentFactsDeltaInput {
       'remove_from_list',
       'add_alias',
       'archive_entity',
+      'set_importance',
     };
     if (!knownActions.contains(action)) return null;
     final parsedAction = FactAction.fromString(action);
@@ -172,7 +205,21 @@ class AgentFactsDeltaInput {
       value: value,
       reason: reason,
       importance: importance,
+      skipFrequencyGuard: skipFrequencyGuard,
     );
+  }
+
+  static List<dynamic>? decodeList(Object? raw) {
+    if (raw is List) return raw;
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) return decoded;
+      } on FormatException {
+        // 落到 null：走「缺少变更」信封
+      }
+    }
+    return null;
   }
 
   /// 弱模型容错解析：
@@ -193,7 +240,13 @@ class AgentFactsDeltaInput {
     }
     final action = _normalizeActionName(raw['action']);
     if (action == null) {
-      return (input: null, error: 'action「${raw['action']}」不是六种之一');
+      return (input: null, error: 'action「${raw['action']}」不是七种合法动作之一');
+    }
+    if (raw['confidence'] == null) {
+      return (
+        input: null,
+        error: '缺少必填字段 confidence（须提供 1-5 整数表示把握度/证据强度）',
+      );
     }
     final confidence = _normalizeOneToFive(raw['confidence']);
     if (confidence == null) {
@@ -220,6 +273,7 @@ class AgentFactsDeltaInput {
         attrKey: _readString(raw, const ['attr_key', 'attrKey']),
         value: _readString(raw, const ['value']),
         reason: _readString(raw, const ['reason']),
+        originalReason: raw['reason']?.toString(),
         importance: _normalizeOptionalOneToFive(raw['importance']),
       ),
       error: null,
@@ -256,6 +310,8 @@ String? _normalizeActionName(Object? raw) {
     'alias': 'add_alias',
     'archive': 'archive_entity',
     'archive_entity': 'archive_entity',
+    'set_importance': 'set_importance',
+    'importance': 'set_importance',
   };
   return aliases[raw.toString().trim().toLowerCase()];
 }
@@ -309,8 +365,12 @@ List<AgentTool> buildAgentTools(
     ),
     SearchStoryTextTool(reader: deps.storyReader, draft: deps.draft),
     ReadStoryTool(deps),
+    ListFactsTool(deps),
     QueryFactsTool(deps),
+    QueryMemoryChangesTool(deps),
     ReadCompactSummaryTool(deps),
+    CalcEvalTool(deps),
+    CalcDateTool(deps),
   ].where((t) => !deniedTools.contains(t.name)).toList();
   return [
     ...readOnlyTools,
@@ -321,6 +381,7 @@ List<AgentTool> buildAgentTools(
     if (deps.spawnToolFactory != null) deps.spawnToolFactory!(readOnlyTools),
     if (deps.enableAskUser) AskUserTool(deps),
     FinishRoundTool(deps),
+    FinishMaintenanceTool(deps),
   ].where((t) => !deniedTools.contains(t.name)).toList();
 }
 
@@ -332,6 +393,38 @@ class SearchStoryTool implements AgentTool {
     Duration? embedQueryTimeout,
     this.canSearchStoryText = true,
   }) : embedQueryTimeout = embedQueryTimeout ?? _defaultEmbedTimeout;
+
+  // ── MEM-12a 检索参数（导演现行有效参数，值零漂移锁定）──────────────
+  //
+  // 与故事模式配置（IntermediateConfig.retrieval / default_config.json
+  // 的 intermediate.retrieval）不同是**有意差异**：导演检索参数为工具内
+  // 直连定值（导演现行有效参数），不随故事模式配置联动。两模式对照表
+  // 与差异说明。
+  // 本批（MEM-12a）仅做命名常量提取整理，值逐字不变——零行为变化；
+  // 值由 agent_session_tools_test.dart 的 MEM-12a 值锁定测试防漂移。
+
+  /// FTS5 通道权重（故事模式 0.5）
+  static const double _kFts5Weight = 0.6;
+
+  /// 向量通道权重（故事模式 0.5）
+  static const double _kVectorWeight = 0.4;
+
+  /// 关键事件重点索引的重要度阈值（故事模式 999 = 停用）
+  static const int _kKeyEventThreshold = 4;
+
+  /// 关键事件加权倍数（故事模式 1.0 = 不加权）
+  static const double _kKeyEventBoost = 1.5;
+
+  /// 归一化平滑项（故事模式 0.01；差异说明见对照表 epsilon 节）
+  static const double _kNormalizationEpsilon = 1e-6;
+
+  /// 模型未传 top_k 且无会话松紧度快照时的内置默认
+  ///（快照三档 5/8/12，见 RetrievalProfile.tiers）
+  static const int _kDefaultTopK = 8;
+
+  /// 无快照时的向量质量过滤阈值（0.0 = 不过滤；
+  /// 保守档另有 0.55，见 RetrievalProfile.conservative）
+  static const double _kDefaultVectorScoreThreshold = 0;
 
   final bool canSearchStoryText;
 
@@ -402,7 +495,7 @@ class SearchStoryTool implements AgentTool {
       'top_k',
       min: 1,
       max: 20,
-      fallback: _deps.retrievalProfile?.topK ?? 8,
+      fallback: _deps.retrievalProfile?.topK ?? _kDefaultTopK,
     );
     if (topK.error != null) {
       return AgentToolResult.failure(title: '参数不对', output: topK.error!);
@@ -439,14 +532,14 @@ class SearchStoryTool implements AgentTool {
             (query: query, vector: vector),
           ],
           topK: topK.value!,
-          fts5Weight: 0.6,
-          vectorWeight: 0.4,
-          keyEventThreshold: 4,
-          keyEventBoost: 1.5,
-          normalizationEpsilon: 1e-6,
+          fts5Weight: _kFts5Weight,
+          vectorWeight: _kVectorWeight,
+          keyEventThreshold: _kKeyEventThreshold,
+          keyEventBoost: _kKeyEventBoost,
+          normalizationEpsilon: _kNormalizationEpsilon,
           // 向量质量过滤阈值来自会话松紧度快照（null/缺省 0.0 = 不过滤）
-          vectorScoreThreshold:
-              _deps.retrievalProfile?.vectorScoreThreshold ?? 0.0,
+          vectorScoreThreshold: _deps.retrievalProfile?.vectorScoreThreshold ??
+              _kDefaultVectorScoreThreshold,
           currentTurnNumber: _deps.draft.turnNumber,
         ),
       ];
@@ -458,6 +551,10 @@ class SearchStoryTool implements AgentTool {
         title: '检索通道不可用',
         output:
             '记忆检索通道当前不可用（${e.attemptedChannels} 条通道全部失败）。这不代表记忆库里没有该内容。请稍后重试，或改用 read_story(turn=轮号) 直接回读原文。$_textSearchHint',
+        metadata: retrievalEvidencePayload(
+          status: 'error',
+          queryScope: {'query': query},
+        ),
       );
     }
 
@@ -494,7 +591,14 @@ class SearchStoryTool implements AgentTool {
         title: '「$query」· 未命中',
         output:
             '没有找到与「$query」相关的记忆。请换一个关键词重试（如人物名、地名、事件动作），或用 read_story 浏览近几轮原文。$_textSearchHint',
-        metadata: {'query': query, 'hitCount': 0},
+        metadata: {
+          'query': query,
+          'hitCount': 0,
+          ...retrievalEvidencePayload(
+            status: 'empty',
+            queryScope: {'query': query},
+          ),
+        },
         outputSchema: kOutputSchema,
       );
     }
@@ -517,7 +621,15 @@ class SearchStoryTool implements AgentTool {
     return AgentToolResult.success(
       title: '「$query」· ${hits.length} 处命中',
       output: '${lines.join('\n')}$_textSearchHint',
-      metadata: {'query': query, 'hitCount': hits.length},
+      metadata: {
+        'query': query,
+        'hitCount': hits.length,
+        // 文本类检索无实体面（实体级充分性由 query_facts 类证据承担）
+        ...retrievalEvidencePayload(
+          status: 'success',
+          queryScope: {'query': query},
+        ),
+      },
       outputSchema: kOutputSchema,
     );
   }
@@ -653,10 +765,268 @@ class ReadStoryTool implements AgentTool {
   }
 }
 
+// ==================== 只读：list_facts ====================
+
+class ListFactsTool implements AgentTool {
+  ListFactsTool(this._deps);
+
+  static const int defaultLimit = 25;
+  static const int maxLimit = 50;
+
+  static const Set<String> _allowedSources = {
+    'dynamic',
+    'auto',
+    'worldbook',
+    'card',
+    'all',
+  };
+
+  static const Set<String> _allowedSorts = {
+    'stale_first',
+    'recently_updated',
+    'importance_desc',
+    'created_desc',
+  };
+
+  /// 成功回执的输出结构声明
+  static const Map<String, String> kOutputSchema = {
+    'count': 'int',
+    'totalMatched': 'int',
+    'hasMore': 'boolean',
+  };
+
+  final AgentToolDeps _deps;
+
+  @override
+  String get name => 'list_facts';
+
+  @override
+  String get description => '浏览事实库实体目录（默认仅列活跃动态实体并附全库统计头；支持按类型、来源、久未校准排序与轮次分页）。'
+      '每行仅展示索引概要（ID/主名/类型/重要度/来源/建改轮次/属性数/别名数），不含属性值详情；'
+      '如需查细节请配合 query_facts(entity_ids=[...]) 批量读取。';
+
+  @override
+  AgentToolPermission get permission => AgentToolPermission.readOnly;
+
+  @override
+  Map<String, dynamic> buildParametersSchema() {
+    return const {
+      'type': 'object',
+      'properties': {
+        'entity_type': {
+          'type': 'string',
+          'enum': [
+            'character',
+            'location',
+            'item',
+            'lore',
+            'organization',
+            'misc',
+          ],
+          'description': '按实体类型过滤（可选）',
+        },
+        'source': {
+          'type': 'string',
+          'enum': ['dynamic', 'auto', 'worldbook', 'card', 'all'],
+          'description': '来源过滤：dynamic（默认，AI 自建或发生过演化的实体）/ '
+              'auto / worldbook / card / all',
+        },
+        'sort': {
+          'type': 'string',
+          'enum': [
+            'stale_first',
+            'recently_updated',
+            'importance_desc',
+            'created_desc',
+          ],
+          'description': '排序：stale_first（默认，高重要度且久未校准优先）/ recently_updated / '
+              'importance_desc / created_desc',
+        },
+        'updated_before_turn': {
+          'type': 'integer',
+          'minimum': 1,
+          'description': '筛选最近活跃轮次严格小于该轮号的实体（可选）',
+        },
+        'updated_after_turn': {
+          'type': 'integer',
+          'minimum': 1,
+          'description': '筛选最近活跃轮次严格大于该轮号的实体（可选）',
+        },
+        'include_archived': {
+          'type': 'boolean',
+          'description': '是否包含已归档实体（默认 false）',
+        },
+        'limit': {
+          'type': 'integer',
+          'minimum': 1,
+          'maximum': maxLimit,
+          'description': '每页条数（默认 25，上限 50）',
+        },
+        'offset': {
+          'type': 'integer',
+          'minimum': 0,
+          'description': '分页偏移量（默认 0）',
+        },
+      },
+    };
+  }
+
+  @override
+  Future<AgentToolResult> invoke(
+    AgentToolInvocation invocation,
+    Map<String, dynamic> arguments,
+  ) async {
+    FactualEntityType? entityType;
+    final rawType = arguments['entity_type']?.toString().trim();
+    if (rawType != null && rawType.isNotEmpty) {
+      entityType = FactualEntityType.tryFromString(rawType);
+      if (entityType == null) {
+        return AgentToolResult.failure(
+          title: '参数不对',
+          output: 'entity_type「$rawType」非法，可选：'
+              'character / location / item / lore / organization / misc。',
+        );
+      }
+    }
+
+    final rawSource = arguments['source']?.toString().trim();
+    final sourceFilter =
+        (rawSource == null || rawSource.isEmpty) ? 'dynamic' : rawSource;
+    if (!_allowedSources.contains(sourceFilter)) {
+      return AgentToolResult.failure(
+        title: '参数不对',
+        output:
+            'source「$sourceFilter」非法，可选：dynamic / auto / worldbook / card / all。',
+      );
+    }
+
+    final rawSort = arguments['sort']?.toString().trim();
+    final sort = (rawSort == null || rawSort.isEmpty) ? 'stale_first' : rawSort;
+    if (!_allowedSorts.contains(sort)) {
+      return AgentToolResult.failure(
+        title: '参数不对',
+        output:
+            'sort「$sort」非法，可选：stale_first / recently_updated / importance_desc / created_desc。',
+      );
+    }
+
+    int? updatedBeforeTurn;
+    if (arguments['updated_before_turn'] != null) {
+      final parsed = parseIntegerArg(arguments, 'updated_before_turn', min: 1);
+      if (parsed.error != null) {
+        return AgentToolResult.failure(title: '参数不对', output: parsed.error!);
+      }
+      updatedBeforeTurn = parsed.value;
+    }
+
+    int? updatedAfterTurn;
+    if (arguments['updated_after_turn'] != null) {
+      final parsed = parseIntegerArg(arguments, 'updated_after_turn', min: 1);
+      if (parsed.error != null) {
+        return AgentToolResult.failure(title: '参数不对', output: parsed.error!);
+      }
+      updatedAfterTurn = parsed.value;
+    }
+
+    final limitResult = parseIntegerArg(
+      arguments,
+      'limit',
+      min: 1,
+      max: maxLimit,
+      fallback: defaultLimit,
+    );
+    if (limitResult.error != null) {
+      return AgentToolResult.failure(title: '参数不对', output: limitResult.error!);
+    }
+    final offsetResult = parseIntegerArg(
+      arguments,
+      'offset',
+      min: 0,
+      fallback: 0,
+    );
+    if (offsetResult.error != null) {
+      return AgentToolResult.failure(
+        title: '参数不对',
+        output: offsetResult.error!,
+      );
+    }
+
+    final includeArchived = arguments['include_archived'] == true;
+    final page = await _deps.factualRepository.listEntityCatalog(
+      _deps.sessionId,
+      entityType: entityType,
+      sourceFilter: sourceFilter,
+      sort: sort,
+      updatedBeforeTurn: updatedBeforeTurn,
+      updatedAfterTurn: updatedAfterTurn,
+      includeArchived: includeArchived,
+      limit: limitResult.value!,
+      offset: offsetResult.value!,
+    );
+
+    _recordToolCall(_deps.draft, name, countsForMaintenance: true);
+
+    final s = page.summary;
+    final typeParts = [
+      for (final type in FactualEntityType.values)
+        if ((s.typeCounts[type] ?? 0) > 0) '${type.name} ${s.typeCounts[type]}',
+    ];
+    final lines = <String>[
+      '【事实库概览】活跃 ${s.activeCount}（动态 ${s.dynamicCount}｜静态世界书 ${s.staticWorldbookCount}｜静态角色卡 ${s.staticCardCount}），已归档 ${s.archivedCount}${typeParts.isEmpty ? '' : '｜类型：${typeParts.join('、')}'}。',
+    ];
+    if (sourceFilter == 'dynamic') {
+      lines.add(
+        '当前视图：source=dynamic（活跃动态实体），sort=$sort；如需查看未演化静态设定可传 source="worldbook" / "card" / "all"。',
+      );
+    }
+    if (page.items.isEmpty) {
+      lines.add('本页无匹配实体（共 ${page.totalMatched} 条符合当前筛选）。');
+    } else {
+      final start = page.offset + 1;
+      final end = page.offset + page.items.length;
+      lines.add('本页展示 $start-$end / 共 ${page.totalMatched} 条：');
+      for (final item in page.items) {
+        final e = item.entity;
+        final safeName = sanitizeUntrusted(e.primaryName);
+        final turnInfo = e.updatedTurn != null
+            ? '建T${e.createdTurn}·改T${e.updatedTurn}'
+            : '建T${e.createdTurn}';
+        final flags = [
+          if (e.injectionDisabled) '[停用注入]',
+          if (e.isArchived) '[已归档]',
+        ].join();
+        lines.add(
+          '◆ [${e.entityId}] $safeName（${e.type.name}｜重要度${e.importance}｜来源${e.source.name}｜$turnInfo｜属性${item.attributeCount}条｜别名${item.aliasCount}个）${flags.isEmpty ? '' : ' $flags'}',
+        );
+      }
+    }
+    if (page.hasMore) {
+      lines.add('还有下一页，可传 offset=${page.offset + page.items.length} 继续翻页。');
+    }
+    lines.add(
+      '提示：本目录仅列索引不含属性详情，需要核对或修订具体内容时请用 query_facts(entity_ids=[...]) 批量读卡。',
+    );
+
+    return AgentToolResult.success(
+      title: '事实目录 · ${page.items.length}/${page.totalMatched}',
+      output: lines.join('\n'),
+      metadata: {
+        'count': page.items.length,
+        'totalMatched': page.totalMatched,
+        'hasMore': page.hasMore,
+      },
+      outputSchema: kOutputSchema,
+    );
+  }
+}
+
 // ==================== 只读：query_facts ====================
 
 class QueryFactsTool implements AgentTool {
   QueryFactsTool(this._deps);
+
+  /// 批量 ID 直查单次上限
+  static const int maxBatchIds = 8;
 
   /// 成功回执的输出结构声明
   static const Map<String, String> kOutputSchema = {'count': 'int'};
@@ -668,7 +1038,7 @@ class QueryFactsTool implements AgentTool {
 
   @override
   String get description =>
-      '查询事实层（实体卡片）：按名称精查或按关键词模糊查（关键词按空白/标点切分，覆盖主名、别名与属性值），返回实体 ID、类型、重要度、属性（状态/关系/设定）。更新既有实体时优先用卡片中的 [实体ID] 定位（也可用 primary_name 按名定位）。写改用 update_facts。';
+      '查询事实层（实体卡片）：支持按 entity_id / entity_ids（单次最多 8 个）批量直查，也支持按名称精查或关键词模糊查（关键词按空白/标点切分，覆盖主名、别名与属性值），返回实体 ID、类型、重要度、属性（状态/关系/设定）。更新既有实体时优先用卡片中的 [实体ID] 定位（也可用 primary_name 按名定位）。写改用 update_facts。';
 
   @override
   AgentToolPermission get permission => AgentToolPermission.readOnly;
@@ -678,6 +1048,13 @@ class QueryFactsTool implements AgentTool {
     return const {
       'type': 'object',
       'properties': {
+        'entity_id': {'type': 'string', 'description': '按实体 ID 精确查询（可选）'},
+        'entity_ids': {
+          'type': 'array',
+          'items': {'type': 'string'},
+          'maxItems': maxBatchIds,
+          'description': '按实体 ID 列表批量直查（最多 8 个，配合 list_facts 使用）',
+        },
         'name': {'type': 'string', 'description': '实体名或别名（精确优先）'},
         'query': {'type': 'string', 'description': '关键词（全文检索）'},
       },
@@ -689,80 +1066,136 @@ class QueryFactsTool implements AgentTool {
     AgentToolInvocation invocation,
     Map<String, dynamic> arguments,
   ) async {
+    final entityIdArg = arguments['entity_id']?.toString().trim() ?? '';
+    final entityIdsArg = parseStringListArg(arguments, 'entity_ids');
+    final requestedIds = <String>[
+      if (entityIdArg.isNotEmpty) entityIdArg,
+      for (final id in entityIdsArg)
+        if (id.isNotEmpty && id != entityIdArg) id,
+    ];
+    if (requestedIds.length > maxBatchIds) {
+      return AgentToolResult.failure(
+        title: '批量 ID 超限',
+        output:
+            'entity_ids 单次最多查询 $maxBatchIds 个实体（当前 ${requestedIds.length} 个），请分批查询。',
+      );
+    }
+
     final name = arguments['name']?.toString().trim() ?? '';
     final query = arguments['query']?.toString().trim() ?? '';
-    if (name.isEmpty && query.isEmpty) {
+    if (requestedIds.isEmpty && name.isEmpty && query.isEmpty) {
       return AgentToolResult.failure(
         title: '缺少查询条件',
-        output: '请提供 name（按名查）或 query（按关键词查）至少一个。',
+        output: '请提供 entity_id、entity_ids、name 或 query 至少一个。',
       );
     }
 
-    // 词元：query 与 name 一起切分（多词/标点/短词统一处理）。
-    // 精确名仍用原始串查主名/别名——归一化只作用于关键词通道。
-    final terms = MemoryQuery.tokenizeAll([query, name]);
+    final queryScope = <String, dynamic>{
+      if (requestedIds.isNotEmpty) 'entity_ids': requestedIds,
+      if (name.isNotEmpty) 'name': name,
+      if (query.isNotEmpty) 'query': query,
+    };
 
-    // ① 精确名/别名（主表直查，最快且最准）
-    var entities = name.isEmpty
-        ? <FactualEntity>[]
-        : await _deps.factualRepository.findByName(_deps.sessionId, [name]);
-
-    // ② 世界书词条 FTS（ranked；短词走 LIKE）
-    if (entities.isEmpty && terms.isNotEmpty) {
-      entities = await _deps.factualRepository.searchWorldFacts(
+    var entities = <FactualEntity>[];
+    if (requestedIds.isNotEmpty) {
+      entities = await _deps.factualRepository.getEntitiesByIds(
         _deps.sessionId,
-        terms,
-        limit: 10,
+        requestedIds,
       );
-    }
-
-    // ③ 主表子串兜底——覆盖 auto/card/手动实体与属性值。
-    // 2026-09-09 审查：此前关键词通道只查 factual_fts（世界书专用索引），
-    // 库里看得见的 AI 建档实体永远搜不到，模型因此每轮重复建档。
-    if (entities.isEmpty && terms.isNotEmpty) {
-      entities = await _deps.factualRepository.searchEntitiesByText(
-        _deps.sessionId,
-        terms,
-      );
-    }
-
-    if (entities.isEmpty) {
-      // 局部变量 name（查询参数）遮蔽工具名 getter，用 this.name 消歧
-      _deps.draft.calledTools.add(this.name);
-      final term = name.isNotEmpty ? name : query;
-      // ④ 归档探测：命中归档实体时明说，避免"看得见却搜不到"的静默
-      final archivedProbe = terms.isEmpty
-          ? const <FactualEntity>[]
-          : await _deps.factualRepository.searchEntitiesByText(
-              _deps.sessionId,
-              terms,
-              limit: 5,
-              includeArchived: true,
-            );
-      final archived = archivedProbe.where((e) => e.isArchived).toList();
-      if (archived.isNotEmpty) {
-        final lines = <String>['匹配的实体均已归档（可能被归并过）：'];
-        for (final e in archived) {
-          lines.add(
-            '◆ [${e.entityId}] ${e.primaryName}（已归档｜重要度${e.importance}）',
-          );
-        }
-        lines.add('如需继续使用，请在记忆库把它恢复为活跃，或按新名/别名重查。');
+      if (entities.isEmpty) {
+        _recordToolCall(_deps.draft, this.name, countsForMaintenance: true);
         return AgentToolResult.success(
-          title: '「$term」· 已归档',
-          output: lines.join('\n'),
-          metadata: {'count': 0, 'archivedCount': archived.length},
+          title: '未命中',
+          output:
+              '未找到指定实体 ID（${requestedIds.join('、')}）。请先用 list_facts 确认有效实体 ID。',
+          metadata: {
+            'count': 0,
+            ...retrievalEvidencePayload(
+              status: 'empty',
+              queryScope: queryScope,
+            ),
+          },
           outputSchema: kOutputSchema,
         );
       }
-      return AgentToolResult.success(
-        title: term.isEmpty ? '未命中' : '「$term」· 未命中',
-        output: '没有找到匹配的实体（已检索：主名、别名、属性值；关键词已按词拆分）。\n'
-            '注意：本轮 update_facts 新建的实体要等落幕提交后才可检索。\n'
-            '若确属新出现的事物，可在 update_facts 中用 create_entity 创建；若可能是既有实体的别称，请先核对相似名并用 add_alias/merge_entities 归并，不要重复建档。',
-        metadata: {'count': 0},
-        outputSchema: kOutputSchema,
-      );
+    } else {
+      // 词元：query 与 name 一起切分（多词/标点/短词统一处理）。
+      // 精确名仍用原始串查主名/别名——归一化只作用于关键词通道。
+      final terms = MemoryQuery.tokenizeAll([query, name]);
+
+      // ① 精确名/别名（主表直查，最快且最准）
+      entities = name.isEmpty
+          ? <FactualEntity>[]
+          : await _deps.factualRepository.findByName(_deps.sessionId, [name]);
+
+      // ② 世界书词条 FTS（ranked；短词走 LIKE）
+      if (entities.isEmpty && terms.isNotEmpty) {
+        entities = await _deps.factualRepository.searchWorldFacts(
+          _deps.sessionId,
+          terms,
+          limit: 10,
+        );
+      }
+
+      // ③ 主表子串兜底——覆盖 auto/card/手动实体与属性值。
+      if (entities.isEmpty && terms.isNotEmpty) {
+        entities = await _deps.factualRepository.searchEntitiesByText(
+          _deps.sessionId,
+          terms,
+        );
+      }
+
+      if (entities.isEmpty) {
+        _recordToolCall(_deps.draft, this.name, countsForMaintenance: true);
+        final term = name.isNotEmpty ? name : query;
+        // ④ 归档探测：命中归档实体时明说，避免"看得见却搜不到"的静默
+        final archivedProbe = terms.isEmpty
+            ? const <FactualEntity>[]
+            : await _deps.factualRepository.searchEntitiesByText(
+                _deps.sessionId,
+                terms,
+                limit: 5,
+                includeArchived: true,
+              );
+        final archived = archivedProbe.where((e) => e.isArchived).toList();
+        if (archived.isNotEmpty) {
+          final lines = <String>['匹配的实体均已归档（可能被归并过）：'];
+          for (final e in archived) {
+            lines.add(
+              '◆ [${e.entityId}] ${e.primaryName}（已归档｜重要度${e.importance}）',
+            );
+          }
+          lines.add('如需继续使用，请在记忆库把它恢复为活跃，或按新名/别名重查。');
+          return AgentToolResult.success(
+            title: '「$term」· 已归档',
+            output: lines.join('\n'),
+            metadata: {
+              'count': 0,
+              'archivedCount': archived.length,
+              ...retrievalEvidencePayload(
+                status: 'empty',
+                queryScope: queryScope,
+              ),
+            },
+            outputSchema: kOutputSchema,
+          );
+        }
+        return AgentToolResult.success(
+          title: term.isEmpty ? '未命中' : '「$term」· 未命中',
+          output: '没有找到匹配的实体（已检索：主名、别名、属性值；关键词已按词拆分）。\n'
+              '注意：本轮 update_facts 新建的实体要等落幕提交后才可检索。\n'
+              '若确属新出现的事物，可在 update_facts 中用 create_entity 创建；若可能是既有实体的别称，请先核对相似名并用 add_alias/merge_entities 归并，不要重复建档。\n'
+              '注：世界书/事实检索按名称与描述字面匹配；低重要度经历细节不在本检索面，可用 search_story_text 扫描原文。',
+          metadata: {
+            'count': 0,
+            ...retrievalEvidencePayload(
+              status: 'empty',
+              queryScope: queryScope,
+            ),
+          },
+          outputSchema: kOutputSchema,
+        );
+      }
     }
 
     final entityIds = entities.map((e) => e.entityId).toList();
@@ -777,14 +1210,10 @@ class QueryFactsTool implements AgentTool {
           .where((a) => a.entityId == e.entityId)
           .toList()
         ..sort((a, b) => b.importance.compareTo(a.importance));
-      // [实体ID] 与故事模式 {{known_entities}} 的 [ent_xxx] 格式一致，
-      // 供模型在 update_facts 中用 entity_id 精确定位
       lines.add(
-        '◆ [${e.entityId}] ${e.primaryName}（${e.type.name}｜重要度${e.importance}${e.source.name != 'auto' ? '｜来源${e.source.name}' : ''}${e.forceInject.name != 'none' ? '｜常驻' : ''}）',
+        '◆ [${e.entityId}] ${e.primaryName}（${e.type.name}｜重要度${e.importance}${e.source.name != 'auto' ? '｜来源${e.source.name}' : ''}${e.forceInject.name != 'none' ? '｜常驻' : ''}${e.injectionDisabled ? '｜停用注入' : ''}${e.isArchived ? '｜已归档' : ''}）',
       );
       for (final attr in entityAttrs.take(8)) {
-        // 值经消毒后由导入资料包裹承载（：运行时注入点同导入侧
-        // 走 sanitizeUntrusted，防模型把哨兵标签写回事实层再注入）
         lines.add(
           '  · ${attr.attrKey}: '
           '${wrapImportedData(sanitizeUntrusted(attr.value))}',
@@ -804,14 +1233,741 @@ class QueryFactsTool implements AgentTool {
       );
     }
 
-    _deps.draft.calledTools.add(this.name);
+    _recordToolCall(_deps.draft, this.name, countsForMaintenance: true);
     return AgentToolResult.success(
       title: '${entities.length} 张设定卡',
       output: lines.join('\n'),
-      metadata: {'count': entities.length},
+      metadata: {
+        'count': entities.length,
+        // 证据记录（成功查询才构成有效证据）：success + 命中实体读取时点修订快照
+        ...retrievalEvidencePayload(
+          status: 'success',
+          queryScope: queryScope,
+          entities: [
+            for (final e in entities)
+              EvidenceEntityRef(
+                id: e.entityId,
+                primaryName: e.primaryName,
+                updatedAtMs: e.updatedAt?.millisecondsSinceEpoch,
+                contentDigest: _entityDigest(
+                  e,
+                  attributes.where((a) => a.entityId == e.entityId).toList(),
+                ),
+              ),
+          ],
+        ),
+      },
       outputSchema: kOutputSchema,
     );
   }
+}
+
+// ==================== 只读：query_memory_changes ====================
+
+/// 查询当前会话仍留存的事实流水。
+///
+/// 事实历史没有会话列，因此先从当前会话实体联表，再读取每个实体的
+/// factual_memory_history。这个边界也让回执能够明确说明经历编辑和普通手改
+/// 可能没有完整流水，避免把“查空”解释成“没有发生过”。
+class QueryMemoryChangesTool implements AgentTool {
+  QueryMemoryChangesTool(this._deps)
+      : _instanceNonce =
+            '${DateTime.now().microsecondsSinceEpoch}-${_nextNonce++}';
+
+  static int _nextNonce = 0;
+
+  static const Map<String, String> kOutputSchema = {
+    'status': 'string',
+    'count': 'int',
+    'hasNext': 'boolean',
+  };
+
+  final AgentToolDeps _deps;
+  final String _instanceNonce;
+
+  @override
+  String get name => 'query_memory_changes';
+
+  @override
+  String get description =>
+      '查询当前故事、当前选定稿件上仍留存的事实变更流水，按入账轮倒序返回。支持 entity_id/entity_name、attr_key、actions/kinds、关键词 q、from_turn/to_turn、limit 和 cursor。q 按实体名、属性键、理由和实际变更项匹配，不把旧列表的未变更成员当作命中。只覆盖已记录的事实变更，经历编辑和未留痕的普通手工变化可能没有历史。结果可用 read_story 回读正文。 Query retained factual changes for the current story and selected variant only.';
+
+  @override
+  AgentToolPermission get permission => AgentToolPermission.readOnly;
+
+  @override
+  Map<String, dynamic> buildParametersSchema() => const {
+        'type': 'object',
+        'properties': {
+          'entity_id': {'type': 'string', 'description': '本故事实体 ID'},
+          'entity_name': {'type': 'string', 'description': '本故事当前主名或别名'},
+          'attr_key': {
+            'type': 'string',
+            'description': '属性键，支持 relationship:对象',
+          },
+          'actions': {
+            'type': 'array',
+            'items': {
+              'type': 'string',
+              'enum': [
+                'create_entity',
+                'update_attr',
+                'append_list',
+                'remove_from_list',
+                'add_alias',
+                'archive_entity',
+                'set_importance',
+              ],
+            },
+          },
+          'kinds': {
+            'type': 'array',
+            'items': {
+              'type': 'string',
+              'enum': ['fact', 'experience'],
+            },
+          },
+          'q': {'type': 'string', 'description': '匹配实体名、属性键、原因或实际变更项'},
+          'from_turn': {'type': 'integer', 'minimum': 1},
+          'to_turn': {'type': 'integer', 'minimum': 1},
+          'limit': {'type': 'integer', 'minimum': 1, 'maximum': 30},
+          'cursor': {'type': 'string'},
+        },
+      };
+
+  @override
+  Future<AgentToolResult> invoke(
+    AgentToolInvocation invocation,
+    Map<String, dynamic> arguments,
+  ) async {
+    final entityId = _readTrimmed(arguments['entity_id']);
+    final entityName = _readTrimmed(arguments['entity_name']);
+    if (entityId != null && entityName != null) {
+      return _invalid('entity_id 与 entity_name 不能同时使用。');
+    }
+
+    final rawFromTurn = arguments['from_turn'];
+    final rawToTurn = arguments['to_turn'];
+    final fromTurn = _readInt(rawFromTurn);
+    final toTurn = _readInt(rawToTurn);
+    if (rawFromTurn != null && fromTurn == null ||
+        rawToTurn != null && toTurn == null) {
+      return _invalid('from_turn 和 to_turn 必须是整数。');
+    }
+    if (fromTurn != null && fromTurn < 1 || toTurn != null && toTurn < 1) {
+      return _invalid('from_turn 和 to_turn 必须是大于等于 1 的整数。');
+    }
+    if (fromTurn != null && toTurn != null && fromTurn > toTurn) {
+      return _invalid('from_turn 不能大于 to_turn，轮号端点均包含。');
+    }
+
+    final limitResult = parseIntegerArg(
+      arguments,
+      'limit',
+      min: 1,
+      max: 30,
+      fallback: 10,
+    );
+    if (limitResult.error != null) {
+      return _invalid(limitResult.error!);
+    }
+    final actions = _readStringList(arguments['actions']);
+    if (actions == null) {
+      return _invalid('actions 必须是字符串数组。');
+    }
+    final normalizedActions = <String>{};
+    for (final action in actions) {
+      final normalized = _normalizeFactAction(action);
+      if (normalized == null) {
+        return _invalid('actions 含未知动作「$action」。');
+      }
+      normalizedActions.add(normalized);
+    }
+
+    final kinds = _readStringList(arguments['kinds']);
+    if (kinds == null) {
+      return _invalid('kinds 必须是字符串数组。');
+    }
+    final normalizedKinds = <String>{};
+    for (final kind in kinds) {
+      final normalized = kind.trim().toLowerCase();
+      if (normalized != 'fact' && normalized != 'experience') {
+        return _invalid('kinds 只支持 fact 或 experience。');
+      }
+      normalizedKinds.add(normalized);
+    }
+    if (normalizedKinds.length == 1 && normalizedKinds.contains('experience')) {
+      _recordToolCall(_deps.draft, name, countsForMaintenance: true);
+      return AgentToolResult.success(
+        title: '事实变更历史不可用',
+        output: '当前版本没有经历编辑的逐项变更流水，未从经历摘要推断事实变化。',
+        metadata: {
+          'status': 'history_unavailable',
+          'count': 0,
+          'hasNext': false,
+          'coverage': {'fact': '可查', 'experience': '未记录逐项变更历史'},
+        },
+        outputSchema: kOutputSchema,
+      );
+    }
+
+    final q = _readTrimmed(arguments['q']);
+    final normalizedConditions = <String, dynamic>{
+      'entity_id': entityId,
+      'entity_name': entityName,
+      'attr_key': _readTrimmed(arguments['attr_key']),
+      'actions': normalizedActions.toList()..sort(),
+      'kinds': normalizedKinds.toList()..sort(),
+      'q': q,
+      'from_turn': fromTurn,
+      'to_turn': toTurn,
+      'limit': limitResult.value,
+    };
+
+    try {
+      final snapshot = await _deps.factualRepository.readMemoryChangesSnapshot(
+        _deps.sessionId,
+      );
+      final entities = snapshot.entities;
+      final selected = _selectEntities(entities, entityId, entityName);
+      if (entityName != null && selected.length > 1) {
+        _recordToolCall(_deps.draft, name, countsForMaintenance: true);
+        final candidates =
+            selected.map((e) => '[${e.entityId}] ${e.primaryName}').join('、');
+        return AgentToolResult.success(
+          title: '实体名有歧义',
+          output: '「$entityName」匹配多个本故事实体，请改用 entity_id 选择一个：$candidates。',
+          metadata: {
+            'status': 'ambiguous_entity',
+            'count': 0,
+            'hasNext': false,
+            'candidates': [
+              for (final e in selected)
+                {'entityId': e.entityId, 'primaryName': e.primaryName},
+            ],
+          },
+          outputSchema: kOutputSchema,
+        );
+      }
+
+      final attributes = snapshot.attributes;
+      final attrById = <String, FactualAttribute>{
+        for (final attribute in attributes) attribute.attributeId: attribute,
+      };
+      final entityById = <String, FactualEntity>{
+        for (final entity in selected) entity.entityId: entity,
+      };
+      final rows = <_MemoryChangeRow>[];
+      var missingAttributeCoverage = false;
+      final selectedIds = {for (final entity in selected) entity.entityId};
+      for (final item in snapshot.history) {
+        if (!selectedIds.contains(item.entityId)) continue;
+        if (item.historyId == null) continue;
+        if (fromTurn != null && item.turnNumber < fromTurn) continue;
+        if (toTurn != null && item.turnNumber > toTurn) continue;
+        final action = item.action.toJsonString();
+        if (normalizedActions.isNotEmpty &&
+            !normalizedActions.contains(action)) {
+          continue;
+        }
+        final attribute =
+            item.attributeId == null ? null : attrById[item.attributeId!];
+        final attrKey = attribute?.attrKey;
+        final wantedAttr = normalizedConditions['attr_key'] as String?;
+        if (wantedAttr != null && attrKey != wantedAttr) {
+          if (item.attributeId != null && attribute == null) {
+            missingAttributeCoverage = true;
+          }
+          continue;
+        }
+        final entity = entityById[item.entityId];
+        if (entity == null || _isMaintenanceHistory(item)) continue;
+        final row = _MemoryChangeRow(
+          entity: entity,
+          attribute: attribute,
+          history: item,
+          currentFactsChanges:
+              snapshot.currentFactsChangesByTurn[item.turnNumber],
+        );
+        if (q != null && !row.matchesQuery(q)) continue;
+        rows.add(row);
+      }
+      rows.sort(_compareMemoryChangeRows);
+
+      final currentDigest = _stableDigest(
+        jsonEncode({
+          'conditions': normalizedConditions,
+          'rows': [for (final row in rows) row.digestData],
+          'story': snapshot.storyRevision,
+          'variants': [
+            for (final entry in snapshot.currentVariantByTurn.entries)
+              [entry.key, entry.value],
+          ],
+        }),
+      );
+      final cursor = _decodeMemoryCursor(arguments['cursor']);
+      if (arguments['cursor'] != null && cursor == null) {
+        return _cursorStale();
+      }
+      if (cursor != null &&
+          (cursor.sessionId != _deps.sessionId ||
+              cursor.instanceNonce != _instanceNonce ||
+              jsonEncode(cursor.conditions) !=
+                  jsonEncode(normalizedConditions) ||
+              cursor.digest != currentDigest)) {
+        return _cursorStale();
+      }
+
+      var start = 0;
+      if (cursor != null) {
+        start = rows.indexWhere(
+          (row) =>
+              row.history.turnNumber == cursor.lastTurn &&
+              row.history.historyId == cursor.lastHistoryId,
+        );
+        if (start < 0) return _cursorStale();
+        start += 1;
+      }
+      final page = rows.skip(start).take(limitResult.value!).toList();
+      final hasNext = start + page.length < rows.length;
+      final nextCursor = hasNext
+          ? _MemoryChangesCursor(
+              sessionId: _deps.sessionId,
+              conditions: normalizedConditions,
+              digest: currentDigest,
+              instanceNonce: _instanceNonce,
+              lastTurn: page.last.history.turnNumber,
+              lastHistoryId: page.last.history.historyId!,
+            ).encode()
+          : null;
+
+      if (missingAttributeCoverage &&
+          normalizedConditions['attr_key'] != null) {
+        _recordToolCall(_deps.draft, name, countsForMaintenance: true);
+        return AgentToolResult.success(
+          title: '属性历史覆盖不足',
+          output:
+              '所查范围内存在已删除或失联的属性键，无法证明 attr_key 条件覆盖完整。请去掉 attr_key 或改查当前仍存在的属性。',
+          metadata: {
+            'status': 'coverage_insufficient',
+            'count': 0,
+            'hasNext': false,
+            'coverage': _coverageMetadata(),
+          },
+          outputSchema: kOutputSchema,
+        );
+      }
+
+      final status = rows.isEmpty ? 'no_match_in_recorded_history' : 'matched';
+      _recordToolCall(_deps.draft, name, countsForMaintenance: true);
+      final lines = <String>[];
+      if (page.isEmpty) {
+        lines.add('在所查范围内没有找到已记录的变更。');
+      } else {
+        for (final row in page) {
+          lines.add(
+            await row
+                .render(snapshot.storyRoundsByTurn[row.history.turnNumber]),
+          );
+        }
+      }
+      lines
+        ..add('仅覆盖当前故事已留存的事实变更。普通手工编辑、经历编辑和已删除流水可能没有完整历史。')
+        ..add('查询范围限定为当前故事当前选定稿件；正文回读线索仅在本轮产物能唯一对应时提供。');
+      if (nextCursor != null) lines.add('还有下一页，可使用返回的 cursor 继续查询。');
+      return AgentToolResult.success(
+        title: rows.isEmpty ? '未找到已记录变更' : '命中 ${page.length} 条事实变更',
+        output: lines.join('\n'),
+        metadata: {
+          'status': status,
+          'count': page.length,
+          'hasNext': hasNext,
+          'scope': 'current_story_current_variant',
+          if (nextCursor != null) 'cursor': nextCursor,
+          'coverage': _coverageMetadata(),
+        },
+        outputSchema: kOutputSchema,
+      );
+    } catch (error) {
+      _deps.draft.calledTools.add(name);
+      return AgentToolResult.failure(
+        title: '记忆变更读取失败',
+        output: '无法读取已记录的事实变更（$error）。这不代表故事中没有发生变化，请稍后重试或用 read_story 回读原文。',
+        metadata: {'status': 'read_error'},
+      );
+    }
+  }
+
+  AgentToolResult _invalid(String output) => AgentToolResult.failure(
+        title: '参数不对',
+        output: output,
+        metadata: {'status': 'invalid_arguments'},
+      );
+
+  AgentToolResult _cursorStale() => AgentToolResult.failure(
+        title: '查询游标已失效',
+        output: 'cursor 已失效，查询条件、当前稿件或已记录流水发生变化，请从第一页重新查询。',
+        metadata: {'status': 'cursor_stale'},
+      );
+
+  List<FactualEntity> _selectEntities(
+    List<FactualEntity> entities,
+    String? entityId,
+    String? entityName,
+  ) {
+    if (entityId != null) {
+      return entities.where((entity) => entity.entityId == entityId).toList();
+    }
+    if (entityName != null) {
+      return entities
+          .where(
+            (entity) =>
+                entity.primaryName == entityName ||
+                entity.aliases.contains(entityName),
+          )
+          .toList();
+    }
+    return entities;
+  }
+
+  Map<String, String> _coverageMetadata() => const {
+        'fact': '当前会话实体联表后读取仍留存的 factual_memory_history',
+        'experience': '没有逐项变更流水',
+        'manual': '普通手工编辑可能缺少连续历史',
+      };
+}
+
+class _MemoryChangeRow {
+  _MemoryChangeRow({
+    required this.entity,
+    required this.attribute,
+    required this.history,
+    required this.currentFactsChanges,
+  });
+
+  final FactualEntity entity;
+  final FactualAttribute? attribute;
+  final FactualMemoryHistory history;
+  final String? currentFactsChanges;
+
+  List<Object?> get digestData => [
+        history.historyId,
+        history.entityId,
+        history.attributeId,
+        history.action.toJsonString(),
+        history.oldValue,
+        history.newValue,
+        history.reason,
+        history.turnNumber,
+        history.createdAt.toIso8601String(),
+        entity.primaryName,
+        entity.aliases,
+        attribute?.attrKey,
+        currentFactsChanges,
+      ];
+
+  bool matchesQuery(String query) {
+    final needle = query.toLowerCase();
+    final text = <String?>[
+      entity.primaryName,
+      ...entity.aliases,
+      attribute?.attrKey,
+      history.reason,
+      ..._changedValueTokens(),
+    ].whereType<String>().join('\n').toLowerCase();
+    return text.contains(needle);
+  }
+
+  List<String> _changedValueTokens() {
+    final action = history.action.toJsonString();
+    final changed = history.newValue;
+    if (changed == null || changed.isEmpty) {
+      return action == 'archive_entity' && history.reason != null
+          ? [history.reason!]
+          : const [];
+    }
+    if (action == 'append_list' || action == 'remove_from_list') {
+      return [changed];
+    }
+    if (action != 'update_attr' || history.oldValue == null) {
+      return [changed];
+    }
+    try {
+      final before = jsonDecode(history.oldValue!);
+      final after = jsonDecode(changed);
+      if (before is Map && after is Map) {
+        final keys = {...before.keys, ...after.keys};
+        final tokens = <String>[];
+        for (final key in keys) {
+          final oldItem = before[key];
+          final newItem = after[key];
+          if (jsonEncode(oldItem) == jsonEncode(newItem)) continue;
+          tokens.add(key.toString());
+          if (oldItem != null) tokens.add(oldItem.toString());
+          if (newItem != null) tokens.add(newItem.toString());
+        }
+        return tokens.isEmpty ? [changed] : tokens;
+      }
+      if (before is List && after is List) {
+        final beforeByKey = <String, Object?>{
+          for (final item in before) jsonEncode(item): item,
+        };
+        final afterByKey = <String, Object?>{
+          for (final item in after) jsonEncode(item): item,
+        };
+        final tokens = <String>[];
+        for (final key in {...beforeByKey.keys, ...afterByKey.keys}) {
+          if (beforeByKey.containsKey(key) && afterByKey.containsKey(key)) {
+            continue;
+          }
+          final item = afterByKey[key] ?? beforeByKey[key];
+          tokens.addAll(_valueTokens(item));
+        }
+        return tokens.isEmpty ? [changed] : tokens;
+      }
+      if (jsonEncode(before) != jsonEncode(after)) {
+        return [
+          ..._valueTokens(after),
+          ..._valueTokens(before),
+        ];
+      }
+    } on FormatException {
+      // 单值属性或旧格式文本，按变更后值匹配。
+    }
+    return [changed];
+  }
+
+  static List<String> _valueTokens(Object? value) {
+    if (value is Map) {
+      return [
+        for (final entry in value.entries) ...[
+          entry.key.toString(),
+          ..._valueTokens(entry.value),
+        ],
+      ];
+    }
+    if (value is List) {
+      return [for (final item in value) ..._valueTokens(item)];
+    }
+    return value == null ? const [] : [value.toString()];
+  }
+
+  Future<String> render(FactualMemoryStoryRound? round) async {
+    final action = history.action.toJsonString();
+    final attr = attribute?.attrKey ?? '属性键未知';
+    final before = history.oldValue ?? '未知';
+    final changed = history.newValue ?? '未知';
+    final after = _computedAfter(action, history.oldValue, history.newValue);
+    final lines = <String>[
+      '第 ${history.turnNumber} 轮入账·流水 ${history.historyId}·${entity.primaryName}（${entity.entityId}）·$attr·$action',
+      '操作前：$before；变更项/写入值：$changed${after == null ? '' : '；按流水计算随后为：$after'}',
+      if (history.reason == null || history.reason!.isEmpty)
+        '理由：未记录'
+      else
+        '理由：${history.reason}',
+    ];
+    if (round != null && _matchesEvidence(round)) {
+      lines.add('可用 read_story({"turn":${history.turnNumber}}) 核对正文。剧情时间：未知。');
+    } else {
+      lines.add('剧情时间：未知。当前正文未能唯一对应这条流水，需先用 read_story 核对。');
+    }
+    return lines.join('\n');
+  }
+
+  bool _matchesEvidence(FactualMemoryStoryRound round) {
+    if (currentFactsChanges == null || currentFactsChanges!.isEmpty) {
+      return false;
+    }
+    final evidence = _parseEvidence(currentFactsChanges!);
+    final matches = evidence
+        .where(
+          (item) =>
+              item['entityId'] == history.entityId &&
+              item['action'] == history.action.toJsonString() &&
+              item['oldValue'] == history.oldValue &&
+              item['newValue'] == history.newValue,
+        )
+        .toList();
+    if (matches.length != 1) return false;
+    final text = [
+      round.userText,
+      round.narrativeText,
+      round.replyText,
+      round.eventSummaryText,
+    ].whereType<String>().join('\n').toLowerCase();
+    final nameMatches = text.contains(entity.primaryName.toLowerCase()) ||
+        entity.aliases.any((alias) => text.contains(alias.toLowerCase()));
+    final changedTokens = _changedValueTokens();
+    final valueMatches = changedTokens.isNotEmpty &&
+        changedTokens.any((value) => text.contains(value.toLowerCase()));
+    return nameMatches && valueMatches;
+  }
+
+  static List<Map<String, dynamic>> _parseEvidence(String encoded) {
+    try {
+      final decoded = jsonDecode(encoded);
+      if (decoded is! List) return const [];
+      return decoded.whereType<Map<String, dynamic>>().toList();
+    } on FormatException {
+      return const [];
+    }
+  }
+
+  static String? _computedAfter(
+    String action,
+    String? oldValue,
+    String? changedValue,
+  ) {
+    if (changedValue == null ||
+        (action != 'append_list' && action != 'remove_from_list')) {
+      return action == 'update_attr' ? changedValue : null;
+    }
+    if (oldValue == null) return null;
+    try {
+      final decoded = jsonDecode(oldValue);
+      if (decoded is! List) return null;
+      final result = decoded.map((item) => item.toString()).toList();
+      if (action == 'append_list') {
+        if (!result.contains(changedValue)) result.add(changedValue);
+      } else {
+        result.remove(changedValue);
+      }
+      return jsonEncode(result);
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
+class _MemoryChangesCursor {
+  _MemoryChangesCursor({
+    required this.sessionId,
+    required this.conditions,
+    required this.digest,
+    required this.instanceNonce,
+    required this.lastTurn,
+    required this.lastHistoryId,
+  });
+
+  factory _MemoryChangesCursor.fromJson(Map<String, dynamic> json) =>
+      _MemoryChangesCursor(
+        sessionId: json['session_id'] as String,
+        conditions: (json['conditions'] as Map).cast<String, dynamic>(),
+        digest: json['digest'] as String,
+        instanceNonce: json['instance_nonce'] as String,
+        lastTurn: (json['last_turn'] as num).toInt(),
+        lastHistoryId: (json['last_history_id'] as num).toInt(),
+      );
+
+  final String sessionId;
+  final Map<String, dynamic> conditions;
+  final String digest;
+  final String instanceNonce;
+  final int lastTurn;
+  final int lastHistoryId;
+
+  String encode() => base64UrlEncode(
+        utf8.encode(
+          jsonEncode({
+            'session_id': sessionId,
+            'conditions': conditions,
+            'digest': digest,
+            'instance_nonce': instanceNonce,
+            'last_turn': lastTurn,
+            'last_history_id': lastHistoryId,
+          }),
+        ),
+      );
+}
+
+_MemoryChangesCursor? _decodeMemoryCursor(Object? raw) {
+  if (raw == null) return null;
+  if (raw is! String || raw.isEmpty) return null;
+  try {
+    final decoded = jsonDecode(utf8.decode(base64Url.decode(raw))) as Map;
+    return _MemoryChangesCursor.fromJson(decoded.cast<String, dynamic>());
+  } on FormatException {
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+String? _readTrimmed(Object? raw) {
+  if (raw == null) return null;
+  final text = raw.toString().trim();
+  return text.isEmpty ? null : text;
+}
+
+int? _readInt(Object? raw) {
+  if (raw is int) return raw;
+  if (raw is num && raw == raw.roundToDouble()) return raw.toInt();
+  if (raw is String) return int.tryParse(raw.trim());
+  return null;
+}
+
+List<String>? _readStringList(Object? raw) {
+  if (raw == null) return const [];
+  if (raw is String) return [raw];
+  if (raw is! List) return null;
+  if (raw.any((item) => item is! String)) return null;
+  return raw.cast<String>();
+}
+
+String? _normalizeFactAction(String raw) {
+  final value = raw.trim().toLowerCase();
+  const aliases = {
+    'create': 'create_entity',
+    'create_entity': 'create_entity',
+    'update': 'update_attr',
+    'update_attr': 'update_attr',
+    'append': 'append_list',
+    'append_list': 'append_list',
+    'remove': 'remove_from_list',
+    'remove_from_list': 'remove_from_list',
+    'add_alias': 'add_alias',
+    'alias': 'add_alias',
+    'archive': 'archive_entity',
+    'archive_entity': 'archive_entity',
+    'set_importance': 'set_importance',
+    'importance': 'set_importance',
+  };
+  return aliases[value];
+}
+
+bool _isMaintenanceHistory(FactualMemoryHistory history) {
+  final reason = history.reason ?? '';
+  return reason == RelationshipSplitMigration.splitReason ||
+      reason == RelationshipSplitMigration.restoreReason ||
+      reason == RelationshipSplitMigration.pendingReason;
+}
+
+int _compareMemoryChangeRows(_MemoryChangeRow a, _MemoryChangeRow b) {
+  final byTurn = b.history.turnNumber.compareTo(a.history.turnNumber);
+  if (byTurn != 0) return byTurn;
+  final byId = b.history.historyId!.compareTo(a.history.historyId!);
+  if (byId != 0) return byId;
+  final byEntity = a.entity.entityId.compareTo(b.entity.entityId);
+  if (byEntity != 0) return byEntity;
+  return (a.attribute?.attrKey ?? '').compareTo(b.attribute?.attrKey ?? '');
+}
+
+String _stableDigest(String value) {
+  var hash = 2166136261;
+  for (final codeUnit in value.codeUnits) {
+    hash ^= codeUnit;
+    hash = (hash * 16777619) & 0xFFFFFFFF;
+  }
+  return hash.toRadixString(16).padLeft(8, '0');
+}
+
+/// 实体修订摘要（读取时点）：统一走 [entityRevisionDigest]——与闸门
+/// 时点的当前修订共用同一规范化函数/排序/时间身份。
+String _entityDigest(FactualEntity e, List<FactualAttribute> attrs) {
+  return entityRevisionDigest(
+    updatedAtMs: e.updatedAt?.millisecondsSinceEpoch,
+    attributes: [for (final a in attrs) (a.attrKey, a.value)],
+  );
 }
 
 // ==================== 只读：read_compact_summary ====================
@@ -845,7 +2001,7 @@ class ReadCompactSummaryTool implements AgentTool {
     final macros = await _deps.latestMacros();
 
     if (macros.isEmpty) {
-      _deps.draft.calledTools.add(name);
+      _recordToolCall(_deps.draft, name, countsForMaintenance: true);
       return AgentToolResult.success(
         title: '故事刚起步',
         output: '故事刚起步，还没有剧情主线摘要。',
@@ -859,7 +2015,7 @@ class ReadCompactSummaryTool implements AgentTool {
       lines.add('· [第${macro.turnNumber}轮] ${macro.summary}');
     }
 
-    _deps.draft.calledTools.add(name);
+    _recordToolCall(_deps.draft, name, countsForMaintenance: true);
     return AgentToolResult.success(
       title: '主线与近况',
       output: lines.join('\n'),
@@ -883,6 +2039,67 @@ class UpdateFactsTool implements AgentTool {
     'duplicates': 'int',
   };
 
+  /// 审批基底快照键（entityId + 归一 attrKey）
+  static String factBaseKey(String entityId, String attrKey) =>
+      '$entityId|$attrKey';
+
+  /// 暂存时捕获该属性的 DB 当前基底值（仅 update_attr；同属性只记首次）
+  Future<void> _captureFactBaseIfNeeded(FactsDelta delta) async {
+    if (delta.action != FactAction.updateAttr) return;
+    final entityId = delta.entityId;
+    final attrKey = delta.attrKey;
+    if (entityId == null || attrKey == null) return;
+    final repo = _deps.factualRepository;
+    try {
+      final entity = await repo.getEntityById(entityId);
+      if (entity == null) return;
+      final normalized = AttributeSchema.normalizeAttrKey(entity.type, attrKey);
+      final snapshots = _deps.draft.factBaseSnapshots;
+      final key = factBaseKey(entityId, normalized);
+      if (snapshots.containsKey(key)) return;
+      final rows = await repo.getAttributesByKey(entityId, normalized);
+      String? current;
+      for (final row in rows) {
+        if (row.source == FactualSource.auto) {
+          current = row.value;
+          break;
+        }
+      }
+      snapshots[key] = current;
+    } catch (_) {
+      // 基底读取失败不阻断暂存；该键提交期无基底可比（跳过漂移检查）
+    }
+  }
+
+  /// 提交期基底漂移检测：返回「暂存后当前值 ≠ 暂存时基底」的键集合。
+  /// 同轮多次暂存同属性不误报（DB 在提交前不被轮内暂存改动）。
+  static Future<Set<String>> detectFactBaseDrift({
+    required AgentRoundDraft draft,
+    required FactualRepository repository,
+  }) async {
+    final drifted = <String>{};
+    for (final entry in draft.factBaseSnapshots.entries) {
+      final separator = entry.key.indexOf('|');
+      if (separator <= 0) continue;
+      final entityId = entry.key.substring(0, separator);
+      final attrKey = entry.key.substring(separator + 1);
+      try {
+        final rows = await repository.getAttributesByKey(entityId, attrKey);
+        String? current;
+        for (final row in rows) {
+          if (row.source == FactualSource.auto) {
+            current = row.value;
+            break;
+          }
+        }
+        if (current != entry.value) drifted.add(entry.key);
+      } catch (_) {
+        continue;
+      }
+    }
+    return drifted;
+  }
+
   /// 同参提交计数（幂等回执；key = delta 序列化，值 = 已见次数）。
   /// 实例级（一轮一实例），首次调用时从 draft 既有暂存初始化。
   final Map<String, int> _submissionCounts = {};
@@ -892,8 +2109,16 @@ class UpdateFactsTool implements AgentTool {
   String get name => 'update_facts';
 
   @override
-  String get description =>
-      '写入/更新事实层（人物状态、关系、设定等）。动作：create_entity / update_attr / append_list / remove_from_list / add_alias / archive_entity。新实体首次出现时，create_entity 应同时带 attr_key+value 初始化属性（一个属性，多属性可再补 update_attr）；已知实体缺关键属性（性格/背景/描述）时主动补齐。更新既有实体优先用 query_facts 卡片的 [实体ID] 定位，缺省时 primary_name 按名定位亦可。变更先暂存，finish_round 时统一提交；导入实体（世界书/角色卡，卡片中标注来源）的基线内容只读：对其 update_attr 会作为演变并存、可新增属性与别名、主名不可改（将转别名）、可 archive；基线原文永不被覆盖。属性更新是合并不是覆盖：新值必须同时包含旧值已有要点与本次新增，不得丢失旧信息。暂存有误时的补救通道：clear_pending=true 清空本轮全部暂存变更（此参数可不带 deltas）；replace_pending=true 清空后以本次 deltas 重新暂存（如归并保留者选错时重设）。';
+  String get description => '''
+写入/更新事实层（人物状态、关系、设定、重要度等）。各动作必填字段矩阵（全部 7 种动作均须提供 action 与 confidence[1-5 整数：1=猜测，3=剧情合理推断，5=正文或设定明确写明]）：
+- create_entity：action + confidence + entity_type + primary_name（建议附 importance 及 attr_key+value 初始化属性）
+- update_attr：action + confidence + 目标（entity_id 或 primary_name）+ attr_key + value
+- append_list：action + confidence + 目标（entity_id 或 primary_name）+ attr_key + value
+- remove_from_list：action + confidence + 目标（entity_id 或 primary_name）+ attr_key + value
+- add_alias：action + confidence + 目标（entity_id 或 primary_name）+ value（别名）
+- archive_entity：action + confidence + 目标（entity_id 或 primary_name）（可选 value/reason）
+- set_importance：action + confidence + 目标（entity_id 或 primary_name）+ importance[1-5]（可选 reason）
+新实体首次出现时，create_entity 应同时带 attr_key+value 初始化属性；已知实体缺关键属性时主动补齐。更新既有实体优先用 list_facts/query_facts 的 [实体ID] 定位，缺省时 primary_name 按名定位亦可。重要度（1-5）代表当前及后续剧情对注入视野的需求权重，可随时用 set_importance 随角色或设定戏份升降动态调整。变更先暂存，交付或维护收尾时统一提交；导入实体（世界书/角色卡）的基线内容只读：对其 update_attr 会作为演变并存、可新增属性与别名、主名不可改（将转别名）、可 archive、可用 set_importance 调整注入重要度；基线原文永不被覆盖。单值属性更新只保留精炼的当前有效设定/状态，状态变更直接精简刷新（过程经历交由 record_event_memory）；信息维度增多时，针对 character/lore 善用自定义细分 attr_key，控制单字段长度不无限叠加。若本工具返回部分或全部失败，已暂存条目会保留，请仅针对失败条目修正参数后重新调用 update_facts。暂存有误时的补救通道：clear_pending=true 清空本轮全部暂存变更（可不带 deltas）；replace_pending=true 清空后以本次 deltas 重新暂存。关系约定：与具体角色的关系用 attr_key=relationship:对方名（single）；relationships（dict）仅存群体/笼统关系且只能整体 update。''';
 
   @override
   AgentToolPermission get permission => AgentToolPermission.write;
@@ -905,7 +2130,13 @@ class UpdateFactsTool implements AgentTool {
       'properties': {
         'deltas': {
           'type': 'array',
-          'description': '变更列表',
+          'description':
+              '变更列表（单次最多 8 条）。每条均必填 action 与 confidence（1-5，含 set_importance）：\n'
+                  'create_entity 另必填 entity_type + primary_name（建议附 attr_key + value）；\n'
+                  'update_attr / append_list / remove_from_list 另必填 entity_id/primary_name + attr_key + value；\n'
+                  'add_alias 另必填 entity_id/primary_name + value；\n'
+                  'archive_entity 另必填 entity_id/primary_name；\n'
+                  'set_importance 另必填 entity_id/primary_name + importance（1-5）。',
           'items': {
             'type': 'object',
             'properties': {
@@ -918,18 +2149,20 @@ class UpdateFactsTool implements AgentTool {
                   'remove_from_list',
                   'add_alias',
                   'archive_entity',
+                  'set_importance',
                 ],
               },
               'confidence': {
                 'type': 'integer',
                 'minimum': 1,
                 'maximum': 5,
-                'description': '置信度 1-5',
+                'description':
+                    '把握度 / 证据强度（1-5 整数；包括 set_importance 在内的全部 7 种动作均必填，不可省略）：1=低把握猜测，2=弱线索推断，3=剧情合理判断，4=明确依据，5=正文直述或已核实设定；关键属性变更通常要求 ≥3。',
               },
               'entity_id': {
                 'type': 'string',
                 'description':
-                    '目标实体 ID（query_facts 卡片的 [ent_xxx]）。create_entity 不用；缺省时可用 primary_name 按名定位',
+                    '目标实体 ID（list_facts / query_facts 卡片的 [ent_xxx]）。create_entity 不用；缺省时可用 primary_name 按名定位',
               },
               'entity_type': {
                 'type': 'string',
@@ -941,32 +2174,39 @@ class UpdateFactsTool implements AgentTool {
                   'organization',
                   'misc',
                 ],
+                'description': '实体类型（create_entity 时必填）',
               },
-              'primary_name': {'type': 'string'},
+              'primary_name': {
+                'type': 'string',
+                'description':
+                    '实体主名（create_entity 时必填；其余动作在缺少 entity_id 时用于按名定位）',
+              },
               'attr_key': {
                 'type': 'string',
-                'description': '属性键。update/append/remove 时必填；create_entity 时建议携带 '
-                    '（创建实体的同时初始化属性，如 description=描述）。各类型预定义键：\n'
-                    'character: name/personality/background/relationships/skills '
-                    '（另支持 gender/age/species 等自定义键）\n'
-                    'location: name/description/features\n'
-                    'item: name/description/owner\n'
-                    'lore: name/description/category\n'
-                    'organization: name/description/leader/members/background\n'
-                    'misc: name/description/category\n'
-                    '注：character 用 description 描述背景时系统自动映射到 background。',
+                'description':
+                    '属性键。update_attr/append_list/remove_from_list 时必填；create_entity 时建议携带 '
+                        '（创建实体的同时初始化属性，如 description=描述）。各类型预定义键：\n'
+                        'character: name/personality/background/relationships/skills '
+                        '（另支持 status/location/goal/appearance 等自定义细分键）\n'
+                        'location: name/description/features\n'
+                        'item: name/description/owner\n'
+                        'lore: name/description/category（另支持自定义细分键）\n'
+                        'organization: name/description/leader/members/background\n'
+                        'misc: name/description/category\n'
+                        '注：character 用 description 描述背景时系统自动映射到 background。',
               },
               'value': {
                 'type': 'string',
                 'description':
-                    '属性值/别名/归档原因。覆盖描述性（single）属性时，新值必须包含旧值的有用信息（合并而非替换），禁止丢弃原有经历/细节。',
+                    '属性值/别名/归档原因（update_attr/append_list/remove_from_list/add_alias 时必填）。更新单值（single）属性时请用精炼的当前有效设定/状态替换旧文，状态变化直接刷新并把过程留给事件记忆；维度较多时拆分为细分 attr_key，不要无限累加。',
               },
               'reason': {'type': 'string', 'description': '变更理由'},
               'importance': {
                 'type': 'integer',
                 'minimum': 1,
                 'maximum': 5,
-                'description': '重要度 1-5，评"今后出场可能性"，默认 2，宁低勿高（身份地位高不等于重要性高）',
+                'description':
+                    '重要度 1-5，代表当前及后续剧情对注入视野的需求权重（≥5 进入核心常驻，退场可降至 2-3 腾出槽位）；set_importance 时必填（仍须同时填 confidence），create_entity 时建议携带',
               },
             },
             'required': ['action', 'confidence'],
@@ -1001,7 +2241,7 @@ class UpdateFactsTool implements AgentTool {
     // 「请在提交前说明」对模型是死路指引。
     final clearPending = arguments['clear_pending'] == true;
     final replacePending = arguments['replace_pending'] == true;
-    final rawDeltas = _decodeDeltas(arguments['deltas']);
+    final rawDeltas = AgentFactsDeltaInput.decodeList(arguments['deltas']);
     // 清空条数提到方法级作用域：全拒失败信封的「已清空」提示需要
     final removedCount = _deps.draft.factsDeltas.length;
     if (clearPending || replacePending) {
@@ -1018,7 +2258,10 @@ class UpdateFactsTool implements AgentTool {
       // 是这么指引的）会被残留计数误报「已暂存过」，归并意图静默丢失。
       // 计数挂在 draft 上才能在这里一并清（工具实例间不互见）。
       _deps.draft.mergeRequestCounts.clear();
-      _deps.draft.calledTools.add(name);
+      // 基底快照随暂存一起清空——replace 语义是「全新暂存」，
+      // 保留旧快照会让新暂存误比旧基底。
+      _deps.draft.factBaseSnapshots.clear();
+      _recordToolCall(_deps.draft, name, countsForMaintenance: true);
       if (!replacePending || rawDeltas == null || rawDeltas.isEmpty) {
         return AgentToolResult.success(
           title: '暂存已清空',
@@ -1036,7 +2279,7 @@ class UpdateFactsTool implements AgentTool {
         output: 'deltas 不能为空，且必须是变更对象的数组。',
       );
     }
-    if (rawDeltas.length > 8) {
+    if (rawDeltas.length > AgentFactsDeltaInput.maxBatchSize) {
       return AgentToolResult.failure(
         title: '一次最多 8 条',
         output: '单次最多 8 条变更（当前 ${rawDeltas.length} 条）。请分批提交。',
@@ -1044,7 +2287,8 @@ class UpdateFactsTool implements AgentTool {
     }
 
     final accepted = <String>[];
-    final rejected = <String>[];
+    final actionableRejected = <String>[];
+    final noopSkipped = <String>[];
     //  幂等回执：对 draft 现有暂存 deltas 做序列化等值比较，同参重复
     // 不再 add（不消耗 8 条配额与提交期去重成本），回执注明第 N 次。
     // 提交计数按工具实例（=本轮）持续累计——draft 只保留一份暂存，计数
@@ -1063,17 +2307,18 @@ class UpdateFactsTool implements AgentTool {
     // 导入实体主名转换提示行——update_attr name 命中
     // 预检时 delta 照常暂存，仅在接受回执追加提示（非 rejected）。
     final importedNameHints = <String>[];
+    final inMaintenance = _deps.draft.phase == AgentRoundPhase.maintenance;
     for (var i = 0; i < rawDeltas.length; i++) {
       final parsed = AgentFactsDeltaInput.fromRaw(rawDeltas[i]);
       final input = parsed.input;
       if (input == null) {
-        rejected.add('第 ${i + 1} 条：${parsed.error}');
+        actionableRejected.add('第 ${i + 1} 条：${parsed.error}');
         continue;
       }
-      final delta = input.toFactsDelta();
+      final delta = input.toFactsDelta(skipFrequencyGuard: inMaintenance);
       if (delta == null) {
         // fromRaw 已覆盖全部校验分支，这里只是防御兜底
-        rejected.add('第 ${i + 1} 条：格式无效');
+        actionableRejected.add('第 ${i + 1} 条：格式无效');
         continue;
       }
       final key = jsonEncode(delta.toJson());
@@ -1098,68 +2343,47 @@ class UpdateFactsTool implements AgentTool {
         importedNameHints,
       );
       if (precheckReject != null) {
-        rejected.add(precheckReject);
+        actionableRejected.add(precheckReject);
+        continue;
+      }
+      final preflight = await _preflightDelta(delta, i + 1);
+      if (preflight != null) {
+        if (preflight.isNoop) {
+          noopSkipped.add(preflight.message);
+        } else {
+          actionableRejected.add(preflight.message);
+        }
         continue;
       }
       _submissionCounts[key] = 1;
       _deps.draft.factsDeltas.add(delta);
+      await _captureFactBaseIfNeeded(delta);
       if (delta.action == FactAction.createEntity &&
           delta.primaryName != null) {
         newCreateNames.add(delta.primaryName!);
       }
+      final acceptedDetail = delta.action == FactAction.setImportance
+          ? ' importance=${delta.importance}'
+          : '${delta.attrKey != null ? '.${delta.attrKey}' : ''}${delta.value != null ? ' = ${delta.value}' : ''}';
       accepted.add(
-        '${i + 1}. ${delta.action.name} → ${delta.primaryName ?? delta.entityId ?? '?'}${delta.attrKey != null ? '.${delta.attrKey}' : ''}${delta.value != null ? ' = ${delta.value}' : ''}',
+        '${i + 1}. ${delta.action.name} → ${delta.primaryName ?? delta.entityId ?? '?'}$acceptedDetail',
       );
-    }
-
-    // 全部被拒且无重复 → 真·全部无效（失败信封）；仅重复 → 成功回执
-    //（重复不是错误，是幂等命中）
-    if (accepted.isEmpty && duplicates.isEmpty) {
-      // replace_pending 先清后验，全拒时
-      // 旧暂存已被清空——不告知则模型以为正确内容仍在暂存，finish_round
-      // 会静默空提交。
-      final clearedNotice = (clearPending || replacePending) && removedCount > 0
-          ? '\n注意：本次调用已先清空此前的 $removedCount 条暂存，且新内容全部被拒——当前暂存为空，本轮 finish_round 将不提交任何事实变更。'
-          : '';
-      return AgentToolResult.failure(
-        title: '变更全部无效',
-        output: '全部变更被拒绝，逐条原因：\n${rejected.join('\n')}\n'
-            '要求：action 为六种之一、confidence 为 1-5、entity_id 或 '
-            'primary_name 至少一个；字段名用小写蛇形（entity_id/primary_name/attr_key）。'
-            '$clearedNotice',
-      );
-    }
-
-    final buffer = StringBuffer(
-      accepted.isEmpty
-          ? '本次 ${duplicates.length} 条全部为重复暂存，未新增变更：\n'
-          : '已暂存 ${accepted.length} 条变更'
-              '${rejected.isNotEmpty ? '（${rejected.length} 条无效被忽略：${rejected.join('；')}）' : ''}'
-              '${duplicates.isNotEmpty ? '（${duplicates.length} 条重复被跳过）' : ''}：\n',
-    )..writeAll(accepted, '\n');
-    if (duplicates.isNotEmpty) {
-      if (accepted.isNotEmpty) buffer.write('\n');
-      buffer.writeAll(duplicates, '\n');
-    }
-    // 主名转换提示行（与 accepted 行同用 1-based 序号，按「第 N 条」
-    // 对应）；命中即有 accepted 行，前置换行总有效
-    if (importedNameHints.isNotEmpty) {
-      buffer.write('\n${importedNameHints.join('\n')}');
     }
 
     // 相似名核对（包含关系，只提示不自动归并）：把"查询未命中→每轮新建"
     // 造成的近重复实体在提交前暴露给模型。
     var similarHints = 0;
+    final similarHintLines = <String>[];
     if (newCreateNames.isNotEmpty) {
       final candidates = await FactContextBuilder(
         repository: _deps.factualRepository,
       ).findSimilarNameCandidates(_deps.sessionId, newCreateNames);
       if (candidates.isNotEmpty) {
         similarHints = candidates.length;
-        buffer.write('\n\n注意：新建的名字与既有实体名称相近，请核对是否同一对象：');
+        similarHintLines.add('注意：新建的名字与既有实体名称相近，请核对是否同一对象：');
         for (final candidate in candidates) {
-          buffer.write(
-            '\n· 「${candidate.newName}」≈ 既有 '
+          similarHintLines.add(
+            '· 「${candidate.newName}」≈ 既有 '
             '${candidate.displayNames.join('、')}——若为同一对象，请改用 '
             'add_alias（并入既有实体）或 merge_entities，不要重复建档。',
           );
@@ -1167,10 +2391,133 @@ class UpdateFactsTool implements AgentTool {
       }
     }
 
+    // 存在第 II 类可修正失败（无论是否有部分 accepted）→ 返回 isError: true，
+    // 保留已成功暂存的 accepted，指引模型仅修正失败条目重调 update_facts。
+    if (actionableRejected.isNotEmpty) {
+      if (accepted.isNotEmpty ||
+          duplicates.isNotEmpty ||
+          noopSkipped.isNotEmpty) {
+        _recordToolCall(_deps.draft, name, countsForMaintenance: true);
+      }
+      final clearedNotice = (clearPending || replacePending) && removedCount > 0
+          ? '\n注意：本次调用已先清空此前的 $removedCount 条暂存'
+              '${accepted.isEmpty ? '，且新内容全部被拒——当前暂存为空，本轮 finish_round 将不提交任何事实变更。' : '，并重新暂存本次合法条目。'}'
+          : '';
+      if (accepted.isEmpty && duplicates.isEmpty && noopSkipped.isEmpty) {
+        return AgentToolResult.failure(
+          title: '变更全部无效',
+          output: '全部变更被拒绝，逐条原因：\n${actionableRejected.join('\n')}\n'
+              '要求：action 为七种合法动作之一、confidence 为 1-5 整数（含 set_importance 在内的全部动作均必填）、entity_id 或 '
+              'primary_name 至少一个；字段名用小写蛇形（entity_id/primary_name/attr_key）。请修正参数后重新调用 update_facts。'
+              '$clearedNotice',
+          metadata: {
+            'accepted': 0,
+            'rejected': actionableRejected.length,
+            'duplicates': 0,
+            'noopSkipped': 0,
+            'similarHints': 0,
+          },
+        );
+      }
+      final errBuffer = StringBuffer();
+      if (accepted.isNotEmpty) {
+        errBuffer
+          ..writeln('已成功暂存 ${accepted.length} 条（已保留在暂存区，无需重复提交）：')
+          ..writeAll(accepted, '\n');
+        if (importedNameHints.isNotEmpty) {
+          errBuffer.write('\n${importedNameHints.join('\n')}');
+        }
+        if (similarHintLines.isNotEmpty) {
+          errBuffer.write('\n\n${similarHintLines.join('\n')}');
+        }
+      }
+      if (duplicates.isNotEmpty) {
+        if (errBuffer.isNotEmpty) errBuffer.write('\n\n');
+        errBuffer
+          ..writeln('以下 ${duplicates.length} 条为重复暂存（已自动去重跳过）：')
+          ..writeAll(duplicates, '\n');
+      }
+      if (noopSkipped.isNotEmpty) {
+        if (errBuffer.isNotEmpty) errBuffer.write('\n\n');
+        errBuffer
+          ..writeln('以下 ${noopSkipped.length} 条无需重复写入（设定已是最新）：')
+          ..writeAll(noopSkipped, '\n');
+      }
+      if (errBuffer.isNotEmpty) errBuffer.write('\n\n');
+      errBuffer
+        ..writeln(
+          '以下 ${actionableRejected.length} 条失败未写入（请仅针对这些失败条目修正参数后重新调用 update_facts）：',
+        )
+        ..writeAll(actionableRejected, '\n');
+      if (clearedNotice.isNotEmpty) {
+        errBuffer.write(clearedNotice);
+      }
+      if (accepted.isNotEmpty) {
+        errBuffer.write('\n已暂存条目将在 finish_round / finish_maintenance 提交时生效。');
+      }
+      return AgentToolResult(
+        title: accepted.isEmpty
+            ? '变更全部无效'
+            : '${accepted.length} 条已暂存，${actionableRejected.length} 条失败待修正',
+        output: errBuffer.toString(),
+        isError: true,
+        metadata: {
+          'accepted': accepted.length,
+          'rejected': actionableRejected.length,
+          'duplicates': duplicates.length,
+          'noopSkipped': noopSkipped.length,
+          'similarHints': similarHints,
+        },
+      );
+    }
+
+    // 全部为第 I 类无需写入的幂等/状态已满足跳过（无 accepted/duplicates/actionable）
+    if (accepted.isEmpty && duplicates.isEmpty && noopSkipped.isNotEmpty) {
+      _recordToolCall(_deps.draft, name, countsForMaintenance: true);
+      return AgentToolResult.success(
+        title: '设定已是最新，无需重复写入',
+        output: '以下 ${noopSkipped.length} 条变更无需重复写入（目标状态已是最新）：\n'
+            '${noopSkipped.join('\n')}',
+        metadata: {
+          'accepted': 0,
+          'rejected': 0,
+          'duplicates': 0,
+          'noopSkipped': noopSkipped.length,
+          'similarHints': 0,
+        },
+        outputSchema: kOutputSchema,
+      );
+    }
+
+    final buffer = StringBuffer(
+      accepted.isEmpty
+          ? '本次 ${duplicates.length} 条全部为重复暂存，未新增变更：\n'
+          : '已暂存 ${accepted.length} 条变更'
+              '${duplicates.isNotEmpty ? '（${duplicates.length} 条重复被跳过）' : ''}'
+              '${noopSkipped.isNotEmpty ? '（${noopSkipped.length} 条已是最新跳过）' : ''}：\n',
+    )..writeAll(accepted, '\n');
+    if (duplicates.isNotEmpty) {
+      if (accepted.isNotEmpty) buffer.write('\n');
+      buffer.writeAll(duplicates, '\n');
+    }
+    if (noopSkipped.isNotEmpty) {
+      buffer
+        ..write('\n')
+        ..writeAll(noopSkipped, '\n');
+    }
+    // 主名转换提示行（与 accepted 行同用 1-based 序号，按「第 N 条」
+    // 对应）；命中即有 accepted 行，前置换行总有效
+    if (importedNameHints.isNotEmpty) {
+      buffer.write('\n${importedNameHints.join('\n')}');
+    }
+    if (similarHintLines.isNotEmpty) {
+      buffer.write('\n\n${similarHintLines.join('\n')}');
+    }
+
     buffer.write('\n变更将在 finish_round 提交时统一生效。');
 
     // 成功路径登记 calledTools—— 升级闸门据此判「本轮用过记忆工具」
-    _deps.draft.calledTools.add(name);
+    _recordToolCall(_deps.draft, name, countsForMaintenance: true);
     return AgentToolResult.success(
       title: accepted.isEmpty
           ? '${duplicates.length} 条重复暂存'
@@ -1178,8 +2525,9 @@ class UpdateFactsTool implements AgentTool {
       output: buffer.toString(),
       metadata: {
         'accepted': accepted.length,
-        'rejected': rejected.length,
+        'rejected': 0,
         'duplicates': duplicates.length,
+        'noopSkipped': noopSkipped.length,
         'similarHints': similarHints,
       },
       outputSchema: kOutputSchema,
@@ -1247,21 +2595,124 @@ class UpdateFactsTool implements AgentTool {
     }
     return null;
   }
+
+  /// 与 FactApplier / FactsDeltaProjectionEvaluator 同源的暂存期预检。
+  ///
+  /// 返回 `isNoop: true` 表示第 I 类幂等/状态已满足跳过；`isNoop: false` 表示第 II 类可修正错误。
+  Future<({String message, bool isNoop})?> _preflightDelta(
+    FactsDelta delta,
+    int index,
+  ) async {
+    if (delta.action == FactAction.createEntity &&
+        delta.value != null &&
+        delta.value!.length > _deps.factualConfig.maxAttrValueLength) {
+      return (
+        message: '第 $index 条：属性值过长（${delta.value!.length} 字，上限 '
+            '${_deps.factualConfig.maxAttrValueLength} 字）。请精简为当前有效状态，或先创建实体后拆分为多个细分 attr_key。',
+        isNoop: false,
+      );
+    }
+    final verdict = await FactsDeltaProjectionEvaluator.preflightDelta(
+      repository: _deps.factualRepository,
+      sessionId: _deps.sessionId,
+      delta: delta,
+      config: _deps.factualConfig,
+      turnNumber: _deps.draft.turnNumber,
+    );
+    if (verdict.outcome != FactsProjectionOutcome.skipped) return null;
+    final note = verdict.note;
+    if (note == null) return null;
+    switch (note) {
+      case FactsProjectionNote.entityMissing:
+      case FactsProjectionNote.noMutableList:
+      case FactsProjectionNote.valueNotInList:
+        return null;
+      case FactsProjectionNote.valueTooLong:
+      case FactsProjectionNote.aliasTooLong:
+        return (
+          message:
+              '第 $index 条：内容过长（上限 ${_deps.factualConfig.maxAttrValueLength} 字）。请只保留精炼的当前有效状态，或对 character/lore 拆分为细分 attr_key。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.tooFrequent:
+        return (
+          message:
+              '第 $index 条：该实体近 3 轮更新已达上限（${_deps.factualConfig.maxUpdatesPer3Turns} 次）。请合并精简后再更新，或留待周期维护阶段统一校准。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.confidenceGate:
+        return (
+          message:
+              '第 $index 条：关键属性变更要求 confidence ≥ ${_deps.factualConfig.modifyConfidenceThreshold}（当前 ${delta.confidence}）。请核对证据后提高 confidence 再提交。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.valueUnchanged:
+      case FactsProjectionNote.valueUnchangedBaseline:
+        return (
+          message: '第 $index 条：目标值与当前已有设定或重要度完全相同，无需重复写入。',
+          isNoop: true,
+        );
+      case FactsProjectionNote.attrKeyNotWhitelisted:
+        return (
+          message:
+              '第 $index 条：属性键「${delta.attrKey}」不在该实体类型的允许字段内；请改用预定义键（character 与 lore 支持自定义细分键）。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.importanceOutOfRange:
+        return (
+          message: '第 $index 条：set_importance 的 importance 必须为 1-5 的整数。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.missingFields:
+        return (
+          message:
+              '第 $index 条：缺少必填字段（update_attr/append_list/remove_from_list 需 attr_key+value，create_entity 需 entity_type+primary_name，set_importance 需 importance 1-5，add_alias 需 value）。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.unknownEntityType:
+        return (
+          message: '第 $index 条：entity_type「${delta.entityType}」非法。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.listRejectsUpdate:
+        return (
+          message:
+              '第 $index 条：「${delta.attrKey}」为列表属性，请改用 append_list 或 remove_from_list。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.dictRejectsAppend:
+      case FactsProjectionNote.dictKeyCreatesList:
+        return (
+          message:
+              '第 $index 条：「${delta.attrKey}」为字典属性，不能用 append_list；请用 update_attr 整体更新，或对具体对象使用 relationship:对方名。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.aliasEmpty:
+        return (message: '第 $index 条：别名不能为空。', isNoop: false);
+      case FactsProjectionNote.aliasSameAsPrimary:
+        return (message: '第 $index 条：别名与实体主名相同，无需添加。', isNoop: true);
+      case FactsProjectionNote.aliasExists:
+        return (message: '第 $index 条：该别名已存在，无需重复添加。', isNoop: true);
+      case FactsProjectionNote.aliasLimit:
+        return (
+          message: '第 $index 条：该实体别名数量已达上限（$kFactsMaxAliasesPerEntity 条）。',
+          isNoop: false,
+        );
+      case FactsProjectionNote.alreadyArchived:
+        return (message: '第 $index 条：实体已归档，无需重复归档。', isNoop: true);
+      case FactsProjectionNote.nameIsIdentity:
+      case FactsProjectionNote.baselineSingleRedirect:
+      case FactsProjectionNote.appendOnSingleConvertsUpdate:
+      case FactsProjectionNote.duplicateExact:
+      case FactsProjectionNote.sameNameConvertsUpdate:
+      case FactsProjectionNote.sameNameConvertsAlias:
+      case FactsProjectionNote.createsAttrRow:
+        return null;
+    }
+  }
 }
 
 /// deltas 容错解码：部分弱模型会把整个数组序列化成 JSON 字符串
-List<dynamic>? _decodeDeltas(Object? raw) {
-  if (raw is List) return raw;
-  if (raw is String && raw.trim().isNotEmpty) {
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is List) return decoded;
-    } on FormatException {
-      // 落到 null：走「缺少变更」信封
-    }
-  }
-  return null;
-}
 
 // ==================== 写入：merge_entities ====================
 
@@ -1424,7 +2875,7 @@ class MergeEntitiesTool implements AgentTool {
     final seenRequests = _mergeRequests[source.entityId] ?? priorMerges;
     if (seenRequests > 0) {
       _mergeRequests[source.entityId] = seenRequests + 1;
-      _deps.draft.calledTools.add(name);
+      _recordToolCall(_deps.draft, name, countsForMaintenance: true);
       return AgentToolResult.success(
         title: '归并已暂存过',
         // 单条字面量：中文文案在拼接点无空格会触发 lint
@@ -1591,7 +3042,7 @@ class MergeEntitiesTool implements AgentTool {
     }
 
     _deps.draft.factsDeltas.addAll(deltas);
-    _deps.draft.calledTools.add(name);
+    _recordToolCall(_deps.draft, name, countsForMaintenance: true);
     // 审查收官 ：请求计数在暂存成功后才写入——此前放在守卫后、
     // _maxStagedDeltas 检查前，超限失败/属性查询异常路径会污染计数，
     // 模型按失败信封指引补完作业后的合法归并被误报「已暂存过」，
@@ -1770,7 +3221,7 @@ class RecordEventMemoryTool implements AgentTool {
     );
 
     // 成功路径登记 calledTools（升级闸门判据）
-    _deps.draft.calledTools.add(name);
+    _recordToolCall(_deps.draft, name, countsForMaintenance: true);
     return AgentToolResult.success(
       title: '已记 1 件事',
       output:
@@ -1896,7 +3347,7 @@ class UpdateStoryAnchorTool implements AgentTool {
 
     final openCount = updated.openForeshadows.length;
     // 成功路径登记 calledTools（升级闸门判据）
-    _deps.draft.calledTools.add(name);
+    _recordToolCall(_deps.draft, name, countsForMaintenance: true);
     return AgentToolResult.success(
       title: '场记已更新 · $openCount 笔伏笔待兑现',
       output:
@@ -2019,7 +3470,7 @@ class FinishRoundTool implements AgentTool {
 
   @override
   String get description =>
-      '提交本轮：正文经 prose 参数交付——完整正文原文直接写入该参数，读者在正文卡阅读它。通过终审检查（事实出处、文风）后统一提交暂存变更并结束。回复文本另有职责：只写一两句过场播报，正文的唯一载体是 prose 参数。';
+      '提交本轮：正文经 prose 参数交付——完整正文原文直接写入该参数，读者在正文卡阅读它。通过终审检查（事实出处、文风）后统一提交暂存变更并结束（大周期轮交付正文后将进入维护阶段，完成后由 finish_maintenance 收尾）。回复文本另有职责：只写一两句过场播报，正文的唯一载体是 prose 参数。';
 
   @override
   AgentToolPermission get permission => AgentToolPermission.control;
@@ -2034,10 +3485,6 @@ class FinishRoundTool implements AgentTool {
           'description':
               '本轮完整正文原文。读者只阅读这里的文字：直接写入正文本身，保留原始换行与标点；代码围栏、摘要转述都会破坏阅读。',
         },
-        'noEventReason': {
-          'type': 'string',
-          'description': '仅当终审提醒要求说明时填写：一句话说明本轮为何不记事件记忆。平时省略。',
-        },
       },
       'required': ['prose'],
     };
@@ -2048,6 +3495,15 @@ class FinishRoundTool implements AgentTool {
     AgentToolInvocation invocation,
     Map<String, dynamic> arguments,
   ) async {
+    if (_deps.draft.phase == AgentRoundPhase.maintenance) {
+      return AgentToolResult.failure(
+        title: '正文已锁定',
+        output: '第 ${_deps.draft.turnNumber} 轮正文已在任务一交付并锁定，无需再次调用 '
+            'finish_round 或重写正文。请使用 list_facts / query_facts / '
+            'update_facts 等工具完成记忆审查与同步后，调用 finish_maintenance 结束本轮。',
+      );
+    }
+
     // ── 工具体守卫（契约 §2.4，先于闸门）：空正文结构性不可能提交 ──
     // 畸形 JSON 由 ToolCall.fromRawArgs 静默降级为空 Map，同样落进这里。
     final prose = stripCodeFences(arguments['prose']?.toString() ?? '');
@@ -2074,7 +3530,45 @@ class FinishRoundTool implements AgentTool {
     // 进度事件，供 L2 审计）。执行顺序：A 检索覆盖 → B 事件记忆 → 文风 lint。
     // 文风拒后的「定向重写一次」= 带修订再次调用本工具，参数变化天然不触发
     // doom-loop 连击。
-    final retrievalHitNames = await _checkRetrievalCoverage(prose);
+    // 工程上下文模式（开启态）：证据闸门（status 真实、无 calledTools
+    // 旁路、四类资格+修订未变；关闭态 gate 为 null 走下方旧分支）
+    final evidenceGate = _deps.retrievalEvidenceGate;
+    if (evidenceGate != null) {
+      EntityCoverageCheck? coverage;
+      try {
+        coverage = await evidenceGate(prose);
+      } catch (_) {
+        coverage = null; // 闸门数据面异常不阻断提交（fail-open；留痕由接线方）
+      }
+      if (coverage != null) {
+        final missing = [
+          ...coverage.missingEntities,
+          ...coverage.missingDueToRevision,
+        ];
+        if (missing.isNotEmpty) {
+          if (!_deps.draft.retrievalGateUsed) {
+            _deps.draft.retrievalGateUsed = true;
+            final staleNote = coverage.missingDueToRevision.isNotEmpty
+                ? '（其中 ${coverage.missingDueToRevision.join('、')} 的事实最近核对后有修订，需按新值重新核对）'
+                : '';
+            return AgentToolResult.failure(
+              title: '终审未过：实体缺少当前有效核对证据',
+              output: '终审未过：以下实体缺少当前有效核对证据（未检索或设定有新变更）：'
+                  '「${missing.join('、')}」$staleNote。\n'
+                  '已具备有效证据的实体无需重复查询。请针对缺少证据的实体调用 query_facts 核对后再提交。',
+            );
+          }
+          invocation.onProgress?.call(
+            '证据闸门豁免放行：「${missing.take(3).join('、')}」缺少有效证据…',
+          );
+        }
+      }
+    }
+
+    // 开启态只能选新资格策略——旧本轮 calledTools 闸门仅关闭态
+    //（gate null）执行；新 gate 通过后不再被「全程未检索核对」首拒。
+    final retrievalHitNames =
+        evidenceGate == null ? await _checkRetrievalCoverage(prose) : null;
     if (retrievalHitNames != null) {
       if (!_deps.draft.retrievalGateUsed) {
         _deps.draft.retrievalGateUsed = true;
@@ -2089,24 +3583,29 @@ class FinishRoundTool implements AgentTool {
     }
 
     if (_deps.draft.eventSummary == null) {
-      //  零工具轮升级闸门：连续 kZeroToolEscalateAfter 轮未用记忆类
-      // 工具且本轮也没用时，免费豁免升级为"说明原因（noEventReason）才能
-      // 豁免"——否则忽略工具的代价≈0（R5）。本轮用过记忆工具则按非升级态
-      //（现状：一次豁免放行），行为不回退。
-      final escalated = _deps.zeroMemoryRoundStreak >= kZeroToolEscalateAfter &&
-          !_deps.draft.calledTools.contains('update_facts') &&
-          !_deps.draft.calledTools.contains('record_event_memory');
-      final reason = arguments['noEventReason']?.toString().trim() ?? '';
-      if (escalated) {
-        if (reason.isEmpty) {
-          return AgentToolResult.failure(
-            title: '终审提醒：尚无事件记忆',
-            output:
-                '终审提醒：本轮尚无事件记忆，且近几轮也未曾记录。请用 record_event_memory 记一件最重要的事再提交；若本轮确无值得记录的事件，请在 finish_round 的 noEventReason 参数中用一句话说明原因后再次提交。',
-          );
+      // 工程上下文模式（开启态）：事件暴露量闸门（表面超比 ∧
+      // exposure≥3 ∧ 未记录三条件同时；过渡轮直接放行）取代旧首次拦截；
+      // 关闭态（gate null）旧闸门分支完整保留。
+      final exposureGate = _deps.eventExposureGate;
+      if (exposureGate != null) {
+        EventExposureCheck? exposure;
+        try {
+          exposure = await exposureGate(prose);
+        } catch (_) {
+          exposure = null;
         }
-        // reason 仅入 L2 审计（进度事件），不参与后续判定
-        invocation.onProgress?.call('事件记忆豁免（原因：$reason）…');
+        if (exposure != null && exposure.shouldGate) {
+          if (!_deps.draft.eventMemoryGateUsed) {
+            _deps.draft.eventMemoryGateUsed = true;
+            return AgentToolResult.failure(
+              title: '终审提醒：新实体未被记录',
+              output: exposure.newEntities.isEmpty
+                  ? '终审提醒：本轮多次修改设定且尚未记录事件。请用 record_event_memory 记一件最重要的事再提交；确无值得记录的事件，直接再次 finish_round 放行。'
+                  : '终审提醒：本轮引入了新的关键实体（${exposure.newEntities.join('、')}）且上下文已较长，尚未记录事件。请用 record_event_memory 记一件最重要的事再提交；确无值得记录的事件，直接再次 finish_round 放行。',
+            );
+          }
+          invocation.onProgress?.call('事件记忆豁免放行（暴露量闸门）…');
+        }
       } else {
         if (!_deps.draft.eventMemoryGateUsed) {
           _deps.draft.eventMemoryGateUsed = true;
@@ -2117,36 +3616,6 @@ class FinishRoundTool implements AgentTool {
           );
         }
         invocation.onProgress?.call('事件记忆豁免放行（本轮未记录事件）…');
-      }
-    }
-
-    // ── 伏笔对账闸门（体验重构卡片 C 维护性补强）：清点轮且存在未兑现
-    // 伏笔、本轮未动过锚时首次拦截，要求对账或确认——已兑现的划去
-    //（update_story_anchor 置 resolved=true），均未兑现再次提交放行。
-    // 与事件记忆闸门同构：一次性豁免防死循环；豁免进进度事件（L2 审计）。
-    if (isForeshadowSweepRound(
-      _deps.draft.turnNumber,
-      _deps.foreshadowCheckInterval,
-    )) {
-      final anchor = _deps.draft.storyAnchor ?? _deps.currentAnchor?.call();
-      final open = anchor?.openForeshadows ?? const [];
-      if (open.isNotEmpty &&
-          !_deps.draft.calledTools.contains('update_story_anchor')) {
-        if (!_deps.draft.foreshadowGateUsed) {
-          _deps.draft.foreshadowGateUsed = true;
-          final listing = [
-            for (final f in open.take(6)) '· ${sanitizeUntrusted(f.text)}',
-          ].join('\n');
-          return AgentToolResult.failure(
-            title: '终审提醒：伏笔待清点',
-            output: '终审提醒：剧情锚尚有 ${open.length} 笔未兑现伏笔，本轮未做对账：\n'
-                '$listing\n'
-                '若本轮正文已兑现其中之一（或发现某条早已兑现、已过时），请用 '
-                'update_story_anchor 传全量清单并把已兑现条目置 resolved=true '
-                '后再提交；若均未兑现，直接再次 finish_round 放行。',
-          );
-        }
-        invocation.onProgress?.call('伏笔对账豁免放行（本轮未更新剧情锚）…');
       }
     }
 
@@ -2172,6 +3641,28 @@ class FinishRoundTool implements AgentTool {
           '文风 ${report.violations.length} 处标记（放行）…',
         );
       }
+    }
+
+    if (_deps.draft.isMajorReviewRound &&
+        _deps.draft.phase == AgentRoundPhase.writing) {
+      _deps.draft.phase = AgentRoundPhase.maintenance;
+      final extraSteps = _deps.maintenanceExtraSteps;
+      const maintenanceNotice = '$kPriorityObedienceClause维护步数预算已达上限，所有工具已停用。'
+          '本轮正文已在任务一提前锁定，请勿再输出或重写正文；'
+          '请调用 finish_maintenance 或用一句话简短确认维护收尾并结束本轮。';
+      return AgentToolResult.success(
+        title: '任务一完成 · 进入周期审查',
+        output: '【任务一已完成】第 ${_deps.draft.turnNumber} 轮正文已交付并锁定，后续无需再修改正文。\n'
+            '现在切换至【任务二：周期审查与维护】：请脱离写作视角，结合已锁定的本轮正文与近数十轮剧情变化，使用 list_facts / query_facts / read_compact_summary 等工具全盘核对事实库（含实体重要度与归档）、事件记忆及剧情锚；确认同步完毕后调用 finish_maintenance 结束本轮。',
+        metadata: {
+          'committed': false,
+          'phase': 'maintenance',
+          'extraMaxStepsDelta': extraSteps,
+        },
+        outputSchema: kOutputSchema,
+        extraMaxStepsDelta: extraSteps,
+        phaseSoftLandingNotice: maintenanceNotice,
+      );
     }
 
     invocation.onProgress?.call('提交本轮变更…');
@@ -2255,6 +3746,76 @@ class FinishRoundTool implements AgentTool {
     if (hits.isEmpty) return null;
     final shown = hits.take(3).join('、');
     return hits.length > 3 ? '$shown 等' : shown;
+  }
+}
+
+// ==================== 控制：finish_maintenance ====================
+
+/// 结束大周期审查与维护阶段（任务二）并统一提交本轮正文与全部记忆变更。
+class FinishMaintenanceTool implements AgentTool {
+  FinishMaintenanceTool(this._deps);
+
+  /// 终局回执的输出结构声明
+  static const Map<String, String> kOutputSchema = {'committed': 'boolean'};
+
+  final AgentToolDeps _deps;
+
+  @override
+  String get name => 'finish_maintenance';
+
+  @override
+  String get description =>
+      '结束周期审查与维护阶段并统一提交本轮。仅在大周期轮完成任务一 finish_round 锁定正文、并使用 list_facts / query_facts / read_compact_summary / update_facts 等完成核对与同步后调用。';
+
+  @override
+  AgentToolPermission get permission => AgentToolPermission.control;
+
+  @override
+  Map<String, dynamic> buildParametersSchema() => const {
+        'type': 'object',
+        'properties': <String, dynamic>{},
+      };
+
+  @override
+  Future<AgentToolResult> invoke(
+    AgentToolInvocation invocation,
+    Map<String, dynamic> arguments,
+  ) async {
+    if (_deps.draft.phase != AgentRoundPhase.maintenance) {
+      return AgentToolResult.failure(
+        title: '尚未进入维护阶段',
+        output:
+            '当前仍处于正文写作阶段（任务一），尚未调用 finish_round 交付正文。请先完成写作并调用 finish_round；常规轮次无需调用 finish_maintenance。',
+      );
+    }
+
+    if (!_deps.draft.maintenanceCheckedOrUpdated &&
+        !_deps.draft.maintenanceGateUsed) {
+      _deps.draft.maintenanceGateUsed = true;
+      return AgentToolResult.failure(
+        title: '尚未巡检记忆状态',
+        output:
+            '尚未进行工具巡检，请先用 list_facts、query_facts、read_compact_summary 或 update_facts / update_story_anchor / record_event_memory 核对与同步后再确认收尾；如确认无需核对或修改，请再次调用 finish_maintenance。',
+      );
+    }
+
+    invocation.onProgress?.call('提交本轮正文与维护变更…');
+    try {
+      final persistedReply = await _deps.commitRound(_deps.draft);
+      _deps.draft.maintenanceCompleted = true;
+      return AgentToolResult.terminal(
+        title: '周期维护完成',
+        output:
+            '周期审查与维护已完成，本轮正文与全部变更已统一提交。回复正文：${persistedReply.length > 60 ? '${persistedReply.substring(0, 60)}…' : persistedReply}',
+        metadata: {'committed': true},
+        outputSchema: kOutputSchema,
+      );
+    } catch (e) {
+      return AgentToolResult.failure(
+        title: '提交失败',
+        output: '本轮提交失败：$e。数据已回滚，请重试 finish_maintenance。',
+      );
+    }
   }
 }
 

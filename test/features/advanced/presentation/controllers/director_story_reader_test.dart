@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/features/advanced/data/engineering_compaction_service.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/director_host.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/director_story_reader.dart';
@@ -40,6 +41,9 @@ class _Host implements DirectorHost {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  EngineeringCompactionService? get engineeringCompactionService => null;
 }
 
 void main() {

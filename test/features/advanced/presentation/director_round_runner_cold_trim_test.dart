@@ -4,6 +4,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/features/advanced/data/engineering_compaction_service.dart';
 import 'package:lmstory/features/advanced/data/repositories/agent_event_log_repository.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
@@ -145,6 +146,10 @@ class _FakeHost implements DirectorHost {
   bool get isStreamCancelled => false;
   @override
   Logger get logger => const Logger('test');
+  @override
+  @override
+  EngineeringCompactionService? get engineeringCompactionService => null;
+
   @override
   AgentEventLogRepository? get agentEventLogRepository => eventLog;
   @override

@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io' show File, Platform;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
@@ -28,9 +27,12 @@ import 'package:lmstory/core/utils/file_share.dart'
 import 'package:lmstory/core/utils/json_depth_guard.dart';
 import 'package:lmstory/core/widgets/file_saved_dialog.dart';
 import 'package:lmstory/features/settings/data/auto_backup_manager.dart';
+import 'package:lmstory/features/settings/data/browser_backup_snapshots.dart';
+import 'package:lmstory/features/settings/data/database_startup_recovery.dart';
 import 'package:lmstory/features/settings/domain/entities/data_management_models.dart';
 import 'package:lmstory/features/settings/domain/services/data_management_service.dart';
 import 'package:lmstory/features/settings/presentation/pages/provider_list_page.dart';
+import 'package:lmstory/features/settings/presentation/widgets/backup_file_picker.dart';
 import 'package:lmstory/features/settings/presentation/widgets/data_management_sheets.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -160,6 +162,13 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
               _AutoBackupSection(
                 onRestore: (content) => _importContent(context, content),
               ),
+            if (kIsWeb)
+              _DataCard(
+                icon: Icons.restore_outlined,
+                title: t.settings.data.autoBackup.restoreFromBackup,
+                subtitle: t.settings.data.importMode.browserSnapshotHint,
+                onTap: () => _restoreBrowserSnapshot(context),
+              ),
             const SizedBox(height: SimpleSpacing.sMd),
             _DataCard(
               icon: Icons.restore_outlined,
@@ -231,40 +240,47 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
 
   Future<void> _importData(BuildContext context) async {
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-      );
-      if (result == null || result.files.isEmpty) return;
-
-      final picked = result.files.single;
-      // Web 平台 picked.path 为 null，使用 bytes 读取；
-      // 原生平台优先使用 path 读取文件。
-      String content;
-      if (kIsWeb) {
-        final bytes = picked.bytes;
-        if (bytes == null) return;
-        //  修复：必须按 UTF-8 解码。此前
-        // String.fromCharCodes 把 UTF-8 字节当码点，中文内容在 Web 端
-        // 导入必然乱码（同库 log_tail_reader 已修过同类 bug）。
-        content = utf8.decode(bytes, allowMalformed: true);
-      } else {
-        final filePath = picked.path;
-        if (filePath == null) return;
-        content = await _readFileContent(filePath);
-      }
-
-      if (!context.mounted) return;
-      await _importContent(context, content);
-    } catch (e) {
+      final picked = await pickBackupFile();
+      if (picked == null || !context.mounted) return;
+      await _importContent(context, picked.content);
+    } on Object {
       if (context.mounted) {
         _showError(
           context,
-          Translations.of(context).settings.data.importFailed(
-                error: e.toString(),
-              ),
+          Translations.of(context).settings.data.autoBackup.restoreReadFailed,
         );
       }
+    }
+  }
+
+  Future<void> _restoreBrowserSnapshot(BuildContext context) async {
+    final strings = Translations.of(context).settings.data.autoBackup;
+    try {
+      final snapshots =
+          await BrowserBackupSnapshots(ref.read(preferencesProvider)).list();
+      if (!context.mounted) return;
+      if (snapshots.isEmpty) {
+        _showError(context, strings.nothingToRestore);
+        return;
+      }
+      final selected = await showLmDialog<RecoveryBackup>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: Text(strings.restoreSheetTitle),
+          children: [
+            for (final snapshot in snapshots)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(dialogContext, snapshot),
+                child: Text(snapshot.name),
+              ),
+          ],
+        ),
+      );
+      if (selected == null || !context.mounted) return;
+      final content = await selected.read();
+      if (context.mounted) await _importContent(context, content);
+    } on Object {
+      if (context.mounted) _showError(context, strings.restoreReadFailed);
     }
   }
 
@@ -274,8 +290,6 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
   Future<void> _importContent(BuildContext context, String content) async {
     final t = Translations.of(context);
 
-    // 快照失败标志提到 try 外（catch 分支需要区分失败原因）
-    var snapshotFailed = false;
     try {
       // 深度粗检先于预检 jsonDecode（与导入主链同口径）：极深内容若先走
       // 预检解码会栈溢出成晦涩的 Stack Overflow 文案，提前以主链同句拒绝。
@@ -349,9 +363,7 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
       }
 
       final service = ref.read(dataManagementServiceProvider);
-      // 覆盖导入前置自动快照——服务层保证快照先于
-      // 任何删除、失败即中止（fail-closed）；空库返回 null（无物可保护）。
-      // web 无本地备份目录（与自动备份区段隐藏一致），跳过快照。
+      // The service calls this only when the overwrite can replace old data.
       String? preImportSnapshotName;
       // 导入进度反馈：大备份/慢存储时导入耗时可观，无反馈会让用户
       // 以为无状态导入而离开页面（用户实测反馈）。弹层不可关闭，
@@ -363,16 +375,17 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
           content,
           mode,
           importApiKeys: sheetResult.importApiKeys,
-          preImportSnapshot: mode == ImportMode.overwrite && !kIsWeb
+          preImportSnapshot: mode == ImportMode.overwrite
               ? () async {
-                  try {
+                  if (kIsWeb) {
+                    preImportSnapshotName = await BrowserBackupSnapshots(
+                      ref.read(preferencesProvider),
+                    ).create(service);
+                  } else {
                     final snapshot = await ref
                         .read(autoBackupManagerProvider)
                         .createPreImportSnapshot();
-                    preImportSnapshotName = snapshot?.uri.pathSegments.last;
-                  } catch (e) {
-                    snapshotFailed = true;
-                    rethrow;
+                    preImportSnapshotName = snapshot.uri.pathSegments.last;
                   }
                 }
               : null,
@@ -388,14 +401,39 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
       );
 
       setState(_reloadStats);
-    } catch (e) {
+    } on BackupDraftIndexConflictException {
+      if (context.mounted) {
+        _showError(context, t.settings.data.draftIndexConflict);
+      }
+    } on BackupExperienceIdConflictException {
+      if (context.mounted) {
+        _showError(context, t.settings.data.overwriteExperienceConflict);
+      }
+    } on BackupOverwriteBusyException {
+      if (context.mounted) _showError(context, t.settings.data.overwriteBusy);
+    } on BackupSnapshotException {
       if (context.mounted) {
         _showError(
           context,
-          snapshotFailed
-              ? t.settings.data.importMode.snapshotFailed(error: e.toString())
-              : t.settings.data.importFailed(error: e.toString()),
+          kIsWeb
+              ? t.settings.data.importMode.browserSnapshotFailed
+              : t.settings.data.importMode.snapshotRequired,
         );
+      }
+    } on BackupRollbackException {
+      if (context.mounted) {
+        _showError(
+          context,
+          t.settings.data.importMode.restoreSnapshotAfterFailure,
+        );
+      }
+    } on FormatException {
+      if (context.mounted) {
+        _showError(context, t.settings.data.startupRecovery.invalidBackup);
+      }
+    } on Object {
+      if (context.mounted) {
+        _showError(context, t.settings.data.importStorageFailed);
       }
     }
   }
@@ -453,13 +491,6 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
     _dismissImportProgress = null;
   }
 
-  /// 读取文件内容（原生平台）
-  ///
-  /// 使用条件导入避免 web 平台引入 dart:io。
-  Future<String> _readFileContent(String path) {
-    return readFileContentNative(path);
-  }
-
   ///  修复：单会话备份 + 覆盖模式的二次确认
   Future<bool> _confirmOverwriteSingleBackup(
     BuildContext context,
@@ -512,6 +543,9 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
     // 实际写入为准（追加模式下供应商全部已存在被跳过时不写 Key，
     // 此前按勾选宣称「已导入并覆盖」误导排查）
     final keysImported = result.importedApiKeys > 0;
+    final skippedRows = result.skippedMessages +
+        result.skippedSessionRows +
+        result.skippedAssets;
 
     showLmDialog<void>(
       context: context,
@@ -572,6 +606,13 @@ class _DataManagementPageState extends ConsumerState<DataManagementPage> {
                   t.settings.data.importSummary.assets(
                     imported: result.importedAssets,
                   ),
+                  style: SimpleTextStyles.bodySm,
+                ),
+              ],
+              if (skippedRows > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  t.settings.data.importSummary.skippedRows(count: skippedRows),
                   style: SimpleTextStyles.bodySm,
                 ),
               ],

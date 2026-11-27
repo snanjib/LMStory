@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -24,6 +25,7 @@ class CommitSlider extends StatefulWidget {
     this.activeColor,
     this.inactiveColor,
     this.labelBuilder,
+    this.onPreviewChanged,
     super.key,
   });
 
@@ -36,6 +38,9 @@ class CommitSlider extends StatefulWidget {
   final Color? inactiveColor;
   final String Function(double value)? labelBuilder;
   final ValueChanged<double> onCommit;
+
+  /// Receives the in-progress value, then null when the gesture ends.
+  final ValueChanged<double?>? onPreviewChanged;
 
   @override
   State<CommitSlider> createState() => _CommitSliderState();
@@ -85,7 +90,17 @@ class _CommitSliderState extends State<CommitSlider> {
       onChangeStart: widget.enabled ? (_) => _dragging = true : null,
       // onChanged 始终传入：_ThumbOnlySlider 在 !enabled 时不触发手势回调，
       // 因此禁用态下此处不会被调用。
-      onChanged: (value) => setState(() => _draftValue = value),
+      onChanged: (value) {
+        setState(() => _draftValue = value);
+        widget.onPreviewChanged?.call(value);
+      },
+      onChangeCancel: () {
+        setState(() {
+          _dragging = false;
+          _draftValue = _lastCommitted;
+        });
+        widget.onPreviewChanged?.call(null);
+      },
       onChangeEnd: widget.enabled
           ? (value) {
               _dragging = false;
@@ -93,6 +108,7 @@ class _CommitSliderState extends State<CommitSlider> {
                 _lastCommitted = value;
                 widget.onCommit(value);
               }
+              widget.onPreviewChanged?.call(null);
             }
           : null,
     );
@@ -123,6 +139,7 @@ class _ThumbOnlySlider extends StatefulWidget {
     this.labelBuilder,
     this.onChangeStart,
     this.onChangeEnd,
+    this.onChangeCancel,
   });
 
   final double value;
@@ -136,6 +153,7 @@ class _ThumbOnlySlider extends StatefulWidget {
   final String Function(double value)? labelBuilder;
   final ValueChanged<double>? onChangeStart;
   final ValueChanged<double>? onChangeEnd;
+  final VoidCallback? onChangeCancel;
 
   @override
   State<_ThumbOnlySlider> createState() => _ThumbOnlySliderState();
@@ -145,6 +163,7 @@ class _ThumbOnlySliderState extends State<_ThumbOnlySlider> {
   bool _armed = false;
   bool _dragging = false;
   double _dragValue = 0;
+  int? _activePointer;
 
   late final FocusNode _focusNode = FocusNode()
     ..addListener(_handleFocusChanged);
@@ -155,6 +174,15 @@ class _ThumbOnlySliderState extends State<_ThumbOnlySlider> {
     if (hasFocus != _hasFocus) {
       setState(() => _hasFocus = hasFocus);
     }
+  }
+
+  void _cancelDrag() {
+    if (!_armed) return;
+    setState(() {
+      _armed = false;
+      _dragging = false;
+    });
+    widget.onChangeCancel?.call();
   }
 
   @override
@@ -277,10 +305,26 @@ class _ThumbOnlySliderState extends State<_ThumbOnlySlider> {
             // 识别，见  测试二分）：仅借原始指针按下事件
             // 给滑块获焦
             return Listener(
-              onPointerDown:
-                  widget.enabled ? (_) => _focusNode.requestFocus() : null,
+              onPointerDown: widget.enabled
+                  ? (event) {
+                      _activePointer ??= event.pointer;
+                      _focusNode.requestFocus();
+                    }
+                  : null,
+              onPointerUp: (event) {
+                if (_activePointer == event.pointer) _activePointer = null;
+              },
+              onPointerCancel: (event) {
+                if (_activePointer != event.pointer) return;
+                _activePointer = null;
+                // An accepted Flutter drag can report pointer cancellation as
+                // an end event. Clear it before that event can commit.
+                _cancelDrag();
+              },
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
+                // 滚动容器可能等手指移出圆点才识别横拖，命中判定取按下位置。
+                dragStartBehavior: DragStartBehavior.down,
                 // 纯点击轨道只获焦不跳值（DOC-14 §3.1 设计保留）
                 onHorizontalDragStart: widget.enabled
                     ? (details) {
@@ -319,6 +363,7 @@ class _ThumbOnlySliderState extends State<_ThumbOnlySlider> {
                         widget.onChangeEnd?.call(v);
                       }
                     : null,
+                onHorizontalDragCancel: widget.enabled ? _cancelDrag : null,
                 child: SizedBox(
                   height: _kTouchHeight,
                   child: Stack(

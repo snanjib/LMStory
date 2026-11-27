@@ -1,3 +1,4 @@
+import 'package:lmstory/core/llm/llm_usage.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
@@ -5,6 +6,7 @@ import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart
 import 'package:lmstory/features/memory/domain/entities/facts_change_record.dart';
 import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/classified_keywords.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/context_usage_estimate.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/message_variant_record.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/story_phase_models.dart';
@@ -106,14 +108,20 @@ class IntermediateChatState {
     // usage。故事模式不持久化 usage（导演存 artifacts.agentWorkSummary）——
     // 仅内存维护，重进会话后至下一轮生成前为 null（空环）。
     this.lastPromptTokens,
+    this.lastInputTokens,
     this.lastCompletionTokens,
     this.lastCacheReadTokens,
+    this.lastUsageWarnings = const [],
     // 上方 last* 分项是否为本地估算兜底（端点未回 usage 时控制器以
     // tiktoken 估算写入）。仅影响面板「≈」标注，不参与命中率累计。
     this.lastUsageIsEstimated = false,
     // 会话累计 prompt/缓存读 token（averageCacheHit 的分子分母；同不持久化）
     this.contextPromptTokensTotal = 0,
     this.contextCacheReadTokensTotal = 0,
+    // 会话累计完整输入 token（命中率分母；Anthropic/OpenAI 同口径）
+    this.contextInputTokensTotal = 0,
+    // 当前预计上下文（主数字；压缩后即时调整，null = 尚未有估算）
+    this.contextEstimate,
     // ── 手动压缩（上下文用量指示 §4.3，自导演移植）──────────────────
     this.isManualCompacting = false,
     this.manualCompactionDelta = '',
@@ -128,6 +136,11 @@ class IntermediateChatState {
     // 收稿时刻（epoch ms， 口径）：高亮剩余时长从收稿起算，
     // 行延迟物化时只闪剩余窗口
     this.variantFlashStartedAtMs,
+    // 变体切换被拒提示计数与原因（存在后续轮/已压缩区域无法安全交换
+    // 记忆层，页面 ref.listen 消费弹 toast）
+    this.variantSwitchBlockedTick = 0,
+    this.variantSwitchBlockedReason,
+    this.factWriteWarning,
     // ── 中断正文保留─────────────────────────────
     //
     // 失败/中断时把流式缓冲（streamingReply ?? streamingGenerated）的非空
@@ -357,26 +370,55 @@ class IntermediateChatState {
   /// reviewing 启用时取 reviewing 结果（上下文最全的请求），否则取
   /// generating。null = 本会话尚未生成过（或端点未回 usage）。
   final int? lastPromptTokens;
+
+  /// 最近一轮主请求的完整输入（Anthropic 含 cache read/creation）
+  final int? lastInputTokens;
   final int? lastCompletionTokens;
   final int? lastCacheReadTokens;
+
+  /// 最近一轮请求的计量异常说明（字段冲突/非法样本等）。
+  ///
+  /// 原值仍保留在 [lastCacheReadTokens] 供诊断，但该样本不进入命中率
+  /// 展示与累计。
+  final List<String> lastUsageWarnings;
+
+  /// 最近一轮缓存命中率（缺输入面/缓存分项或存在计量异常 → null）
+  double? get lastCacheHitRatio => lastUsageWarnings.isNotEmpty
+      ? null
+      : LlmUsage.hitRateOf(
+          cacheReadTokens: lastCacheReadTokens,
+          inputTokens: lastInputTokens,
+        );
+
+  /// 最近一轮分项是否因冲突/越界等异常不可比较
+  bool get lastCacheSampleInvalid =>
+      lastUsageWarnings.isNotEmpty ||
+      (lastCacheReadTokens != null &&
+          lastInputTokens != null &&
+          lastCacheHitRatio == null);
 
   /// 最近一轮分项是否为本地估算值（见构造器注释；随 last* 同生命周期，
   /// 不持久化）
   final bool lastUsageIsEstimated;
 
-  /// 会话累计 prompt token（缓存命中率分母；，不持久化）
+  /// 会话累计协议原生 prompt token（仅诊断展示；不可做命中率分母）
   final int contextPromptTokensTotal;
 
   /// 会话累计缓存读 token（缓存命中率分子；，不持久化）
   final int contextCacheReadTokensTotal;
 
-  /// 会话加权平均缓存命中率（§3.3：仅统计有 promptTokens 的请求）。
+  /// 会话累计完整输入 token（缓存命中率分母；与导演模式同口径）
+  final int contextInputTokensTotal;
+
+  /// 当前预计上下文（主数字；压缩等本地材料变更后即时调整）
+  final ContextUsageEstimate? contextEstimate;
+
+  /// 会话加权平均缓存命中率 = ΣcacheRead / Σ完整输入。
   ///
-  /// Anthropic 的 promptTokens 不含 cache-read tokens；与导演模式保持同一
-  /// 跨协议近似口径，分母使用 uncached + cached 输入 token。
-  double? get averageCacheHit => contextPromptTokensTotal > 0
-      ? contextCacheReadTokensTotal /
-          (contextCacheReadTokensTotal + contextPromptTokensTotal)
+  /// 不可用 `cacheRead/(cacheRead+prompt)`：OpenAI/Gemini 的 prompt 已含
+  /// 缓存命中部分，会把命中率系统性算低。
+  double? get averageCacheHit => contextInputTokensTotal > 0
+      ? contextCacheReadTokensTotal / contextInputTokensTotal
       : null;
 
   /// 手动压缩进行中（§4.3；输入区发送/重生成入口据此拒绝）
@@ -396,6 +438,15 @@ class IntermediateChatState {
 
   /// 高亮起表时刻（epoch ms；见构造器注释）
   final int? variantFlashStartedAtMs;
+
+  /// 变体切换被拒提示计数（页面监听弹 toast）
+  final int variantSwitchBlockedTick;
+
+  /// 最近一次变体切换被拒的原因（downstream/compacted）；null=无
+  final String? variantSwitchBlockedReason;
+
+  /// One state emission when a committed round has individual fact failures.
+  final ({int turnNumber, int count})? factWriteWarning;
 
   /// 失败/中断轮的非空正文快照
   final String? partialReplySnapshot;
@@ -442,11 +493,15 @@ class IntermediateChatState {
     Object? contextWindowTokens = _sentinel,
     Object? compactionTriggerTokens = _sentinel,
     Object? lastPromptTokens = _sentinel,
+    Object? lastInputTokens = _sentinel,
     Object? lastCompletionTokens = _sentinel,
     Object? lastCacheReadTokens = _sentinel,
+    List<String>? lastUsageWarnings,
     bool? lastUsageIsEstimated,
     int? contextPromptTokensTotal,
     int? contextCacheReadTokensTotal,
+    int? contextInputTokensTotal,
+    Object? contextEstimate = _sentinel,
     // 手动压缩三字段 sentinel 化（同源坑：流式回调只传 delta
     // 不传标志，默认值会把 isManualCompacting 打回 false，互斥守卫失效）
     Object? isManualCompacting = _sentinel,
@@ -456,6 +511,9 @@ class IntermediateChatState {
     Object? variantsByTurn = _sentinel,
     Object? variantFlashTurn = _sentinel,
     Object? variantFlashStartedAtMs = _sentinel,
+    int? variantSwitchBlockedTick,
+    String? variantSwitchBlockedReason,
+    ({int turnNumber, int count})? factWriteWarning,
     Object? partialReplySnapshot = _sentinel,
   }) {
     return IntermediateChatState(
@@ -542,17 +600,26 @@ class IntermediateChatState {
       lastPromptTokens: identical(lastPromptTokens, _sentinel)
           ? this.lastPromptTokens
           : lastPromptTokens as int?,
+      lastInputTokens: identical(lastInputTokens, _sentinel)
+          ? this.lastInputTokens
+          : lastInputTokens as int?,
       lastCompletionTokens: identical(lastCompletionTokens, _sentinel)
           ? this.lastCompletionTokens
           : lastCompletionTokens as int?,
       lastCacheReadTokens: identical(lastCacheReadTokens, _sentinel)
           ? this.lastCacheReadTokens
           : lastCacheReadTokens as int?,
+      lastUsageWarnings: lastUsageWarnings ?? this.lastUsageWarnings,
       lastUsageIsEstimated: lastUsageIsEstimated ?? this.lastUsageIsEstimated,
       contextPromptTokensTotal:
           contextPromptTokensTotal ?? this.contextPromptTokensTotal,
       contextCacheReadTokensTotal:
           contextCacheReadTokensTotal ?? this.contextCacheReadTokensTotal,
+      contextInputTokensTotal:
+          contextInputTokensTotal ?? this.contextInputTokensTotal,
+      contextEstimate: identical(contextEstimate, _sentinel)
+          ? this.contextEstimate
+          : contextEstimate as ContextUsageEstimate?,
       isManualCompacting: identical(isManualCompacting, _sentinel)
           ? this.isManualCompacting
           : isManualCompacting! as bool,
@@ -571,6 +638,10 @@ class IntermediateChatState {
       variantFlashStartedAtMs: identical(variantFlashStartedAtMs, _sentinel)
           ? this.variantFlashStartedAtMs
           : variantFlashStartedAtMs as int?,
+      variantSwitchBlockedTick:
+          variantSwitchBlockedTick ?? this.variantSwitchBlockedTick,
+      variantSwitchBlockedReason: variantSwitchBlockedReason,
+      factWriteWarning: factWriteWarning,
       partialReplySnapshot: identical(partialReplySnapshot, _sentinel)
           ? this.partialReplySnapshot
           : partialReplySnapshot as String?,

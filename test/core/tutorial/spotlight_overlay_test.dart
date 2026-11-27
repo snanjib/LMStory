@@ -122,6 +122,58 @@ void main() {
     expect(taps, 1, reason: '遮罩区必须吸收误触');
   });
 
+  testWidgets('wrapped guidance keeps the bottom target tappable',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final controller = TutorialController();
+    final registry = SpotlightRegistry();
+    var taps = 0;
+
+    await tester.pumpWidget(
+      hostApp(
+        controller: controller,
+        registry: registry,
+        page: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 20),
+              child: SpotlightTarget(
+                id: 'finish',
+                child: ElevatedButton(
+                  onPressed: () => taps++,
+                  child: const Text('Done'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    controller.begin([
+      const TutorialStep(
+        id: 'rules',
+        title: 'Use the built-in world rules',
+        message: 'Choose the Isekai narrator system prompt and review '
+            'the project rules in the preview. Tap Use this to confirm. '
+            'Then tap Done to open the story and read the first scene.',
+        targetId: 'finish',
+      ),
+    ]);
+    await tester.pumpAndSettle();
+
+    final done = find.widgetWithText(ElevatedButton, 'Done');
+    await tester.tap(done, warnIfMissed: false);
+    await tester.pump();
+    expect(taps, 1);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('介绍步（allowUntargetedTaps）全屏自由操作', (tester) async {
     var taps = 0;
     final controller = TutorialController();
@@ -447,7 +499,8 @@ void main() {
     expect(find.text('步骤-step1'), findsNothing);
   });
 
-  testWidgets('额外并列高亮目标列表（extraHighlightTargetIds）与主目标一同渲染挖孔并放行点击', (tester) async {
+  testWidgets('额外并列高亮目标列表（extraHighlightTargetIds）与主目标一同渲染挖孔并放行点击',
+      (tester) async {
     final controller = TutorialController();
     final registry = SpotlightRegistry();
     var extraTapped = false;

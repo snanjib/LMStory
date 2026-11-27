@@ -14,7 +14,7 @@ import 'package:lmstory/features/intermediate/presentation/widgets/panels/facts_
 import 'package:lmstory/features/memory/domain/entities/facts_change_record.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
-import 'package:lmstory/features/memory/domain/services/fact_applier.dart';
+import 'package:lmstory/i18n/factual_labels.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 事实层单条变更详情弹窗（事实层变更小窗配套，DOC-11 §4）。
@@ -31,23 +31,33 @@ class FactsChangeDetailDialog {
   static Future<void> show(
     BuildContext context, {
     required FactsChangeRecord record,
+    FactualEntityType? entityType,
   }) {
     return showLmDialog<void>(
       context: context,
-      builder: (_) => _FactsChangeDetailDialog(record: record),
+      builder: (_) => _FactsChangeDetailDialog(
+        record: record,
+        entityType:
+            entityType ?? FactualEntityType.tryFromString(record.entityType),
+      ),
     );
   }
 }
 
 class _FactsChangeDetailDialog extends StatelessWidget {
-  const _FactsChangeDetailDialog({required this.record});
+  const _FactsChangeDetailDialog({
+    required this.record,
+    required this.entityType,
+  });
 
   final FactsChangeRecord record;
+  final FactualEntityType? entityType;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
+    final attrLabel = _attrLabel(t);
     return Dialog(
       backgroundColor: colors.surfaceElevated,
       insetPadding: const EdgeInsets.symmetric(
@@ -78,11 +88,11 @@ class _FactsChangeDetailDialog extends StatelessWidget {
                 value: _entityTitle(colors, t),
               ),
             // 属性（如有）
-            if (_attrLabel != null)
+            if (attrLabel != null)
               _addField(
                 colors,
                 label: t.intermediate.chat.factsChangeAttrLabel,
-                value: _attrLabel!,
+                value: attrLabel,
               ),
             // 变更前（如有：update/append/remove 的 old）
             if (record.oldValue != null)
@@ -185,13 +195,13 @@ class _FactsChangeDetailDialog extends StatelessWidget {
         return chat.factsActionAddAlias;
       case FactAction.archiveEntity:
         return chat.factsActionArchiveEntity;
+      case FactAction.setImportance:
+        return chat.factsActionSetImportance;
     }
   }
 
-  /// 类型中文标签（来自 entityType 字符串）
   String _typeLabel(Translations t) {
-    if (record.entityType == null) return '';
-    final type = _parseType(record.entityType!);
+    final type = entityType;
     if (type == null) return '';
     final chat = t.intermediate.chat;
     switch (type) {
@@ -210,21 +220,10 @@ class _FactsChangeDetailDialog extends StatelessWidget {
     }
   }
 
-  /// 属性中文标签（经 AttributeSchema 标准化；自定义属性回退原 attrKey）
-  String? get _attrLabel {
+  String? _attrLabel(Translations t) {
     final attrKey = record.attrKey;
     if (attrKey == null) return null;
-    final type = _parseType(record.entityType ?? '');
-    if (type == null) return attrKey;
-    return AttributeSchema.labelFor(type, attrKey) ?? attrKey;
-  }
-
-  FactualEntityType? _parseType(String value) {
-    try {
-      return FactualEntityType.fromString(value);
-    } catch (_) {
-      return null;
-    }
+    return factualAttributeLabel(t, entityType, attrKey) ?? attrKey;
   }
 
   /// label + value 两行字段块

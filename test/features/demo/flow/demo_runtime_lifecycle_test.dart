@@ -53,7 +53,7 @@ void main() {
     expect(runtime.state.phase, DemoPhase.idle);
     expect(runtime.loaded, isTrue);
     // 测试环境资产经 mock handler 不可载 → 包不可用 → 不弹邀请
-    expect(runtime.packAvailable, isFalse);
+    expect(await runtime.isPackAvailable('zh-CN'), isFalse);
     expect(runtime.inviteEligible, isFalse, reason: '无可用包时绝不进入半兼容体验');
   });
 

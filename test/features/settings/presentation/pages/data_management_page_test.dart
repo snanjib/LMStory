@@ -1,17 +1,24 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/services/data_store_operation_guard.dart';
 import 'package:lmstory/core/storage/preferences.dart';
 import 'package:lmstory/core/theme/simple/simple_theme.dart';
+import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
+import 'package:lmstory/features/demo/data/demo_preferences.dart';
+import 'package:lmstory/features/demo/data/demo_secure_storage.dart';
 import 'package:lmstory/features/settings/data/auto_backup_manager.dart';
+import 'package:lmstory/features/settings/data/repositories/backup_repository_impl.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/entities/data_management_models.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
@@ -24,6 +31,8 @@ import 'package:lmstory/features/templates/domain/repositories/template_reposito
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../data/repositories/fixtures/story_copy_legacy_v55.dart';
+
 /// 数据管理页 Widget 测试
 ///
 /// 自动备份区段必须展示说明文案——
@@ -32,7 +41,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 保留最近 3 份；关闭开关即可停用。
 void main() {
   setUp(() {
-    LocaleSettings.setLocale(AppLocale.zhCn);
+    LocaleSettings.setLocaleSync(AppLocale.zhCn);
   });
 
   Widget wrap(Widget child) => TranslationProvider(
@@ -326,20 +335,28 @@ void main() {
     );
   });
 
-  testWidgets('导入同步失败（坏 JSON）→ 进度弹层不得滞留（迟到关闭兜底）', (
-    tester,
-  ) async {
-    // importBackup 首句 jsonDecode 同步抛出：错误经微任务在弹层 builder
-    // 首帧执行前送达，撤除回调尚未挂上——若无迟到关闭兜底，不可关闭
-    // 弹层会构建后永久滞留（只能重启应用）。
+  testWidgets('覆盖导入遇到在途写入时退出进度层并提示等待', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = Preferences(prefs: await SharedPreferences.getInstance());
-    final failService = _SyncFailImportService(
-      chatRepository: _StubChatRepo(),
+    final guard = DataStoreOperationGuard();
+    final releaseWrite = guard.tryBeginWrite() ?? fail('无法取得写入占用');
+    addTearDown(releaseWrite);
+    final chatRepository = _StubChatRepo();
+    final settingsRepository = _StubSettingsRepo();
+    final backupRepository = _CountingBackupRepo();
+    final service = DataManagementService(
+      chatRepository: chatRepository,
       presetRepository: _StubPresetRepo(),
-      settingsRepository: _StubSettingsRepo(),
-      backupRepository: _StubBackupRepo(),
+      settingsRepository: settingsRepository,
+      backupRepository: backupRepository,
+      operationGuard: guard,
     );
+    final backupManager = _CountingAutoBackupManager(
+      dataManagementService: service,
+      settingsRepository: settingsRepository,
+      chatRepository: chatRepository,
+    );
+
     await tester.pumpWidget(
       wrap(
         ProviderScope(
@@ -349,19 +366,14 @@ void main() {
                   ConfigLevelNotifier(prefs, initialValue: ConfigLevel.simple),
             ),
             templateRepositoryProvider.overrideWithValue(_StubTemplateRepo()),
-            dataManagementServiceProvider.overrideWith((ref) => failService),
-            autoBackupManagerProvider.overrideWith(
-              (ref) => AutoBackupManager(
-                dataManagementService: ref.read(dataManagementServiceProvider),
-                settingsRepository: _StubSettingsRepo(),
-                chatRepository: _StubChatRepo(),
-              ),
-            ),
+            dataManagementServiceProvider.overrideWithValue(service),
+            autoBackupManagerProvider.overrideWithValue(backupManager),
           ],
           child: const DataManagementPage(
             initialImportContent:
                 '{"version":3,"exportedAt":"2026-09-25T00:00:00Z",'
-                '"sessions":[]}',
+                '"sessions":[{"session":{"session_id":"first","title":"First"}},'
+                '{"session":{"session_id":"second","title":"Second"}}]}',
           ),
         ),
       ),
@@ -369,6 +381,76 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(ImportModeSheet), findsOneWidget);
+
+    await tester.tap(find.text(t.settings.data.importMode.overwrite));
+    await tester.pump();
+    expect(
+      find.text(t.settings.data.importMode.overwriteWarning),
+      findsOneWidget,
+    );
+    await tester.tap(find.text(t.common.confirm));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byType(ImportModeSheet), findsNothing);
+    expect(find.text(t.settings.data.importing), findsNothing);
+    expect(find.text(t.settings.data.overwriteBusy), findsOneWidget);
+    expect(backupManager.snapshotCalls, 0);
+    expect(backupRepository.deleteCalls, 0);
+    expect(guard.tryBeginOverwrite(), isNull);
+  });
+
+  Future<void> openBackup(
+    WidgetTester tester,
+    DataManagementService service,
+    String content, {
+    Future<Directory> Function()? documentsDirectory,
+  }) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = Preferences(prefs: await SharedPreferences.getInstance());
+    await tester.pumpWidget(
+      wrap(
+        ProviderScope(
+          overrides: [
+            configLevelProvider.overrideWith(
+              (ref) =>
+                  ConfigLevelNotifier(prefs, initialValue: ConfigLevel.simple),
+            ),
+            templateRepositoryProvider.overrideWithValue(_StubTemplateRepo()),
+            dataManagementServiceProvider.overrideWith((ref) => service),
+            autoBackupManagerProvider.overrideWith(
+              (ref) => AutoBackupManager(
+                dataManagementService: ref.read(dataManagementServiceProvider),
+                settingsRepository: _StubSettingsRepo(),
+                chatRepository: _StubChatRepo(),
+                documentsDirectory: documentsDirectory,
+              ),
+            ),
+          ],
+          child: DataManagementPage(initialImportContent: content),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+
+  testWidgets('导入同步失败（坏 JSON）→ 进度弹层不得滞留（迟到关闭兜底）', (
+    tester,
+  ) async {
+    // importBackup 首句 jsonDecode 同步抛出：错误经微任务在弹层 builder
+    // 首帧执行前送达，撤除回调尚未挂上——若无迟到关闭兜底，不可关闭
+    // 弹层会构建后永久滞留（只能重启应用）。
+    final failService = _SyncFailImportService(
+      chatRepository: _StubChatRepo(),
+      presetRepository: _StubPresetRepo(),
+      settingsRepository: _StubSettingsRepo(),
+      backupRepository: _StubBackupRepo(),
+    );
+    await openBackup(tester, failService, '{"version":3,"sessions":[]}');
     await tester.tap(find.text(t.common.confirm));
     await tester.pump();
     // builder 帧 + 迟到 pop 的 postFrame 帧
@@ -381,6 +463,244 @@ void main() {
       reason: '同步失败路径的进度弹层必须自动撤除，不可关闭弹层永挂=只能重启',
     );
   });
+
+  Future<void> confirmOverwrite(WidgetTester tester) async {
+    await tester.tap(find.text(t.settings.data.importMode.overwrite));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.ensureVisible(find.text(t.common.confirm));
+    await tester.tap(find.text(t.common.confirm));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 250));
+  }
+
+  testWidgets('覆盖备份的往事标识冲突在数据管理页面说明并关闭进度层', (tester) async {
+    final service = DataManagementService(
+      chatRepository: _StubChatRepo(),
+      presetRepository: _StubPresetRepo(),
+      settingsRepository: _StubSettingsRepo(),
+      backupRepository: _StubBackupRepo(),
+    );
+    final content = jsonEncode({
+      'version': 3,
+      'sessions': [
+        for (final sid in ['first', 'second'])
+          {
+            'session': {'session_id': sid, 'title': 'Synthetic story $sid'},
+            'messages': <Object?>[],
+            'experientialMemories': [
+              {
+                'memory_id': 'shared',
+                'session_id': sid,
+                'summary': 'Synthetic experience',
+                'turn_number': 1,
+              },
+            ],
+          },
+      ],
+    });
+    await openBackup(tester, service, content);
+    await confirmOverwrite(tester);
+    expect(find.text(t.settings.data.importing), findsNothing);
+    expect(
+      find.text(t.settings.data.overwriteExperienceConflict),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('重复会话替换失败后，覆盖页面说明冲突并保留旧故事', (tester) async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    final directory = await tester.runAsync(
+      () => Directory.systemTemp.createTemp('lmstory-overwrite-conflict-'),
+    );
+    final documents =
+        directory ?? fail('Temporary documents directory missing');
+    addTearDown(() async {
+      await db.close();
+      await documents.delete(recursive: true);
+    });
+    final backup = BackupRepositoryImpl(database: db);
+    final service = DataManagementService(
+      chatRepository: _StubChatRepo(),
+      presetRepository: _StubPresetRepo(),
+      settingsRepository: _StubSettingsRepo(),
+      backupRepository: backup,
+    );
+    final stories = jsonDecode(storyCopyLegacyV55Json) as Map<String, dynamic>;
+    final source = stories['memorySource'] as Map<String, dynamic>;
+    final copy = stories['memoryOne'] as Map<String, dynamic>;
+    expect(await backup.importSessionData(copy, mode: ImportMode.append), 2);
+    final previous = await backup.exportAllSessionsData();
+    final failedReplacement = {
+      ...source,
+      'session': {
+        ...source['session'] as Map<String, dynamic>,
+        'title': <String, dynamic>{'invalid': true},
+      },
+      'experientialMemories': <Object?>[],
+    };
+    Map<String, dynamic> activeMemory(Map<String, dynamic> story) =>
+        (story['experientialMemories'] as List<dynamic>).single
+            as Map<String, dynamic>;
+    activeMemory(copy)['memory_id'] = activeMemory(source)['memory_id'];
+    final content = jsonEncode({
+      'version': 3,
+      'sessions': [source, failedReplacement, copy],
+    });
+    await openBackup(
+      tester,
+      service,
+      content,
+      documentsDirectory: () async => documents,
+    );
+    await confirmOverwrite(tester);
+    await _waitForPage(
+      tester,
+      find.text(t.settings.data.overwriteExperienceConflict),
+    );
+    final after = await backup.exportAllSessionsData();
+    expect(after, previous);
+    expect(find.text(t.settings.data.importing), findsNothing);
+    expect(
+      find.text(t.settings.data.overwriteExperienceConflict),
+      findsOneWidget,
+    );
+  });
+
+  for (final scenario in ['restore', 'snapshot error', 'unsupported version']) {
+    testWidgets('real zero-session overwrite page: $scenario', (tester) async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      final temp = await tester.runAsync(
+        () => Directory.systemTemp.createTemp('lmstory-overwrite-page-'),
+      );
+      final documents = temp ?? fail('Temporary documents directory missing');
+      final prefs = DemoPreferences();
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          preferencesProvider.overrideWithValue(prefs),
+          secureStorageProvider.overrideWithValue(DemoSecureStorage()),
+          templateRepositoryProvider.overrideWithValue(_StubTemplateRepo()),
+          autoBackupManagerProvider.overrideWith(
+            (ref) => AutoBackupManager(
+              dataManagementService: ref.read(dataManagementServiceProvider),
+              settingsRepository: ref.read(settingsRepositoryProvider),
+              chatRepository: ref.read(chatRepositoryProvider),
+              documentsDirectory: () async {
+                if (scenario == 'snapshot error') {
+                  throw const FileSystemException(
+                    'Synthetic snapshot failure',
+                  );
+                }
+                return documents;
+              },
+            ),
+          ),
+        ],
+      );
+      addTearDown(() async {
+        container.dispose();
+        await db.close();
+        await documents.delete(recursive: true);
+      });
+      final settings = container.read(settingsRepositoryProvider);
+      const key = 'intermediate.generation.temperature';
+      await settings.setUserOverride(key, 0.3);
+      final version = scenario == 'unsupported version' ? 99 : 3;
+      await tester.pumpWidget(
+        wrap(
+          UncontrolledProviderScope(
+            container: container,
+            child: DataManagementPage(
+              initialImportContent:
+                  '{"version":$version,"preferences":{"$key":0.8},'
+                  '"characterCards":[{"name":"Missing synthetic ID"}]}',
+            ),
+          ),
+        ),
+      );
+      if (scenario == 'unsupported version') {
+        await _waitForPage(
+          tester,
+          find.text(
+            t.settings.data.repairSchema.importVersionTooNew(version: 99),
+          ),
+        );
+        expect(find.byType(ImportModeSheet), findsNothing);
+      } else {
+        await _overwriteFromSheet(tester);
+      }
+
+      if (scenario == 'snapshot error') {
+        await _waitForPage(
+          tester,
+          find.text(t.settings.data.importMode.snapshotRequired),
+        );
+      }
+      if (scenario != 'restore') {
+        expect(find.text(t.settings.data.importing), findsNothing);
+        expect((await settings.getUserOverrides())[key], 0.3);
+        return;
+      }
+
+      await _waitForPage(tester, find.text(t.settings.data.importSuccess));
+      expect((await settings.getUserOverrides())[key], 0.8);
+      expect(
+        find.text(t.settings.data.importSummary.skippedRows(count: 1)),
+        findsOneWidget,
+      );
+      final files = await tester.runAsync(
+        container.read(autoBackupManagerProvider).listPreImportSnapshots,
+      );
+      final snapshot = files?.single ?? fail('Pre-import snapshot missing');
+      final snapshotName = snapshot.uri.pathSegments.last;
+      expect(
+        find.text(
+          t.settings.data.importMode.snapshotCreated(fileName: snapshotName),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text(t.common.confirm));
+      await tester.pump(const Duration(milliseconds: 400));
+      final restore = find.text(t.settings.data.autoBackup.restoreFromBackup);
+      await tester.ensureVisible(restore);
+      await tester.tap(restore);
+      await _waitForPage(tester, find.text(snapshotName));
+      await tester.tap(find.text(snapshotName));
+      await _overwriteFromSheet(tester);
+      await _waitForPage(tester, find.text(t.settings.data.importSuccess));
+      expect((await settings.getUserOverrides())[key], 0.3);
+      await tester.runAsync(() async {
+        expect(
+          await container.read(chatRepositoryProvider).getAllSessions(),
+          isEmpty,
+        );
+      });
+    });
+  }
+}
+
+Future<void> _overwriteFromSheet(WidgetTester tester) async {
+  final overwrite = find.text(t.settings.data.importMode.overwrite);
+  await _waitForPage(tester, overwrite);
+  await tester.tap(overwrite);
+  await tester.pump(const Duration(milliseconds: 300));
+  await tester.tap(find.text(t.common.confirm));
+  await tester.pump(const Duration(milliseconds: 300));
+}
+
+Future<void> _waitForPage(WidgetTester tester, Finder expected) async {
+  for (var attempt = 0; attempt < 120; attempt++) {
+    await tester.pump(const Duration(milliseconds: 30));
+    if (expected.evaluate().isNotEmpty) {
+      await tester.pump(const Duration(milliseconds: 300));
+      return;
+    }
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 15)));
+  }
+  expect(expected, findsAtLeastNWidgets(1));
 }
 
 /// 导入挂起服务：importBackup 在闸门上等待，测试据此断言进度弹层
@@ -457,6 +777,31 @@ class _StubBackupRepo implements BackupRepository {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName}');
+}
+
+class _CountingBackupRepo extends _StubBackupRepo {
+  int deleteCalls = 0;
+
+  @override
+  Future<void> deleteAllSessionData() async {
+    deleteCalls++;
+  }
+}
+
+class _CountingAutoBackupManager extends AutoBackupManager {
+  _CountingAutoBackupManager({
+    required super.dataManagementService,
+    required super.settingsRepository,
+    required super.chatRepository,
+  });
+
+  int snapshotCalls = 0;
+
+  @override
+  Future<File> createPreImportSnapshot() async {
+    snapshotCalls++;
+    throw StateError('Snapshot is unexpected while a writer is active');
+  }
 }
 
 class _StubChatRepo implements ChatRepository {

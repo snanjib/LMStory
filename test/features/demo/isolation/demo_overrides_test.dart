@@ -68,6 +68,61 @@ void main() {
     expect(bridge.replay, isNotNull, reason: '装配必须接通回放服务句柄');
   });
 
+  test('同库跨容器共用操作保护，演示库与主库互不阻塞', () async {
+    final rootDb = AppDatabase.forTesting(NativeDatabase.memory());
+    final root = ProviderContainer(
+      overrides: [appDatabaseProvider.overrideWithValue(rootDb)],
+    );
+    final rootSibling = ProviderContainer(
+      overrides: [appDatabaseProvider.overrideWithValue(rootDb)],
+    );
+    final demoSiblingBridge = DemoBridge();
+    final demoSibling = ProviderContainer(
+      overrides: buildDemoOverrides(
+        bridge: demoSiblingBridge,
+        demoDb: demoDb,
+        prefs: DemoPreferences(),
+        secure: DemoSecureStorage(),
+        pack: buildMinimalPack(),
+      ),
+    );
+    addTearDown(() async {
+      root.dispose();
+      rootSibling.dispose();
+      demoSibling.dispose();
+      demoSiblingBridge.dispose();
+      await rootDb.close();
+    });
+
+    expect(root.read(appDatabaseProvider), same(rootDb));
+    expect(demoSibling.read(appDatabaseProvider), same(demoDb));
+    final rootGuard = root.read(dataStoreOperationGuardProvider);
+    final demoGuard = container.read(dataStoreOperationGuardProvider);
+    expect(rootSibling.read(dataStoreOperationGuardProvider), same(rootGuard));
+    expect(demoSibling.read(dataStoreOperationGuardProvider), same(demoGuard));
+    expect(demoGuard, isNot(same(rootGuard)));
+
+    final releaseRoot = rootGuard.tryBeginOverwrite() ?? fail('主库无法开始覆盖');
+    addTearDown(releaseRoot);
+    expect(
+      rootSibling.read(dataStoreOperationGuardProvider).tryBeginWrite(),
+      isNull,
+    );
+    final releaseDemo = demoGuard.tryBeginWrite() ?? fail('演示库写入被主库阻挡');
+    expect(rootGuard.isOverwriting, isTrue);
+    expect(demoGuard.isOverwriting, isFalse);
+    expect(
+      demoSibling.read(dataStoreOperationGuardProvider).tryBeginOverwrite(),
+      isNull,
+    );
+    releaseDemo();
+    releaseRoot();
+    final releaseRootWrite =
+        rootSibling.read(dataStoreOperationGuardProvider).tryBeginWrite() ??
+            fail('主库覆盖结束后无法写入');
+    releaseRootWrite();
+  });
+
   test('onboarding stub：恒为已完成、markCompleted 不写任何存储', () async {
     final notifier = container.read(onboardingProvider.notifier);
     // _load 异步——等一拍后仍恒为 completed（桩 prefs 恒 true）

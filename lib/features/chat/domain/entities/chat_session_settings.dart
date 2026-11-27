@@ -32,6 +32,8 @@ class ChatSessionSettings {
     this.retrievalRatioOverride,
     // DOC-14 §3.3：压缩触发线会话级覆盖（透传）
     this.compactionTriggerRatioOverride,
+    // 工程上下文模式开关（导演实验，透传 null = 关闭态）
+    this.engineeringContextEnabled,
   });
 
   /// 模型 ID
@@ -140,4 +142,11 @@ class ChatSessionSettings {
   /// - `null`（默认）：使用全局 `intermediate.contextBudget.compactionTriggerRatio`
   /// - 非 null：使用此值作为压缩触发线比例
   final double? compactionTriggerRatioOverride;
+
+  /// 工程上下文模式开关（导演实验）
+  ///
+  /// 透传 [ChatSession.engineeringContextEnabled]（null = 关闭态）。
+  /// 仅导演模式消费；三态对账以控制器解析结果为准，本字段只作轮内
+  /// 上下文携带（关闭态恒 null/false，请求体不受影响）。
+  final bool? engineeringContextEnabled;
 }

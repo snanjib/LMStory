@@ -3,33 +3,46 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/config/advanced_config.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/llm/tool_calling/tool_definition.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
+import 'package:lmstory/core/theme/system/lm_motion.dart';
 import 'package:lmstory/core/theme/system/lm_overlays.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/tutorial/spotlight_target.dart';
 import 'package:lmstory/core/widgets/model_config_banner.dart';
+import 'package:lmstory/features/advanced/data/engineering_compaction_service.dart';
+import 'package:lmstory/features/advanced/data/engineering_summarizer.dart';
+import 'package:lmstory/features/advanced/data/repositories/agent_event_log_repository.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
-import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
+import 'package:lmstory/features/advanced/domain/services/compaction_planning.dart';
+import 'package:lmstory/features/advanced/domain/services/director_surface_v2.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/director_input_lock.dart';
 import 'package:lmstory/features/advanced/presentation/pages/director_chat_body.dart';
+import 'package:lmstory/features/advanced/presentation/utils/auxiliary_generation_feedback.dart';
+import 'package:lmstory/features/advanced/presentation/widgets/director_compact_composer.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_export_sheet.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_hitl_banner.dart';
-import 'package:lmstory/features/advanced/presentation/widgets/director_script_board_sheet.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_session_settings_sheet.dart';
+import 'package:lmstory/features/advanced/presentation/widgets/director_world_status_sheet.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
+import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
+import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 import 'package:lmstory/features/demo/domain/demo_scene.dart';
 import 'package:lmstory/features/demo/presentation/demo_bridge.dart';
 import 'package:lmstory/features/resource_library/domain/services/resource_apply_service.dart';
 import 'package:lmstory/features/resource_library/domain/services/resource_projection_service.dart';
+import 'package:lmstory/features/settings/domain/entities/input_keys.dart'
+    show NewlineKey, SendKey;
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/settings/presentation/pages/director_settings_page.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/font_size_selector_section.dart';
@@ -37,9 +50,10 @@ import 'package:lmstory/features/story_runtime/domain/entities/story_phase_model
 import 'package:lmstory/features/story_runtime/domain/services/manual_compact_result.dart';
 import 'package:lmstory/features/story_runtime/domain/services/memory_consolidator.dart';
 import 'package:lmstory/features/story_runtime/domain/services/session_title_generator.dart';
+import 'package:lmstory/features/story_runtime/presentation/pages/memory_browser_page.dart';
 import 'package:lmstory/features/story_runtime/presentation/widgets/context_usage_ring.dart';
+import 'package:lmstory/features/story_runtime/presentation/widgets/fact_write_feedback.dart';
 import 'package:lmstory/features/story_runtime/presentation/widgets/failure_bar.dart';
-import 'package:lmstory/features/story_runtime/presentation/widgets/intermediate_chat_input.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 导演模式聊天页面（P2 解耦：从故事模式页面壳复制裁剪，仅保留导演分支）。
@@ -92,6 +106,7 @@ class AdvancedChatPage extends ConsumerStatefulWidget {
 }
 
 class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
+  final _factWriteFeedback = FactWriteFeedback();
   // 2026-07-21：用户主动关闭「未配置嵌入模型」Banner 后，本会话内不再显示
   // 重启 App 或切换会话后重新检测（若仍未配置则再次显示）
   bool _embeddingBannerDismissed = false;
@@ -113,36 +128,36 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   /// 输入防抖落库计时器（500ms 静默后写窄列；dispose 只取消不写）。
   Timer? _draftDebounce;
-
-  /// 未发送草稿窄列持久化（fire-and-forget；空串=清空，发送后调用）。
+  Object _draftVisit = Object();
+  bool _draftEdited = false;
+  String _observedDraft = '';
 
   /// 输入文本变化 → 防抖 500ms 落库（退出兜底主力；dispose 只取消）。
   void _onDraftTextChanged(String text) {
+    if (text == _observedDraft) return;
+    _observedDraft = text;
     if (_isInputLocked) return; // 固定提示词不作为用户草稿落库
+    _draftEdited = true;
     _draftDebounce?.cancel();
-    final sessionId = widget.session.sessionId;
+    final session = widget.session;
     // lm-motion-exempt: 草稿落库去抖（交互节流，非过渡动效）
     _draftDebounce = Timer(const Duration(milliseconds: 500), () {
-      _persistDraftColumn(sessionId, text);
+      _persistDraftColumn(session, text);
     });
   }
 
-  void _persistDraftColumn(String sessionId, String text) {
-    // 同步+异步双兜底：持久化失败静默降级（草稿非关键路径，不炸页面）
+  void _persistDraftColumn(ChatSession session, String text) {
     unawaited(
-      () async {
-        try {
-          await ref
-              .read<ChatRepository>(chatRepositoryProvider)
-              .setSessionDraft(sessionId, text.isEmpty ? null : text);
-        } catch (_) {}
-      }(),
+      ref
+          .read(advancedChatControllerProvider(session).notifier)
+          .persistInputDraft(text.isEmpty ? null : text),
     );
   }
 
   /// 跨重启恢复：页面级 Map 未命中时读库（输入框仍空才落，不覆盖新输入）。
   Future<void> _restoreDraftFromDb(String sessionId) async {
-    if (_isInputLocked) return; // 锁定期间任何草稿恢复不得改写固定文本
+    if (_isInputLocked || widget.session.sessionId != sessionId) return;
+    final visit = _draftVisit;
     final String? draft;
     try {
       draft = await ref
@@ -153,21 +168,50 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     }
     // await 窗口内锁可能已置位（演示流程 lockTo 先于本异步完成）——
     // 二次判定防擦掉固定提示词
-    if (_isInputLocked) return;
-    if (!mounted || draft == null || draft.isEmpty) return;
-    if (widget.session.sessionId != sessionId) return;
+    if (!mounted ||
+        _isInputLocked ||
+        visit != _draftVisit ||
+        _draftEdited ||
+        draft == null ||
+        draft.isEmpty) {
+      return;
+    }
     final current = _inputKey.currentState?.currentText ?? '';
     if (current.isEmpty) {
-      _inputKey.currentState?.setText(draft);
+      final state = ref.read(advancedChatControllerProvider(widget.session));
+      _showSavedDraft(draft, requestFocus: !state.isAwaitingFirstRound);
     }
   }
 
-  final GlobalKey<IntermediateChatInputState> _inputKey =
-      GlobalKey<IntermediateChatInputState>();
+  void _showSavedDraft(String text, {required bool requestFocus}) {
+    // 恢复和切页校正都会通知 TextEditingController。预先记录文本，
+    // 防止程序将未加载的空值当成用户主动清空。
+    _observedDraft = text;
+    _inputKey.currentState?.setText(text, requestFocus: requestFocus);
+  }
 
-  // 底部输入区域（InputToolbar + IntermediateChatInput）实际高度。
-  // 用于 SnackBar margin 计算：SnackBar 上移至输入框上方，避免遮挡。
-  double _bottomAreaHeight = 100;
+  static const double _kWorldInspectorBreakpoint = 900;
+  static const double _kWorldInspectorWidth = 332;
+
+  /// Whether the docked right-hand world status inspector is open on wide
+  /// screens (>= 900dp).
+  bool _desktopWorldInspectorOpen = false;
+
+  /// Incremented when anchor/world data is edited so an open inspector reloads.
+  int _worldStatusRevision = 0;
+
+  /// Read-only lookup of entityId -> primaryName for legacy records that lack
+  /// persisted primaryName in round artifacts.
+  Map<String, String> _entityNameMap = const {};
+  final Set<String> _requestedEntityIds = <String>{};
+  bool _entityNameResolutionScheduled = false;
+  static final RegExp _entityIdPattern = RegExp(r'\b(ent_[A-Za-z0-9_-]+)\b');
+
+  final GlobalKey<DirectorCompactComposerState> _inputKey =
+      GlobalKey<DirectorCompactComposerState>();
+
+  // 底部输入区域实际高度，用于 SnackBar margin 避让输入框。
+  double _bottomAreaHeight = 84;
   final _bottomAreaKey = GlobalKey();
   bool _bottomAreaMeasurementScheduled = false;
 
@@ -178,6 +222,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   @override
   void dispose() {
+    _factWriteFeedback.dismissOnSessionExit();
     _draftDebounce?.cancel();
     super.dispose();
   }
@@ -261,6 +306,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     super.didUpdateWidget(oldWidget);
     // 切会话时检查新会话是否需要回写草稿
     if (oldWidget.session.sessionId != widget.session.sessionId) {
+      _factWriteFeedback.dismissOnSessionExit();
       // 会话切换重置 HITL 首释解释——
       // State 复用导致第二/三个会话的首张 ask/审批横幅永远错过解释行
       _hitlIntroShown = false;
@@ -269,36 +315,34 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       _embeddingBannerDismissed = false;
       // 纯净阅读按会话重载
       _loadPureReadingPreference();
-      // 切走前暂存未发送文字（与故事模式同款）
-      final oldText = _inputKey.currentState?.currentText ?? '';
-      if (oldText.isNotEmpty) {
-        _inputDrafts[oldWidget.session.sessionId] = oldText;
-      } else {
-        _inputDrafts.remove(oldWidget.session.sessionId);
+      _entityNameMap = const {};
+      _requestedEntityIds.clear();
+      _entityNameResolutionScheduled = false;
+      if (_draftEdited) {
+        _inputDrafts[oldWidget.session.sessionId] = _observedDraft;
+        _persistDraftColumn(oldWidget.session, _observedDraft);
       }
       _draftDebounce?.cancel();
-      _persistDraftColumn(oldWidget.session.sessionId, oldText);
+      _draftEdited = false;
+      final visit = _draftVisit = Object();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _enforceLockedText(); // 切会话后锁文本仍须校正（若锁在）
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
+        if (!mounted || _draftVisit != visit) return;
+        _enforceLockedText();
+        if (_isInputLocked) return;
         final state = ref.read(advancedChatControllerProvider(widget.session));
         final restorable = state.pendingUserMessage == null &&
             state.userInput != null &&
             state.userInput!.isNotEmpty &&
             state.phase == IntermediatePhase.idle;
         if (restorable) {
-          if (!_isInputLocked) _tryRestoreDraft();
+          _tryRestoreDraft();
         } else {
-          // 无待恢复草稿时优先用页面级暂存，都没有才清空（防串台）
-          final stashed = _inputDrafts[widget.session.sessionId] ?? '';
-          if (stashed.isNotEmpty) {
-            _inputKey.currentState?.setText(stashed);
-          } else {
-            _inputKey.currentState?.setText('');
-            // 跨重启恢复：同 State 会话内暂存未命中时读库
+          final stashed = _inputDrafts[widget.session.sessionId];
+          _showSavedDraft(
+            stashed ?? '',
+            requestFocus: stashed?.isNotEmpty ?? false,
+          );
+          if (stashed == null) {
             unawaited(_restoreDraftFromDb(widget.session.sessionId));
           }
         }
@@ -313,9 +357,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   /// 回写后立即清空 userInput，避免重复触发。
   void _tryRestoreDraft() {
     if (_isInputLocked) return;
-    final state = ref.read(
-      advancedChatControllerProvider(widget.session),
-    );
+    final state = ref.read(advancedChatControllerProvider(widget.session));
     if (state.pendingUserMessage == null &&
         state.userInput != null &&
         state.userInput!.isNotEmpty &&
@@ -325,6 +367,69 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
           .read(advancedChatControllerProvider(widget.session).notifier)
           .clearUserInput();
     }
+  }
+
+  void _scheduleMissingEntityNameResolution(AdvancedChatState state) {
+    if (_entityNameResolutionScheduled) return;
+    final missing = <String>{};
+
+    void collectIdsFromText(String? text) {
+      if (text == null || !text.contains('ent_')) return;
+      for (final match in _entityIdPattern.allMatches(text)) {
+        final id = match.group(1);
+        if (id != null &&
+            !_requestedEntityIds.contains(id) &&
+            !_entityNameMap.containsKey(id)) {
+          missing.add(id);
+        }
+      }
+    }
+
+    final artifactsMap = state.artifactsByTurnNumber;
+    if (artifactsMap != null) {
+      for (final artifact in artifactsMap.values) {
+        for (final change in artifact.factsChanges) {
+          final id = change.entityId;
+          if (id != null &&
+              id.isNotEmpty &&
+              (change.primaryName == null ||
+                  change.primaryName!.trim().isEmpty) &&
+              !_requestedEntityIds.contains(id) &&
+              !_entityNameMap.containsKey(id)) {
+            missing.add(id);
+          }
+          collectIdsFromText(change.attrKey);
+          collectIdsFromText(change.oldValue);
+          collectIdsFromText(change.newValue);
+        }
+        for (final step in artifact.agentSteps) {
+          collectIdsFromText(step.title);
+        }
+      }
+    }
+    for (final step in state.agentSteps) {
+      collectIdsFromText(step.title);
+    }
+
+    if (missing.isEmpty) return;
+    _requestedEntityIds.addAll(missing);
+    _entityNameResolutionScheduled = true;
+    final session = widget.session;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _entityNameResolutionScheduled = false;
+      if (!mounted || widget.session.sessionId != session.sessionId) return;
+      final resolved = await ref
+          .read(advancedChatControllerProvider(session).notifier)
+          .loadEntityPrimaryNames(missing);
+      if (!mounted ||
+          widget.session.sessionId != session.sessionId ||
+          resolved.isEmpty) {
+        return;
+      }
+      setState(() {
+        _entityNameMap = {..._entityNameMap, ...resolved};
+      });
+    });
   }
 
   void _scheduleBottomAreaMeasurement() {
@@ -345,18 +450,21 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(
-      advancedChatControllerProvider(widget.session),
-    );
+    final state = ref.watch(advancedChatControllerProvider(widget.session));
     // 输入锁：每帧同步校正（幂等；锁不存在零开销）。State/Element 复用
     // 会吞掉一次性监听——锁置位晚于页面创建只能靠这里兜底。
     _enforceLockedText();
+    _scheduleMissingEntityNameResolution(state);
 
     // 监听 state 变化：中断后（cancel/recoverIfStuck/clearRound 清空
     // pendingUserMessage + 保留 userInput）自动回写到输入框
     ref.listen<AdvancedChatState>(
       advancedChatControllerProvider(widget.session),
       (previous, next) {
+        final warning = next.factWriteWarning;
+        if (warning != null && warning != previous?.factWriteWarning) {
+          _factWriteFeedback.show(context, warning.count);
+        }
         if (previous?.pendingUserMessage != null &&
             next.pendingUserMessage == null &&
             next.userInput != null &&
@@ -376,6 +484,16 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
             (previous?.hitlApprovalTimeoutTick ?? 0)) {
           _showSystemNotice(t.advanced.hitl.approvalTimeout);
         }
+        // 变体切换被拒（后续轮/压缩区无法安全交换记忆层）
+        if (next.variantSwitchBlockedTick >
+            (previous?.variantSwitchBlockedTick ?? 0)) {
+          final notice = switch (next.variantSwitchBlockedReason) {
+            'compacted' => t.advanced.variant.switchBlockedCompacted,
+            'restore' => t.advanced.variant.switchBlockedRestore,
+            _ => t.advanced.variant.switchBlockedDownstream,
+          };
+          _showSystemNotice(notice);
+        }
       },
     );
 
@@ -393,8 +511,10 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                 insetPadding: EdgeInsets.fromLTRB(16, 0, 16, _bottomAreaHeight),
               ),
         ),
-        child: context.lmUi
-            .entryTransition(context, child: _buildScaffold(context, state)),
+        child: context.lmUi.entryTransition(
+          context,
+          child: _buildScaffold(context, state),
+        ),
       ),
     );
   }
@@ -434,449 +554,486 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
     // 返回手势由外层 MainLayout 的 PopScope 统一处理（与 ChatModePage 对齐）。
     // controller 是 non-autoDispose，生成中返回后台继续，重新进入可查看进度。
-    return Scaffold(
-      key: widget.scaffoldKey,
-      drawer: widget.drawer,
-      // 琉璃结构：透明底透出场地渐变；阅读/流式区零 blur（红线）。
-      backgroundColor: context.scaffoldBgOf(colors.bg),
-      appBar: AppBar(
-        leading: widget.onBackToHome != null
-            ? IconButton(
-                //  语义缺口：复用框架本地化文案（不新增 i18n key）。
-                tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                icon: const Icon(Icons.arrow_back),
-                onPressed: widget.onBackToHome,
-              )
-            : widget.showHamburgerMenu
+    // Scaffold strips its consumed insets from the body's MediaQuery.
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final headerSubtitle = _buildHeaderSubtitle(state);
+    return LayoutBuilder(
+      builder: (context, pageConstraints) {
+        final isWide = pageConstraints.maxWidth >= _kWorldInspectorBreakpoint;
+        final showDesktopInspector = isWide && _desktopWorldInspectorOpen;
+
+        return Scaffold(
+          key: widget.scaffoldKey,
+          drawer: widget.drawer,
+          // 琉璃结构：透明底透出场地渐变；阅读/流式区零 blur（红线）。
+          backgroundColor: context.scaffoldBgOf(colors.bg),
+          appBar: AppBar(
+            leading: widget.onBackToHome != null
                 ? IconButton(
-                    //  语义缺口：复用框架本地化文案（不新增 i18n key）。
                     tooltip:
-                        MaterialLocalizations.of(context).openAppDrawerTooltip,
-                    icon: const Icon(Icons.menu),
-                    onPressed: widget.onHamburgerPressed,
+                        MaterialLocalizations.of(context).backButtonTooltip,
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: widget.onBackToHome,
                   )
-                : null,
-        title: Text(
-          state.session.title,
-          style: IntermediateTextStyles.title.copyWith(color: colors.ink),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        backgroundColor: context.scaffoldBgOf(colors.bg),
-        foregroundColor: colors.ink,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        surfaceTintColor: Colors.transparent,
-        actions: [
-          // 纯净阅读模式切换——隐藏全部幕后
-          // 只留稿件流+Recap（按会话记忆偏好）
-          IconButton(
-            icon: Icon(
-              _pureReading ? Icons.auto_stories : Icons.auto_stories_outlined,
+                : widget.showHamburgerMenu
+                    ? IconButton(
+                        tooltip: MaterialLocalizations.of(context)
+                            .openAppDrawerTooltip,
+                        icon: const Icon(Icons.menu),
+                        onPressed: widget.onHamburgerPressed,
+                      )
+                    : null,
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  state.session.title,
+                  style: IntermediateTextStyles.title.copyWith(
+                    fontSize: 16,
+                    height: 1.25,
+                    color: colors.ink,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (headerSubtitle != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(
+                      headerSubtitle,
+                      style: IntermediateTextStyles.captionSm.copyWith(
+                        color: colors.muted,
+                        fontWeight: FontWeight.w400,
+                        height: 1.2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
             ),
-            tooltip: t.advanced.pureReading.toggle,
-            isSelected: _pureReading,
-            onPressed: _togglePureReading,
-          ),
-          // 会话菜单——稿件导出 / 场记板 / 更新标题
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            tooltip: t.advanced.export.menuLabel,
-            onSelected: (value) {
-              switch (value) {
-                case 'export':
-                  _showExportSheet();
-                case 'script-board':
-                  _showScriptBoard();
-                case 'update-title':
-                  _updateSessionTitle();
-              }
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'export',
-                child: Row(
-                  children: [
-                    const Icon(Icons.file_download_outlined, size: 18),
-                    const SizedBox(width: IntermediateSpacing.sSm),
-                    Text(t.advanced.export.menuLabel),
-                  ],
+            backgroundColor: context.scaffoldBgOf(colors.bg),
+            foregroundColor: colors.ink,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            surfaceTintColor: Colors.transparent,
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(1),
+              child: Divider(
+                height: 1,
+                thickness: 0.5,
+                color: colors.divider,
+              ),
+            ),
+            actions: [
+              _WorldStatusNavChip(
+                active: showDesktopInspector,
+                onTap: () => _handleWorldStatusPressed(isWide: isWide),
+              ),
+              const SizedBox(width: IntermediateSpacing.s2xs),
+              SpotlightTarget(
+                id: DemoTargetIds.sessionSettingsButton,
+                child: IconButton(
+                  icon: const Icon(Icons.settings_outlined),
+                  tooltip: t.advanced.sessionSettingsTitle,
+                  onPressed: _showSessionSettings,
                 ),
               ),
-              // 场记板——「AI 眼中的现在」只读视图
-              PopupMenuItem(
-                value: 'script-board',
-                child: Row(
-                  children: [
-                    const Icon(Icons.movie_creation_outlined, size: 18),
-                    const SizedBox(width: IntermediateSpacing.sSm),
-                    Text(t.advanced.scriptBoard.menuLabel),
-                  ],
-                ),
-              ),
-              // 手动更新标题
-              PopupMenuItem(
-                value: 'update-title',
-                enabled: !isGenerating,
-                child: Row(
-                  children: [
-                    const Icon(Icons.title_outlined, size: 18),
-                    const SizedBox(width: IntermediateSpacing.sSm),
-                    Text(t.advanced.settings.updateTitle),
-                  ],
-                ),
-              ),
+              const SizedBox(width: IntermediateSpacing.sXs),
             ],
           ),
-          // 会话设置入口：弹出 IntermediateSessionSettingsSheet
-          // 生成中也可查看设置（sheet 内部通过 phase 守卫禁用控件）
-          SpotlightTarget(
-            id: DemoTargetIds.sessionSettingsButton,
-            child: IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              // 导演侧专用键（原借用故事模式文案）
-              tooltip: t.advanced.sessionSettingsTitle,
-              onPressed: _showSessionSettings,
-            ),
-          ),
-        ],
-      ),
-      // 2026-08-02 修复 v5（一次性全部 4 场景 + 正常状态无空白）。
-      // 历史失败原因：
-      // v1: Flexible(loose) 不强制收缩 + 内层估算高度不准
-      // v2: LayoutBuilder 放 Column 末尾非 Flexible child → height unbounded → ∞
-      // v3: Flexible(tight, flex=4/2) → 收起态撑满份额 → 大片空白
-      // v3.1: 去 Flexible → Column(mainAxisSize.min) + ConstrainedBox(minHeight=0)
-      //       → Flutter 视为"自然高度"，展开详情直接溢出
-      // v4: SizedBox(height=H*70%) + SingleChildScrollView
-      //       → 正常状态（无 FailureBar）强行占 70% body 高度 → 输入框跑到屏幕中间
-      //
-      // v5 最终方案（差异化架构，正常/失败态分别处理）：
-      // - Scaffold body 整体 LayoutBuilder，拿到 bodyMaxHeight 用于后续计算
-      // - 正常状态（phase != failed）：底部区直接用 Column(mainAxisSize.min)，
-      //   不强制占比，紧贴屏幕底部，无空白。外层无限高，内部各自渲染。
-      // - 失败状态（phase == failed）：底部区外层套
-      //   ConstrainedBox(maxHeight: H × 55%/70%) + SingleChildScrollView
-      //   → 终极兜底。FailureBar 详情、SuggestOverlay、工具栏、输入框叠加
-      //   高度超过 bottomMaxHeight 时内部滚动，不溢出黄黑条纹。
-      // - FailureBar 双层约束：外层 ConstrainedBox(maxHeight: bottomMaxHeight×60%)
-      //   + 内部 Container(maxHeight) + SingleChildScrollView。
-      // - 收起态 FailureBar 用 mainAxisSize.min 只占自身高度，不留空白。
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final bodyMaxHeight = constraints.maxHeight;
-          final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-          final isFailed = state.phase == IntermediatePhase.failed &&
-              state.failureContext != null;
-
-          // 只有失败态才需要计算最大高度；正常态不限高，按自然高度紧贴底部
-          final bottomMaxHeight =
-              isFailed ? bodyMaxHeight * (keyboardOpen ? 0.55 : 0.70) : null;
-
-          // FailureBar 最大可用高度（失败态 + 键盘弹出时受限）
-          final failureBarMaxHeight =
-              (isFailed && keyboardOpen && bottomMaxHeight != null)
-                  ? bottomMaxHeight * 0.60
-                  : null;
-
-          final hasSuggestOverlay = _shouldShowSuggestOverlay(state);
-
-          return Column(
-            children: [
-              // 体验重构 ：ask_user 横幅（导演决策）与监督模式审批横幅。
-              // 头部 muted 倒计时（超时值读 advanced.hitl 配置，0=一直等待）；
-              // 每会话首张 HITL 横幅多一行首释解释。
-              // 重排版：卡框统一由 viewport 提供（滚动
-              // 溢出提示+描边），选项改整行按钮后内容更高——限高从 55%/45%
-              // 放宽到 62%/50%，决策时刻以看清选项优先。
-              if (state.agentAskPrompt != null ||
-                  state.agentApprovalPrompt != null)
-                DirectorDecisionViewport(
-                  maxHeight: bodyMaxHeight * (keyboardOpen ? 0.50 : 0.62),
-                  accentColor: state.agentAskPrompt != null
-                      ? colors.primary
-                      : colors.warning,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (state.agentAskPrompt != null)
-                        DirectorAskBanner(
-                          prompt: state.agentAskPrompt!,
-                          onAnswer: controller.answerDirectorAsk,
-                          onSkip: () => controller.answerDirectorAsk(null),
-                          timeout: _askUserTimeout(advancedConfig),
-                          showIntro: !_hitlIntroShown,
-                          onIntroSeen: () {
-                            if (mounted) setState(() => _hitlIntroShown = true);
-                          },
-                          fontScale: fontScale,
-                        ),
-                      if (state.agentApprovalPrompt != null) ...[
-                        // 双横幅同现（罕见）：一张卡框内用分隔线区隔
-                        if (state.agentAskPrompt != null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              vertical: IntermediateSpacing.sSm,
-                            ),
-                            child: Divider(
-                              height: 1,
-                              thickness: 0.5,
-                              color: colors.divider,
-                            ),
-                          ),
-                        DirectorApprovalBanner(
-                          prompt: state.agentApprovalPrompt!,
-                          onResolve: controller.resolveDirectorApproval,
-                          timeout: _approvalTimeout(advancedConfig),
-                          showIntro: !_hitlIntroShown,
-                          onIntroSeen: () {
-                            if (mounted) setState(() => _hitlIntroShown = true);
-                          },
-                        ),
-                      ],
-                    ],
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              final bodyMaxHeight = constraints.maxHeight;
+              final hasDecision = state.agentAskPrompt != null ||
+                  state.agentApprovalPrompt != null;
+              final decisionMaxHeight = hasDecision
+                  ? bodyMaxHeight * (keyboardOpen ? 0.50 : 0.62)
+                  : 0.0;
+              final heightBelowDecision = bodyMaxHeight - decisionMaxHeight;
+              final isFailed = state.phase == IntermediatePhase.failed &&
+                  state.failureContext != null;
+              final failureFooterMaxHeight =
+                  heightBelowDecision * (keyboardOpen ? 0.80 : 0.70);
+              final hasSuggestOverlay = _shouldShowSuggestOverlay(state);
+              final suggestFailure = state.suggestFailure;
+              final suggestFailureMessage = suggestFailure == null
+                  ? null
+                  : directorAuxiliaryFailureText(t, suggestFailure);
+              final modelNotices = <Widget>[
+                if (state.messages.isEmpty &&
+                    state.pendingUserMessage == null &&
+                    state.liveBlocks.isEmpty &&
+                    state.agentSteps.isEmpty &&
+                    !state.loadingHistory &&
+                    gmReady.value == false)
+                  ModelConfigBanner(
+                    title: t.advanced.modelConfigBanner.title,
+                    message: t.advanced.modelConfigBanner.message,
+                    actionLabel: t.advanced.modelConfigBanner.configure,
+                    dismissTooltip: t.advanced.modelConfigBanner.dismiss,
+                    onConfigure: _goToGmConfig,
                   ),
-                ),
-              // 空态 GM 未配置引导（发送前必配，置于嵌入横幅之上）
-              if (state.messages.isEmpty &&
-                  state.pendingUserMessage == null &&
-                  state.liveBlocks.isEmpty &&
-                  state.agentSteps.isEmpty &&
-                  !state.loadingHistory &&
-                  gmReady.value == false)
-                ModelConfigBanner(
-                  title: t.advanced.modelConfigBanner.title,
-                  message: t.advanced.modelConfigBanner.message,
-                  actionLabel: t.advanced.modelConfigBanner.configure,
-                  dismissTooltip: t.advanced.modelConfigBanner.dismiss,
-                  onConfigure: _goToGmConfig,
-                ),
-              // 2026-07-21：未配置 embedding 模型时常驻提示 Banner
-              if (advancedConfig != null &&
-                  !_embeddingBannerDismissed &&
-                  (advancedConfig.embeddingPresetId.isEmpty ||
-                      advancedConfig.embeddingModelId.isEmpty))
-                context.lmUi.embeddingMissingBanner(
-                  context,
-                  onConfigure: _goToEmbeddingSettings,
-                  onDismiss: () =>
-                      setState(() => _embeddingBannerDismissed = true),
-                ),
-              // 消息列表：占剩余空间（导演模式专属 harness 消息区）
-              Expanded(
-                child: SpotlightTarget(
-                  id: DemoTargetIds.sessionChatBody,
-                  child: DirectorChatBody(
-                    state: state,
-                    pureReading: _pureReading,
-                    fontScale: fontScale,
-                    onCopy: _handleCopy,
-                    onRegenerate: _handleRegenerate,
-                    onEdit: _handleEdit,
-                    onDeleteRound: _handleDeleteRound,
-                    onUseExample: (example) =>
-                        _inputKey.currentState?.setText(example),
-                    initialFocusMessageId: widget.initialFocusMessageId,
-                    // 体验重构 ：与故事模式同源（fork.regenerateWindowRounds）
-                    windowRounds: windowRounds,
-                    // U2（2026-09-04 撤销压缩）：与故事模式同构
-                    onUndoCompaction: _handleUndoCompaction,
-                    // 稿件变体切换/删除/高亮消费
-                    onSwitchVariant: controller.switchMessageVariant,
-                    onDeleteVariant: controller.deleteMessageVariant,
-                    onVariantFlashConsumed: controller.clearVariantFlash,
-                    // Recap 卡编辑当前剧情锚（写入走与 AI 同一数据源）
-                    onEditAnchor: (anchor) async {
-                      final ok = await controller.updateStoryAnchor(anchor);
-                      if (!context.mounted) return;
-                      final t = Translations.of(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          behavior: SnackBarBehavior.floating,
-                          content: Text(
-                            ok
-                                ? t.advanced.anchorEdit.saved
-                                : t.advanced.anchorEdit.saveBlocked,
-                          ),
-                        ),
-                      );
-                    },
+                if (advancedConfig != null &&
+                    !_embeddingBannerDismissed &&
+                    (advancedConfig.embeddingPresetId.isEmpty ||
+                        advancedConfig.embeddingModelId.isEmpty))
+                  context.lmUi.embeddingMissingBanner(
+                    context,
+                    onConfigure: _goToEmbeddingSettings,
+                    onDismiss: () =>
+                        setState(() => _embeddingBannerDismissed = true),
                   ),
+              ];
+              final conversation = SpotlightTarget(
+                id: DemoTargetIds.sessionChatBody,
+                child: DirectorChatBody(
+                  state: state,
+                  onVisibleHistoryTurns: controller.loadHistoryTurnDetails,
+                  pureReading: _pureReading,
+                  fontScale: fontScale,
+                  onCopy: _handleCopy,
+                  onRegenerate: _handleRegenerate,
+                  onEdit: _handleEdit,
+                  onDeleteRound: _handleDeleteRound,
+                  onUseExample: (example) =>
+                      _inputKey.currentState?.setText(example),
+                  initialFocusMessageId: widget.initialFocusMessageId,
+                  windowRounds: windowRounds,
+                  onUndoCompaction: _handleUndoCompaction,
+                  onSwitchVariant: controller.switchMessageVariant,
+                  onDeleteVariant: controller.deleteMessageVariant,
+                  onVariantFlashConsumed: controller.clearVariantFlash,
+                  onEditAnchor: (anchor) => unawaited(_saveStoryAnchor(anchor)),
+                  onOpenMemory: _openMemoryBrowser,
+                  onOpenWorldStatus: () =>
+                      _handleWorldStatusPressed(isWide: isWide),
+                  entityNameMap: _entityNameMap,
                 ),
-              ),
-              // ── 底部区域：正常态/失败态分架构 ────────────────────
-              if (!isFailed)
-                // 正常态：Column(mainAxisSize.min)，按自然高度，紧贴底部。
-                // 不套任何 SizedBox/ConstrainedBox 以免留下空白。
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (hasSuggestOverlay)
-                      Padding(
-                        padding: const EdgeInsets.only(
-                          bottom: IntermediateSpacing.sMd,
-                        ),
-                        child: context.lmUi.suggestReplyOverlay(
-                          context,
-                          replies: state.suggestReplies,
-                          isGenerating: state.isGeneratingSuggest,
-                          isExpanded: state.suggestExpanded,
-                          isFailed: state.suggestFailed,
-                          onSelect: (index) =>
-                              _handleSelectSuggest(controller, index),
-                          onClose: controller.closeSuggest,
-                          onToggle: controller.toggleSuggest,
-                          onRetry: controller.generateSuggestReplies,
-                        ),
-                      ),
-                    // 输入区域（工具栏 + 输入框）：用 GlobalKey 测量实际高度，
-                    // 供 SnackBar margin 计算使用
-                    SpotlightTarget(
-                      id: DemoTargetIds.sessionInputArea,
-                      child: SizeChangedLayoutNotifier(
-                        child: Container(
-                          key: _bottomAreaKey,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              context.lmUi.inputToolbar(
-                                context,
-                                onAddQuote: () => _handleInsertText('""', 1),
-                                onAddParen: () => _handleInsertText('()', 1),
-                                onSuggest: controller.generateSuggestReplies,
-                                isGeneratingSuggest: state.isGeneratingSuggest,
-                                canSuggest: state.messages.isNotEmpty,
-                                // 上下文圆环 chip 挂工具栏行末（满刻度=
-                                // 压缩触发线；12px 边距由 toolbar 自带 padding）
-                                trailing: ContextUsageChip(
-                                  numerator: _latestLastPromptTokens(state),
-                                  denominator: state.compactionTriggerTokens,
-                                  onTap: _showContextCapacitySheet,
+              );
+
+              final mainColumn = Column(
+                children: [
+                  if (hasDecision)
+                    DirectorDecisionViewport(
+                      maxHeight: decisionMaxHeight,
+                      accentColor: state.agentAskPrompt != null
+                          ? colors.primary
+                          : colors.warning,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (state.agentAskPrompt != null)
+                            DirectorAskBanner(
+                              prompt: state.agentAskPrompt!,
+                              onAnswer: controller.answerDirectorAsk,
+                              onSkip: () => controller.answerDirectorAsk(null),
+                              timeout: _askUserTimeout(advancedConfig),
+                              showIntro: !_hitlIntroShown,
+                              onIntroSeen: () {
+                                if (mounted) {
+                                  setState(() => _hitlIntroShown = true);
+                                }
+                              },
+                              fontScale: fontScale,
+                            ),
+                          if (state.agentApprovalPrompt != null) ...[
+                            if (state.agentAskPrompt != null)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: IntermediateSpacing.sSm,
+                                ),
+                                child: Divider(
+                                  height: 1,
+                                  thickness: 0.5,
+                                  color: colors.divider,
                                 ),
                               ),
-                              IntermediateChatInput(
-                                key: _inputKey,
-                                phase: state.phase,
-                                isStopping: state.isStopping,
-                                //  同族：手动压缩中禁用
-                                // 发送（控制器静默 no-op，UI 须同口径）
-                                isManualCompacting: state.isManualCompacting,
-                                isDirector: true,
-                                locked: _isInputLocked ||
-                                    (ref.watch(demoBridgeProvider) != null &&
-                                        isGenerating),
-                                onSend: _handleSend,
-                                onTextChanged: _onDraftTextChanged,
-                                onCancel: controller.cancel,
-                                sendKey: sendKey,
-                                newlineKey: newlineKey,
-                              ),
-                            ],
-                          ),
-                        ),
+                            DirectorApprovalBanner(
+                              prompt: state.agentApprovalPrompt!,
+                              onResolve: controller.resolveDirectorApproval,
+                              timeout: _approvalTimeout(advancedConfig),
+                              showIntro: !_hitlIntroShown,
+                              onIntroSeen: () {
+                                if (mounted) {
+                                  setState(() => _hitlIntroShown = true);
+                                }
+                              },
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                  ],
-                )
-              else
-                // 失败态：外层 ConstrainedBox(maxHeight) 限制底部区总高。
-                // v6.1 修复：v6 把所有组件都包在一个 SingleChildScrollView 里 →
-                // 输入框也会被滚走，违背直觉。v6.1 拆分：只有 FailureBar +
-                // SuggestOverlay 参与滚动，工具栏 + 输入框永远固定在底部。
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: bottomMaxHeight!),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 可滚动区域：FailureBar + SuggestOverlay
-                      // Flexible(loose) 占剩余空间但不超过，内容不满时
-                      // 只占自身高度（无空白），超高时 SingleChildScrollView 滚动。
-                      Flexible(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              FailureBar(
-                                failureContext: state.failureContext!,
-                                onRetry: controller.retry,
-                                onClear: () {
-                                  controller.clearRound();
-                                  if (!_isInputLocked) _tryRestoreDraft();
-                                },
-                                onContinueWithFts5:
-                                    controller.continueWithFts5Only,
-                                onContinueFromFailed:
-                                    controller.continueFromFailed,
-                                maxHeight: failureBarMaxHeight,
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, remaining) => Column(
+                        children: [
+                          if (modelNotices.isNotEmpty)
+                            ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxHeight: remaining.maxHeight *
+                                    (keyboardOpen ? 0.60 : 0.80),
                               ),
-                              if (hasSuggestOverlay)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    bottom: IntermediateSpacing.sMd,
-                                  ),
-                                  child: context.lmUi.suggestReplyOverlay(
-                                    context,
-                                    replies: state.suggestReplies,
-                                    isGenerating: state.isGeneratingSuggest,
-                                    isExpanded: state.suggestExpanded,
-                                    isFailed: state.suggestFailed,
-                                    onSelect: (index) =>
-                                        _handleSelectSuggest(controller, index),
-                                    onClose: controller.closeSuggest,
-                                    onToggle: controller.toggleSuggest,
-                                    onRetry: controller.generateSuggestReplies,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
+                              child: SingleChildScrollView(
+                                primary: false,
+                                child: Column(children: modelNotices),
+                              ),
+                            ),
+                          Expanded(child: conversation),
+                        ],
                       ),
-                      // 固定区域：工具栏 + 输入框，永远不滚动，始终在底部
-                      // 用 GlobalKey 测量实际高度，供 SnackBar margin 计算
-                      SizeChangedLayoutNotifier(
-                        child: Container(
-                          key: _bottomAreaKey,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              context.lmUi.inputToolbar(
-                                context,
-                                onAddQuote: () => _handleInsertText('""', 1),
-                                onAddParen: () => _handleInsertText('()', 1),
-                                onSuggest: controller.generateSuggestReplies,
-                                isGeneratingSuggest: state.isGeneratingSuggest,
-                                canSuggest: state.messages.isNotEmpty,
-                                // 上下文圆环 chip（失败态分支同款）
-                                trailing: ContextUsageChip(
-                                  numerator: _latestLastPromptTokens(state),
-                                  denominator: state.compactionTriggerTokens,
-                                  onTap: _showContextCapacitySheet,
+                    ),
+                  ),
+                  if (!isFailed)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: heightBelowDecision,
+                      ),
+                      child: SingleChildScrollView(
+                        primary: false,
+                        reverse: true,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (hasSuggestOverlay)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  bottom: IntermediateSpacing.sMd,
+                                ),
+                                child: context.lmUi.suggestReplyOverlay(
+                                  context,
+                                  replies: state.suggestReplies,
+                                  isGenerating: state.isGeneratingSuggest,
+                                  isExpanded: state.suggestExpanded,
+                                  isFailed: state.suggestFailed,
+                                  failureMessage: suggestFailureMessage,
+                                  onSelect: (index) =>
+                                      _handleSelectSuggest(controller, index),
+                                  onClose: controller.closeSuggest,
+                                  onToggle: controller.toggleSuggest,
+                                  onRetry: controller.generateSuggestReplies,
                                 ),
                               ),
-                              IntermediateChatInput(
-                                key: _inputKey,
-                                phase: state.phase,
-                                isStopping: state.isStopping,
-                                //  同族：手动压缩中禁用
-                                // 发送（失败态分支同款）
-                                isManualCompacting: state.isManualCompacting,
-                                isDirector: true,
-                                onSend: _handleSend,
-                                onTextChanged: _onDraftTextChanged,
-                                onCancel: controller.cancel,
+                            SpotlightTarget(
+                              id: DemoTargetIds.sessionInputArea,
+                              child: _buildComposerShell(
+                                state: state,
+                                controller: controller,
                                 sendKey: sendKey,
                                 newlineKey: newlineKey,
+                                isGenerating: isGenerating,
+                                applyDemoLock: true,
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
+                    )
+                  else
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: failureFooterMaxHeight,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: SingleChildScrollView(
+                              primary: false,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  FailureBar(
+                                    failureContext: state.failureContext!,
+                                    onRetry: controller.retry,
+                                    onClear: () async {
+                                      final session = widget.session;
+                                      await controller.clearRound();
+                                      if (mounted &&
+                                          widget.session == session) {
+                                        _tryRestoreDraft();
+                                      }
+                                    },
+                                    onContinueWithFts5:
+                                        controller.continueWithFts5Only,
+                                    onContinueFromFailed:
+                                        controller.continueFromFailed,
+                                  ),
+                                  if (hasSuggestOverlay)
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                        bottom: IntermediateSpacing.sMd,
+                                      ),
+                                      child: context.lmUi.suggestReplyOverlay(
+                                        context,
+                                        replies: state.suggestReplies,
+                                        isGenerating: state.isGeneratingSuggest,
+                                        isExpanded: state.suggestExpanded,
+                                        isFailed: state.suggestFailed,
+                                        failureMessage: suggestFailureMessage,
+                                        onSelect: (index) =>
+                                            _handleSelectSuggest(
+                                          controller,
+                                          index,
+                                        ),
+                                        onClose: controller.closeSuggest,
+                                        onToggle: controller.toggleSuggest,
+                                        onRetry:
+                                            controller.generateSuggestReplies,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight: failureFooterMaxHeight * 0.65,
+                            ),
+                            child: SingleChildScrollView(
+                              primary: false,
+                              reverse: true,
+                              child: _buildComposerShell(
+                                state: state,
+                                controller: controller,
+                                sendKey: sendKey,
+                                newlineKey: newlineKey,
+                                isGenerating: isGenerating,
+                                applyDemoLock: false,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              );
+
+              return Row(
+                children: [
+                  Expanded(child: mainColumn),
+                  AnimatedSize(
+                    duration: LmMotion.durationFor(context, LmMotion.emphasis),
+                    curve: LmMotion.easeEmphasis,
+                    alignment: Alignment.centerLeft,
+                    child: showDesktopInspector
+                        ? SizedBox(
+                            width: _kWorldInspectorWidth,
+                            height: bodyMaxHeight,
+                            child: Row(
+                              children: [
+                                VerticalDivider(
+                                  width: 1,
+                                  thickness: 1,
+                                  color: colors.divider,
+                                ),
+                                Expanded(
+                                  child: DirectorWorldStatusPanel(
+                                    key: const ValueKey(
+                                      'desktop-world-status-panel',
+                                    ),
+                                    loader: controller.loadScriptBoard,
+                                    fallbackAnchor: state.agentStoryAnchor ??
+                                        state.session.storyAnchor,
+                                    fallbackNarrativeTime:
+                                        state.session.currentNarrativeTime,
+                                    entityNameMap: _entityNameMap,
+                                    pureReading: _pureReading,
+                                    isGenerating: isGenerating,
+                                    onOpenMemory: _openMemoryBrowser,
+                                    onTogglePureReading: () =>
+                                        unawaited(_togglePureReading()),
+                                    onExport: () =>
+                                        unawaited(_showExportSheet()),
+                                    onUpdateTitle: () =>
+                                        unawaited(_updateSessionTitle()),
+                                    onEditAnchor: _saveStoryAnchor,
+                                    onClose: () => setState(
+                                      () => _desktopWorldInspectorOpen = false,
+                                    ),
+                                    refreshToken: (
+                                      state.session.sessionId,
+                                      state.messages.length,
+                                      state.agentStoryAnchor?.updatedTurn,
+                                      state.session.storyAnchor?.updatedTurn,
+                                      _worldStatusRevision,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : const SizedBox.shrink(),
                   ),
-                ),
-            ],
-          );
-        },
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  String? _buildHeaderSubtitle(AdvancedChatState state) {
+    final anchor = state.agentStoryAnchor ?? state.session.storyAnchor;
+    final rawTime = anchor?.narrativeTime?.trim();
+    final time = (rawTime != null && rawTime.isNotEmpty)
+        ? rawTime
+        : state.session.currentNarrativeTime?.trim();
+    final rawArc = anchor?.arc?.trim();
+    final rawOneLiner = anchor?.oneLiner?.trim();
+    final summary = (rawArc != null && rawArc.isNotEmpty)
+        ? rawArc
+        : (rawOneLiner != null && rawOneLiner.isNotEmpty)
+            ? rawOneLiner
+            : null;
+    final parts = <String>[
+      if (time != null && time.isNotEmpty) time,
+      if (summary != null && summary.isNotEmpty) summary,
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  Widget _buildComposerShell({
+    required AdvancedChatState state,
+    required AdvancedChatController controller,
+    required SendKey sendKey,
+    required NewlineKey newlineKey,
+    required bool isGenerating,
+    required bool applyDemoLock,
+  }) {
+    final locked = applyDemoLock &&
+        (_isInputLocked ||
+            (ref.watch(demoBridgeProvider) != null && isGenerating));
+    return SizeChangedLayoutNotifier(
+      child: Container(
+        key: _bottomAreaKey,
+        child: DirectorCompactComposer(
+          key: _inputKey,
+          phase: state.phase,
+          isStopping: state.isStopping,
+          isManualCompacting: state.isManualCompacting,
+          isPreparingRegenerate: state.isPreparingRegenerate,
+          preserveWhitespace: state.isAwaitingFirstRound,
+          locked: locked,
+          onSend: _handleSend,
+          onTextChanged: _onDraftTextChanged,
+          onCancel: controller.cancel,
+          onAddQuote: () => _handleInsertText('""', 1),
+          onAddParen: () => _handleInsertText('()', 1),
+          onSuggest: controller.generateSuggestReplies,
+          isGeneratingSuggest: state.isGeneratingSuggest,
+          canSuggest: state.messages.isNotEmpty,
+          sendKey: sendKey,
+          newlineKey: newlineKey,
+          contextNumerator: _currentEstimateTokens(state),
+          contextDenominator: state.compactionTriggerTokens,
+          onContextTap: _showContextCapacitySheet,
+          queuedMessageSlot: state.queuedMessage != null
+              ? _buildQueuedMessageChip(state)
+              : null,
+        ),
       ),
     );
   }
@@ -929,47 +1086,109 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   /// 弹出稿件导出选项 sheet。
   ///
-  /// 数据取 provider 当前 state（messages/artifactsByTurnNumber 已由
-  /// loadHistory 装配），导出全程只读，生成中也可导出已完成幕。
   Future<void> _showExportSheet() async {
-    final state = ref.read(advancedChatControllerProvider(widget.session));
-    await DirectorExportSheet.show(context, state);
+    final provider = advancedChatControllerProvider(widget.session);
+    final controller = ref.read(provider.notifier);
+    final snapshot = ref.read(provider);
+    final failed = Translations.of(context).advanced.export.failed;
+    await DirectorExportSheet.show(
+      context,
+      snapshot,
+      loadArtifacts: () async {
+        final artifacts = await controller.loadSessionArtifacts(
+          snapshot.session.sessionId,
+        );
+        // A different revision must not combine old text with new backstage or recap.
+        if (!mounted) throw StateError(failed);
+        final current = ref.read(provider);
+        if (!identical(current.messages, snapshot.messages) ||
+            current.compactedTurnBase != snapshot.compactedTurnBase) {
+          throw StateError(failed);
+        }
+        return artifacts;
+      },
+    );
   }
 
-  /// 弹出场记板（「AI 眼中的现在」）。
-  ///
-  /// 数据由 controller.loadScriptBoard 现算，与 runner 注入面同源
-  /// （assembleDirectorCoreBlocks）；只读，随时可看。
-  Future<void> _showScriptBoard() async {
+  void _openMemoryBrowser() {
+    final session =
+        ref.read(advancedChatControllerProvider(widget.session)).session;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MemoryBrowserPage(session: session),
+      ),
+    );
+  }
+
+  Future<bool> _saveStoryAnchor(StoryAnchor anchor) async {
     final controller = ref.read(
       advancedChatControllerProvider(widget.session).notifier,
     );
-    await DirectorScriptBoardSheet.show(
-      context,
-      loader: controller.loadScriptBoard,
+    final ok = await controller.updateStoryAnchor(anchor);
+    if (!mounted) return ok;
+    if (ok) {
+      setState(() => _worldStatusRevision++);
+    }
+    final t = Translations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          ok ? t.advanced.anchorEdit.saved : t.advanced.anchorEdit.saveBlocked,
+        ),
+      ),
+    );
+    return ok;
+  }
+
+  void _handleWorldStatusPressed({required bool isWide}) {
+    if (isWide) {
+      setState(() {
+        _desktopWorldInspectorOpen = !_desktopWorldInspectorOpen;
+      });
+      return;
+    }
+    final currentState = ref.read(
+      advancedChatControllerProvider(widget.session),
+    );
+    final controller = ref.read(
+      advancedChatControllerProvider(widget.session).notifier,
+    );
+    final generating = currentState.phase != IntermediatePhase.idle &&
+        currentState.phase != IntermediatePhase.failed;
+    unawaited(
+      DirectorWorldStatusSheet.show(
+        context,
+        loader: controller.loadScriptBoard,
+        fallbackAnchor:
+            currentState.agentStoryAnchor ?? currentState.session.storyAnchor,
+        fallbackNarrativeTime: currentState.session.currentNarrativeTime,
+        entityNameMap: _entityNameMap,
+        pureReading: _pureReading,
+        isGenerating: generating,
+        onOpenMemory: _openMemoryBrowser,
+        onTogglePureReading: () => unawaited(_togglePureReading()),
+        onExport: () => unawaited(_showExportSheet()),
+        onUpdateTitle: () => unawaited(_updateSessionTitle()),
+        onEditAnchor: _saveStoryAnchor,
+      ),
     );
   }
 
   /// 顶栏菜单触发：更新会话标题
   Future<void> _updateSessionTitle() async {
-    final t = Translations.of(context);
-    final messenger = ScaffoldMessenger.of(context);
+    final sessionId = widget.session.sessionId;
     final controller = ref.read(
       advancedChatControllerProvider(widget.session).notifier,
     );
-    final updated = await controller.updateTitle(force: true);
-    if (!mounted) return;
-    messenger
+    final result = await controller.updateTitleWithResult(force: true);
+    if (!mounted || widget.session.sessionId != sessionId) return;
+    final message = directorTitleUpdateText(Translations.of(context), result);
+    if (message == null) return;
+    ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text(
-            updated
-                ? t.advanced.settings.titleUpdated
-                : t.advanced.settings.titleFailed,
-          ),
-        ),
+        SnackBar(behavior: SnackBarBehavior.floating, content: Text(message)),
       );
   }
 
@@ -1018,18 +1237,17 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   /// - 括号 `()`：光标在两个括号之间
   void _handleInsertText(String text, int cursorOffset) {
     if (_isInputLocked) return; // 锁定期间插入类改写全部无效
-    _inputKey.currentState
-        ?.insertAtCursor(text, cursorOffsetFromStart: cursorOffset);
+    _inputKey.currentState?.insertAtCursor(
+      text,
+      cursorOffsetFromStart: cursorOffset,
+    );
   }
 
   /// 2026-07-29 推荐回复：选择某条候选回复
   ///
   /// 从 controller 获取选中条文本，插入到输入框光标位置。
   /// 不清空候选列表（用户可能想再选其他条）。
-  void _handleSelectSuggest(
-    AdvancedChatController controller,
-    int index,
-  ) {
+  void _handleSelectSuggest(AdvancedChatController controller, int index) {
     final selected = controller.selectSuggestReply(index);
     if (selected != null) {
       _inputKey.currentState?.insertAtCursor(selected);
@@ -1041,11 +1259,22 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   /// P3 修订（DOC-09A-2 §6.5）：失败/取消后 pendingUserMessage 保留在 UI。
   /// 若用户未处理旧消息就发新消息，弹确认框询问是否覆盖，避免静默丢失。
   Future<void> _handleSend(String userInput) async {
-    final currentState = ref.read(
-      advancedChatControllerProvider(widget.session),
+    final session = widget.session;
+    final currentState = ref.read(advancedChatControllerProvider(session));
+    final controller = ref.read(
+      advancedChatControllerProvider(session).notifier,
     );
-    if (currentState.pendingUserMessage != null &&
+    final queueing = controller.canQueueMessage;
+    if (!queueing &&
+        currentState.phase != IntermediatePhase.idle &&
         currentState.phase != IntermediatePhase.failed) {
+      _inputKey.currentState?.setText(userInput);
+      return;
+    }
+    if (!queueing &&
+        currentState.pendingUserMessage != null &&
+        (controller.hasRetainedInput ||
+            currentState.phase != IntermediatePhase.failed)) {
       final t = Translations.of(context);
       final confirmed = await context.lmUi.confirmDialog(
         context,
@@ -1053,19 +1282,113 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
         content: t.advanced.chat.messageActions.overwritePendingConfirm,
         confirmLabel: t.common.confirm,
       );
-      if (!confirmed || !mounted) return;
+      if (!mounted || widget.session != session) return;
+      if (!confirmed) {
+        _inputKey.currentState?.setText(userInput);
+        return;
+      }
+    }
+    // 生成中发送 → 单槽待发；槽位已占用时先确认覆盖（不静默丢已有待发）
+    var overwriteQueued = false;
+    if (queueing && currentState.queuedMessage != null) {
+      final t = Translations.of(context);
+      final confirmed = await context.lmUi.confirmDialog(
+        context,
+        title: t.advanced.queue.overwriteTitle,
+        content: t.advanced.queue.overwriteConfirm(
+          queued: currentState.queuedMessage!,
+        ),
+        confirmLabel: t.common.confirm,
+      );
+      if (!confirmed || !mounted) {
+        _inputKey.currentState?.setText(userInput);
+        return;
+      }
+      overwriteQueued = true;
+    }
+    if (!mounted || widget.session != session) return;
+    if (queueing != controller.canQueueMessage ||
+        (overwriteQueued &&
+            ref.read(advancedChatControllerProvider(session)).queuedMessage !=
+                currentState.queuedMessage)) {
+      _inputKey.currentState?.setText(userInput);
+      return;
     }
     // 发送消息：立即释放 Demo 输入锁并清空输入框、收起软键盘
     final bridge = ref.read(demoBridgeProvider);
     bridge?.inputLock.release();
     _inputKey.currentState?.clear();
+    _draftDebounce?.cancel();
     FocusScope.of(context).unfocus();
 
-    await ref
-        .read(advancedChatControllerProvider(widget.session).notifier)
-        .sendMessage(userInput);
-    // 已发送即不再是草稿（清窄列；Map 由切走分支维护）
-    _persistDraftColumn(widget.session.sessionId, '');
+    final consumed = await controller.sendMessage(
+      userInput,
+      overwriteQueued: overwriteQueued,
+    );
+    if (!mounted || widget.session != session) return;
+    if (!consumed) {
+      _inputKey.currentState?.setText(userInput);
+      if (ref.read(dataStoreOperationGuardProvider).isOverwriting) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(t.common.backupOverwriteInProgress),
+          ),
+        );
+      }
+      return;
+    }
+    if (queueing) return;
+    if (_inputKey.currentState?.currentText.isEmpty ?? true) {
+      _draftDebounce?.cancel();
+      _persistDraftColumn(session, '');
+    }
+  }
+
+  /// 单槽待发消息条：显示排队内容 + 撤回（退还输入框可编辑）
+  Widget _buildQueuedMessageChip(AdvancedChatState state) {
+    final colors = context.lm.palette;
+    final t = Translations.of(context);
+    final queued = state.queuedMessage;
+    if (queued == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surfaceElevated,
+          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.schedule, size: 16, color: colors.muted),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                t.advanced.queue.chip(text: queued),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: IntermediateTextStyles.caption.copyWith(
+                  color: colors.ink,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                final session = widget.session;
+                final restored = await ref
+                    .read(advancedChatControllerProvider(session).notifier)
+                    .withdrawQueuedMessage();
+                if (mounted && widget.session == session && restored != null) {
+                  _inputKey.currentState?.setText(restored);
+                }
+              },
+              child: Text(t.advanced.queue.withdraw),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 复制消息内容到剪贴板，并显示 SnackBar 反馈
@@ -1110,15 +1433,17 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   /// 编辑消息（保存 / 保存并发送）
   ///
-  /// - pendingUserMessage：保存=更新内存文本；保存并发送=editPendingUserMessage
+  /// - pendingUserMessage：保存更新待重试文本；保存并发送=editPendingUserMessage
   /// - 已持久化用户消息：保存=editMessageContent；保存并发送=editAndResend
   /// - 已持久化助手消息：只有保存=editMessageContent
   Future<void> _handleEdit(ChatMessage message) async {
-    final currentState = ref.read(
-      advancedChatControllerProvider(widget.session),
-    );
+    final session = widget.session;
+    final provider = advancedChatControllerProvider(session);
+    final currentState = ref.read(provider);
+    final controller = ref.read(provider.notifier);
     final isPending =
         currentState.pendingUserMessage?.messageId == message.messageId;
+    final isRetained = isPending && controller.hasRetainedInput;
 
     final allowResend = isPending || message.role == 'user';
 
@@ -1126,17 +1451,28 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       context,
       initialContent: message.content ?? '',
       allowResend: allowResend,
+      saveBeforeClosing: isRetained
+          ? (content) async {
+              if (!mounted ||
+                  widget.session != session ||
+                  ref.read(provider).pendingUserMessage?.messageId !=
+                      message.messageId) {
+                return false;
+              }
+              return controller.updatePendingUserMessageContent(content);
+            }
+          : null,
+      saveErrorMessage: isRetained ? t.advanced.failure.inputSaveFailed : null,
     );
-    if (result == null || !mounted) return;
+    if (result == null || !mounted || widget.session != session) return;
 
-    final controller = ref.read(
-      advancedChatControllerProvider(widget.session).notifier,
-    );
-    if (isPending) {
+    if (isRetained) {
+      if (result.resend) await controller.retryPendingUserMessage();
+    } else if (isPending) {
       if (result.resend) {
         await controller.editPendingUserMessage(result.content);
       } else {
-        controller.updatePendingUserMessageContent(result.content);
+        await controller.updatePendingUserMessageContent(result.content);
       }
     } else if (result.resend) {
       await controller.editAndResend(message, result.content);
@@ -1148,7 +1484,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
   /// 删除整轮 / 删除 pendingUserMessage
   ///
   /// P3 修订：检测 targetMessage 是否为 pendingUserMessage（未持久化）。
-  /// - 是 pendingUserMessage → 调 controller.deletePendingUserMessage（无 DB 删除）
+  /// - 是 pendingUserMessage → 调 controller.deletePendingUserMessage
   /// - 否 → 调 controller.deleteRound（删 DB 记录）
   /// 两种场景用不同确认文案，让用户清楚自己在删什么。
   Future<void> _handleDeleteRound(ChatMessage message) async {
@@ -1175,7 +1511,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
       advancedChatControllerProvider(widget.session).notifier,
     );
     if (isPending) {
-      controller.deletePendingUserMessage();
+      await controller.deletePendingUserMessage();
     } else {
       await controller.deleteRound(message);
     }
@@ -1203,19 +1539,24 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
 
   // ── 上下文用量指示（上下文用量指示设计 §4.1/§4.3）────────────────
 
-  /// 环形指示器分子：最新轮 lastPromptTokens 优先，回退旧会话回填值
+  /// 最近一次主请求的协议原生 prompt（兼容旧面板字段/旧日志）
   int? _latestLastPromptTokens(AdvancedChatState state) {
-    final summary = _latestTurnSummary(state);
+    final summary = state.latestHistoryTurnSummary;
     if (summary?.lastPromptTokens != null) return summary!.lastPromptTokens;
     return state.backfilledPromptTokens;
   }
 
-  AgentWorkSummary? _latestTurnSummary(AdvancedChatState state) {
-    final artifacts = state.artifactsByTurnNumber;
-    if (artifacts == null || artifacts.isEmpty) return null;
-    final latestTurn = artifacts.keys.reduce((a, b) => a > b ? a : b);
-    return artifacts[latestTurn]?.agentWorkSummary;
+  /// 主数字：当前预计上下文（压缩后为本地调整值；null = 无数据）
+  ///
+  /// 不回退历史实报：重进会话/压缩后没有有效估算时保持「—」，
+  /// 不把压缩前的旧请求输入复活成当前值。
+  int? _currentEstimateTokens(AdvancedChatState state) {
+    return state.contextEstimate?.tokens;
   }
+
+  /// 主数字是否为本地估算
+  bool _currentEstimateIsLocal(AdvancedChatState state) =>
+      state.contextEstimate?.isEstimated ?? false;
 
   /// 上下文构成段——装配期四段字符占比 × 最近请求 promptTokens
   ///
@@ -1229,7 +1570,8 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     if (chars == null || chars.isEmpty) return null;
     final totalChars = chars.values.fold<int>(0, (a, b) => a + b);
     if (totalChars <= 0) return null;
-    final prompt = _latestLastPromptTokens(state);
+    // 与主数字同基准，保证各分项相加 ≈ 主数字（压缩后主数字已调整）
+    final prompt = _currentEstimateTokens(state);
     final labels = <String, String>{
       'system': t.advanced.contextComposition.system,
       'coreBlocks': t.advanced.contextComposition.coreBlocks,
@@ -1238,35 +1580,15 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
     };
     return [
       for (final entry in labels.entries)
-        ContextCompositionSegment(
-          label: entry.value,
-          fraction: (chars[entry.key] ?? 0) / totalChars,
-          tokens: prompt == null
-              ? null
-              : ((chars[entry.key] ?? 0) / totalChars * prompt).round(),
-        ),
+        if ((chars[entry.key] ?? 0) > 0)
+          ContextCompositionSegment(
+            label: entry.value,
+            fraction: (chars[entry.key] ?? 0) / totalChars,
+            tokens: prompt == null
+                ? null
+                : ((chars[entry.key] ?? 0) / totalChars * prompt).round(),
+          ),
     ];
-  }
-
-  /// 会话加权平均缓存命中率（§3.3：仅统计有 lastPromptTokens 的轮次）
-  double? _averageCacheHit(AdvancedChatState state) {
-    final summaries = state.artifactsByTurnNumber?.values
-        .map((a) => a.agentWorkSummary)
-        .whereType<AgentWorkSummary>()
-        .where((s) => s.lastPromptTokens != null && s.lastPromptTokens! > 0)
-        .toList();
-    if (summaries == null || summaries.isEmpty) return null;
-    var prompt = 0;
-    var cached = 0;
-    for (final s in summaries) {
-      prompt += s.lastPromptTokens!;
-      cached += s.lastCacheReadTokens ?? 0;
-    }
-    // 跨协议近似口径（与故事侧 averageCacheHit 同步）：Anthropic 的
-    // promptTokens 不含 cache-read，OpenAI 的含——分母统一用
-    // uncached + cached 输入 token，避免 OpenAI 下系统性低估。
-    if (prompt + cached == 0) return null;
-    return cached / (cached + prompt);
   }
 
   /// 上下文用量详情面板（sheet 内 Consumer watch，流式打字自动刷新）
@@ -1282,17 +1604,27 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
             final state = ref.watch(
               advancedChatControllerProvider(widget.session),
             );
+            // 数字、命中率与异常标识必须整组取自同一样本（最新轮摘要，
+            // 或整组事件回填），不得一半摘要一半回填拼接。
+            final requestUsage = state.latestMainRequestUsage;
+            final history = state.historyUsageStatistics;
             return ContextUsageDetailSheet(
               contextWindowTokens: state.contextWindowTokens,
               compactionTriggerTokens: state.compactionTriggerTokens,
-              lastPromptTokens: _latestLastPromptTokens(state),
-              lastCompletionTokens:
-                  _latestTurnSummary(state)?.lastCompletionTokens,
-              lastCacheReadTokens:
-                  _latestTurnSummary(state)?.lastCacheReadTokens ??
-                      state.backfilledCacheReadTokens,
-              averageCacheHit: _averageCacheHit(state),
-              sessionRounds: state.artifactsByTurnNumber?.length ?? 0,
+              lastPromptTokens:
+                  requestUsage?.promptTokens ?? _latestLastPromptTokens(state),
+              // 主数字（当前预计）与最近请求实报分开，避免把历史值当当前值
+              currentEstimateTokens: _currentEstimateTokens(state),
+              currentEstimateIsLocal: _currentEstimateIsLocal(state),
+              lastRequestInputTokens: requestUsage?.inputTokens,
+              requestInputIsComplete: true,
+              lastCompletionTokens: requestUsage?.completionTokens,
+              lastCacheReadTokens: requestUsage?.cacheReadTokens,
+              lastCacheHitRatio: state.latestMainRequestCacheHitRatio,
+              lastCacheSampleInvalid: state.latestMainRequestCacheSampleInvalid,
+              averageCacheHit: history.averageCacheHit,
+              cacheCoveredRounds: history.cacheCoveredRounds,
+              sessionRounds: history.sessionRounds,
               // 上下文构成（导演侧装配期埋点；无数据不渲染）
               composition: _compositionSegments(state, t),
               compositionNote: t.advanced.contextComposition.estimateNote,
@@ -1340,9 +1672,7 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
                         messenger.showSnackBar(
                           SnackBar(
                             behavior: SnackBarBehavior.floating,
-                            content: Text(
-                              t.common.contextRing.compactDone,
-                            ),
+                            content: Text(t.common.contextRing.compactDone),
                           ),
                         );
                     }
@@ -1351,6 +1681,82 @@ class _AdvancedChatPageState extends ConsumerState<AdvancedChatPage> {
               },
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+class _WorldStatusNavChip extends StatefulWidget {
+  const _WorldStatusNavChip({
+    required this.active,
+    required this.onTap,
+  });
+
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  State<_WorldStatusNavChip> createState() => _WorldStatusNavChipState();
+}
+
+class _WorldStatusNavChipState extends State<_WorldStatusNavChip> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.lm.palette;
+    final t = Translations.of(context);
+    final radius = BorderRadius.circular(context.lmUi.radius(LmCorner.full));
+
+    return Center(
+      child: Tooltip(
+        message: t.advanced.worldSheet.entryTooltip,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              key: const ValueKey('director-world-status-entry'),
+              onTap: widget.onTap,
+              borderRadius: radius,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 44),
+                child: Center(
+                  child: AnimatedContainer(
+                    duration: LmMotion.durationFor(context, LmMotion.micro),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: IntermediateSpacing.sMd,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colors.primary.withValues(
+                        alpha: widget.active || _hovered ? 0.16 : 0.10,
+                      ),
+                      borderRadius: radius,
+                      border: Border.all(
+                        color: colors.primary.withValues(
+                          alpha: widget.active ? 0.48 : 0.28,
+                        ),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Text(
+                      t.advanced.worldSheet.entryLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: IntermediateTextStyles.captionSm.copyWith(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: colors.primary,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1373,45 +1779,116 @@ final directorGmReadyProvider =
 });
 
 final advancedChatControllerProvider = StateNotifierProvider.family<
-    AdvancedChatController, AdvancedChatState, ChatSession>(
-  (ref, session) {
-    return AdvancedChatController(
-      chatRepository: ref.read(chatRepositoryProvider),
-      configurationResolver: ConfigurationResolver(
-        presetRepository: ref.read(apiPresetRepositoryProvider),
-        settingsRepository: ref.read(settingsRepositoryProvider),
-        logger: ref.read(loggerProvider),
-      ),
-      llmService: ref.read(llmServiceProvider),
-      experienceRepository: ref.read(experienceRepositoryProvider),
-      embeddingService: ref.read(embeddingServiceProvider),
-      persistenceService: ref.read(intermediatePersistenceServiceProvider),
-      failureLogRepository: ref.read(failureLogRepositoryProvider),
-      tokenCounter: ref.read(tokenCounterProvider),
-      getConfig: () => ref.read(advancedConfigProvider.future),
+    AdvancedChatController, AdvancedChatState, ChatSession>((ref, session) {
+  return AdvancedChatController(
+    operationGuard: ref.read(dataStoreOperationGuardProvider),
+    chatRepository: ref.read(chatRepositoryProvider),
+    configurationResolver: ConfigurationResolver(
+      presetRepository: ref.read(apiPresetRepositoryProvider),
+      settingsRepository: ref.read(settingsRepositoryProvider),
       logger: ref.read(loggerProvider),
-      session: session,
-      titleGenerator: SessionTitleGenerator(
+    ),
+    llmService: ref.read(llmServiceProvider),
+    experienceRepository: ref.read(experienceRepositoryProvider),
+    embeddingService: ref.read(embeddingServiceProvider),
+    persistenceService: ref.read(intermediatePersistenceServiceProvider),
+    failureLogRepository: ref.read(failureLogRepositoryProvider),
+    tokenCounter: ref.read(tokenCounterProvider),
+    getConfig: () => ref.read(advancedConfigProvider.future),
+    logger: ref.read(loggerProvider),
+    session: session,
+    titleGenerator: SessionTitleGenerator(
+      llmService: ref.read(llmServiceProvider),
+    ),
+    consolidator: MemoryConsolidator(
+      llmService: ref.read(llmServiceProvider),
+    ),
+    // 事实层仓库（agent loop 的 query_facts/update_facts）
+    factualRepository: ref.read(factualRepositoryProvider),
+    // 导演轮轮前压缩（与故事模式共用压缩服务）
+    compactionService: ref.read(intermediateCompactionServiceProvider),
+    // v0.3 体验重构 ：durable 事件日志（崩溃恢复 + 过程审计）
+    // 散建收口——统一读组合根 provider
+    agentEventLogRepository: ref.read(agentEventLogRepositoryProvider),
+    // 工程上下文模式原子切换（同一仓库实例实现该接口）
+    engineeringContextSwitch: ref.read(agentEventLogRepositoryProvider),
+    // 工程压缩事务服务（开启态；生产摘要器按轮懒解析 GM 配置与
+    // 账本冻结前缀）
+    engineeringCompaction: EngineeringCompactionService(
+      database: ref.read(appDatabaseProvider),
+      eventRepository: ref.read(agentEventLogRepositoryProvider),
+      chatRepository: ref.read(chatRepositoryProvider),
+      experienceRepository: ref.read(experienceRepositoryProvider),
+      summarizer: _SessionEngineeringSummarizer(
         llmService: ref.read(llmServiceProvider),
+        session: session,
+        resolver: ref.read(configurationResolverProvider),
+        eventRepository: ref.read(agentEventLogRepositoryProvider),
       ),
-      consolidator: MemoryConsolidator(
-        llmService: ref.read(llmServiceProvider),
+      // 压缩参数缺省同样来自配置段（配置未加载的瞬时窗口回落解析
+      // 兜底默认，值与 JSON 相同；触发/选材/溢出路径按轮以会话实际值
+      // 与真实 maxTokens 再覆写）
+      tuning: EngineeringCompactionTuning.fromConfig(
+        ref.read(advancedConfigProvider).valueOrNull?.engineeringCompaction ??
+            const AdvancedEngineeringCompactionConfig(),
       ),
-      // 事实层仓库（agent loop 的 query_facts/update_facts）
-      factualRepository: ref.read(factualRepositoryProvider),
-      // 导演轮轮前压缩（与故事模式共用压缩服务）
-      compactionService: ref.read(intermediateCompactionServiceProvider),
-      // v0.3 体验重构 ：durable 事件日志（崩溃恢复 + 过程审计）
-      // 散建收口——统一读组合根 provider
-      agentEventLogRepository: ref.read(agentEventLogRepositoryProvider),
-      // 向导「初始化你的角色」卡路径：物化时应用卡（服务无状态，即建即用）
-      resourceApplyService: ResourceApplyService(
-        resourceRepository: ref.read(resourceLibraryRepositoryProvider),
-        projectionService: ResourceProjectionService(
-          repository: ref.read(factualRepositoryProvider),
-        ),
+      logger: ref.read(loggerProvider),
+    ),
+    // 向导「初始化你的角色」卡路径：物化时应用卡（服务无状态，即建即用）
+    resourceApplyService: ResourceApplyService(
+      resourceRepository: ref.read(resourceLibraryRepositoryProvider),
+      projectionService: ResourceProjectionService(
+        repository: ref.read(factualRepositoryProvider),
       ),
-      capabilitiesOverride: ref.watch(agentCapabilitiesOverrideProvider),
+    ),
+    capabilitiesOverride: ref.watch(agentCapabilitiesOverrideProvider),
+  );
+});
+
+/// 工程摘要器的会话级代理：每次调用按当前 GM 配置与账本冻结前缀构建
+/// 共享前部式请求（轮中切换模型后摘要请求随新配置——不做跨模型缓存
+/// 命中预期）。
+class _SessionEngineeringSummarizer implements EngineeringSummarizer {
+  _SessionEngineeringSummarizer({
+    required LlmService llmService,
+    required this.session,
+    required ConfigurationResolver resolver,
+    required AgentEventLogRepository eventRepository,
+  })  : _llmService = llmService,
+        _resolver = resolver,
+        _eventRepository = eventRepository;
+
+  final LlmService _llmService;
+  final ChatSession session;
+  final ConfigurationResolver _resolver;
+  final AgentEventLogRepository _eventRepository;
+
+  @override
+  Future<EngineeringSummaryOutput> summarize({
+    required String sessionId,
+    required List<AgentMessage> intervalMessages,
+    required int narrativeBoundaryTurn,
+    required List<ToolDefinition> tools,
+    required void Function(String delta)? onDelta,
+  }) async {
+    final naming = await _resolver.resolveAdvancedGeneratingNamingConfig(
+      session,
     );
-  },
-);
+    if (naming == null) {
+      throw StateError(t.advanced.settings.engineeringSummaryNeedsModel);
+    }
+    final events = await _eventRepository.readEvents(sessionId);
+    final frozen = DirectorSurfaceV2.latestFrozenPrefixOf(events) ?? '';
+    return LlmEngineeringSummarizer(
+      llmService: _llmService,
+      namingConfig: naming,
+      frozenPrefix: frozen,
+    ).summarize(
+      sessionId: sessionId,
+      intervalMessages: intervalMessages,
+      narrativeBoundaryTurn: narrativeBoundaryTurn,
+      tools: tools,
+      onDelta: onDelta,
+    );
+  }
+}

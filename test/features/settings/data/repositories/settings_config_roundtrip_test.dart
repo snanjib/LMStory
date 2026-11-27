@@ -94,6 +94,12 @@ void main() {
       'advanced.harness.full_chunk_events': true,
       'advanced.harness.foreshadow_check_interval': 3,
       'advanced.harness.event_log_retention_turns': 50,
+      'advanced.harness.maintenance_gap_interval': 9,
+      'advanced.harness.maintenance_nudge_cooldown': 5,
+      'advanced.harness.major_review_interval': 40,
+      'advanced.harness.maintenance_extra_steps': 8,
+      'advanced.harness.recent_active_entities_window': 20,
+      'advanced.harness.recent_active_entities_cap': 12,
       'advanced.context.effective_context_limit': 65536,
       'advanced.contextBudget.compactionTriggerRatio': 0.4,
       // 上下文配置收敛：recentMinRatio/retrievalRatio 已从
@@ -109,6 +115,7 @@ void main() {
       'advanced.embedding.fallback_on_failure': true,
       'advanced.memory.factual.enabled': false,
       'advanced.memory.factual.key_entity_importance_threshold': 6,
+      'advanced.memory.factual.key_entity_auto_cap': 7,
       'advanced.memory.factual.injection_max_entities': 10,
       'advanced.memory.factual.force_inject_safety_cap': 40,
       'advanced.memory.factual.modify_confidence_threshold': 3,
@@ -159,6 +166,12 @@ void main() {
     expect(cfg.advanced.harness.fullChunkEvents, isTrue);
     expect(cfg.advanced.harness.foreshadowCheckInterval, 3);
     expect(cfg.advanced.harness.eventLogRetentionTurns, 50);
+    expect(cfg.advanced.harness.maintenanceGapInterval, 9);
+    expect(cfg.advanced.harness.maintenanceNudgeCooldown, 5);
+    expect(cfg.advanced.harness.majorReviewInterval, 40);
+    expect(cfg.advanced.harness.maintenanceExtraSteps, 8);
+    expect(cfg.advanced.harness.recentActiveEntitiesWindow, 20);
+    expect(cfg.advanced.harness.recentActiveEntitiesCap, 12);
     expect(cfg.advanced.context.effectiveContextLimit, 65536);
     expect(cfg.advanced.contextBudget.compactionTriggerRatio, 0.4);
     expect(cfg.advanced.contextBudget.recentMinTokenTarget, 16000);
@@ -170,10 +183,15 @@ void main() {
     expect(cfg.advanced.embedding.fallbackOnFailure, isTrue);
     expect(cfg.advanced.memory.factual.enabled, isFalse);
     expect(cfg.advanced.memory.factual.keyEntityImportanceThreshold, 6);
+    expect(cfg.advanced.memory.factual.keyEntityAutoCap, 7);
     expect(cfg.advanced.memory.factual.injectionMaxEntities, 10);
     expect(cfg.advanced.memory.factual.forceInjectSafetyCap, 40);
     expect(cfg.advanced.memory.factual.modifyConfidenceThreshold, 3);
     expect(cfg.advanced.memory.factual.maxUpdatesPer3Turns, 2);
+    expect(
+      AppConfig.fromJson(jsonMap).advanced.memory.factual.maxAttrValueLength,
+      1000,
+    );
     expect(cfg.advanced.memory.factual.maxAttrValueLength, 300);
     expect(cfg.advanced.consolidation.triggerThreshold, 0.9);
     expect(cfg.advanced.consolidation.minArtifactsToConsolidate, 4);
@@ -269,6 +287,12 @@ void main() {
       'advanced.harness.full_chunk_events': true,
       'advanced.harness.foreshadow_check_interval': 3,
       'advanced.harness.event_log_retention_turns': 50,
+      'advanced.harness.maintenance_gap_interval': 9,
+      'advanced.harness.maintenance_nudge_cooldown': 5,
+      'advanced.harness.major_review_interval': 40,
+      'advanced.harness.maintenance_extra_steps': 8,
+      'advanced.harness.recent_active_entities_window': 20,
+      'advanced.harness.recent_active_entities_cap': 12,
     };
     final merged = repo.configToMapForTest(AppConfig.fromJson(jsonMap));
     deepMerge(merged, expandFlatKeys(overrides));
@@ -282,6 +306,12 @@ void main() {
       'full_chunk_events': harness.fullChunkEvents,
       'foreshadow_check_interval': harness.foreshadowCheckInterval,
       'event_log_retention_turns': harness.eventLogRetentionTurns,
+      'maintenance_gap_interval': harness.maintenanceGapInterval,
+      'maintenance_nudge_cooldown': harness.maintenanceNudgeCooldown,
+      'major_review_interval': harness.majorReviewInterval,
+      'maintenance_extra_steps': harness.maintenanceExtraSteps,
+      'recent_active_entities_window': harness.recentActiveEntitiesWindow,
+      'recent_active_entities_cap': harness.recentActiveEntitiesCap,
     };
     for (final key in jsonHarness.keys) {
       expect(

@@ -52,6 +52,19 @@ class GeminiAdapter implements LlmProtocolAdapter {
   GeminiAdapter({GeminiSseParser Function()? sseParserFactory})
       : _sseParserFactory = sseParserFactory ?? GeminiSseParser.new;
 
+  /// 最终 wire 输出上限（单源）：基础钳制（clampToModel；0/null=不设置
+  /// 应用层上限——generationConfig 省略 maxOutputTokens 字段）。Gemini
+  /// 无 extra_body 式末位覆盖通道。返回 null=本次请求不携带输出上限
+  ///（API 未指定）。
+  static int? effectiveOutputTokens({
+    required int? configured,
+    required int? modelMaxOutputTokens,
+  }) {
+    final base =
+        OutputTokenPolicy.clampToModel(configured, modelMaxOutputTokens);
+    return base != null && base > 0 ? base : null;
+  }
+
   final GeminiSseParser Function() _sseParserFactory;
 
   /// 非流式响应解析期间的同名工具调用计数（生成本地唯一 id，与流式一致）
@@ -166,11 +179,12 @@ class GeminiAdapter implements LlmProtocolAdapter {
     // topP/topK 并警告未来 400，新 API 形态已移除采样字段；老代系一并停发。
     // temperature/topP 不再出网，其余配置照常下发。
     final generationConfig = <String, dynamic>{};
-    final maxTokens = OutputTokenPolicy.clampToModel(
-      request.maxTokens,
-      request.modelMaxOutputTokens,
+    // 输出上限单源解析（effectiveOutputTokens 与预算面共用）
+    final maxTokens = effectiveOutputTokens(
+      configured: request.maxTokens,
+      modelMaxOutputTokens: request.modelMaxOutputTokens,
     );
-    if (maxTokens != null && maxTokens > 0) {
+    if (maxTokens != null) {
       generationConfig['maxOutputTokens'] = maxTokens;
     }
 
@@ -194,19 +208,21 @@ class GeminiAdapter implements LlmProtocolAdapter {
     // safetySettings 默认宽松（角色扮演场景需要）
     body['safetySettings'] = _defaultSafetySettings;
 
-    // 工具定义（Gemini 用 functionDeclarations，格式与 OpenAI 不同）
-    if (request.tools != null && request.tools!.isNotEmpty) {
-      body['tools'] = {
-        'functionDeclarations': request.tools!
-            .map(
-              (t) => {
-                'name': t.name,
-                'description': t.description,
-                'parameters': toGeminiSchema(t.parameters),
+    // Gemini 的 tools 是数组，函数声明集中在一个 Tool 对象中。
+    final tools = request.tools;
+    if (tools != null && tools.isNotEmpty) {
+      body['tools'] = [
+        {
+          'functionDeclarations': [
+            for (final tool in tools)
+              {
+                'name': tool.name,
+                'description': tool.description,
+                'parameters': toGeminiSchema(tool.parameters),
               },
-            )
-            .toList(),
-      };
+          ],
+        },
+      ];
     }
 
     // 工具选择策略（Gemini 用 toolConfig.functionCallingConfig.mode）
@@ -324,6 +340,10 @@ class GeminiAdapter implements LlmProtocolAdapter {
         promptTokens: prompt,
         completionTokens: completion,
         totalTokens: total,
+        // Gemini 的 promptTokenCount 已含 cachedContentTokenCount
+        totalInputTokens: prompt,
+        cacheReadTokens: usageMetadata['cachedContentTokenCount'] as int?,
+        reasoningTokens: usageMetadata['thoughtsTokenCount'] as int?,
       );
     }
 
@@ -417,7 +437,10 @@ class GeminiAdapter implements LlmProtocolAdapter {
   /// 2. content String → parts: [{text: "..."}]
   /// 3. tool_calls → parts: [{functionCall: {name, args}}]
   /// 4. role:"tool" 消息 → 含 functionResponse 的 user 消息
-  /// 5. reasoning_content/thinkingBlocks → parts: [{thought:true, text:"..."}]
+  /// 5. thinkingBlocks（含 thoughtSignature）优先 → parts:
+  ///    [{thought:true, text, thoughtSignature}]；camel reasoningContent
+  ///    分支仅在无 thinkingBlocks 的跨协议夹具下可达（生产 geminiNative
+  ///    请求 map 不注入该键），预算估算面按 thinkingBlocks 同口径
   List<Map<String, dynamic>> _convertMessagesToContents(
     List<Map<String, dynamic>> messages,
   ) {
@@ -437,6 +460,7 @@ class GeminiAdapter implements LlmProtocolAdapter {
       // （同名第 N 次调用，v0.3 本地序号），统一剥离 __N 后缀取 name
       final toolName = _toolNameFromCallId(toolCallId);
       final resultContent = content is String ? content : '';
+      final isError = msg['is_error'] == true;
 
       return {
         'role': 'user',
@@ -444,7 +468,9 @@ class GeminiAdapter implements LlmProtocolAdapter {
           {
             'functionResponse': {
               'name': toolName,
-              'response': {'result': resultContent},
+              'response': isError
+                  ? {'error': resultContent}
+                  : {'result': resultContent},
             },
           }
         ],
@@ -525,7 +551,13 @@ class GeminiAdapter implements LlmProtocolAdapter {
 
       return {
         'role': 'model',
-        'parts': parts.isEmpty ? <Map<String, dynamic>>[] : parts,
+        // HAR-02：空 assistant（无正文无 functionCall）置占位空文本
+        // part——保消息形状不丢消息（与 Anthropic 空 content 数组同因）。
+        'parts': parts.isEmpty
+            ? <Map<String, dynamic>>[
+                {'text': ''},
+              ]
+            : parts,
       };
     }
 

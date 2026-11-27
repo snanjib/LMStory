@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_actions.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
-import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_navigation.dart';
 import 'package:lmstory/core/utils/smooth_follow_scroller.dart'
     show streamingFollowCushionPx;
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
@@ -11,6 +10,8 @@ import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
 import 'package:lmstory/features/intermediate/presentation/pages/intermediate_chat_body.dart';
 import 'package:lmstory/i18n/strings.g.dart';
+
+import '../../../../helpers/round_navigation_checks.dart';
 
 /// IntermediateChatBody Widget 测试（Stage 3：pendingUserMessage 即时显示）
 ///
@@ -414,59 +415,16 @@ void main() {
     });
   });
 
-  group('IntermediateChatBody -  消息定位 key 回填', () {
-    testWidgets('上一条用户消息按 GlobalKey 精确定位（不再退化跳顶）', (tester) async {
-      // e7259c24 误删 _messageKeys 填充行后该 map 只读不写：可见索引恒
-      // null → 「上一条用户消息」恒走 _jumpToTop（offset≈0）。回归断言：
-      // 底部点上一条，应定位到列表中部目标（offset 显著大于 0）。
-      final messages = List<ChatMessage>.generate(
-        30,
-        (i) => ChatMessage(
-          messageId: 'st10-$i',
-          sessionId: 'session-1',
-          role: i.isEven ? 'user' : 'assistant',
-          content: '历史消息 $i\n多行内容撑高列表\n第三行\n第四行\n第五行',
-          createdAt: DateTime(2026),
-        ),
-      );
-      final state = IntermediateChatState(
-        phase: IntermediatePhase.idle,
-        messages: messages,
-        retryCounts: const {},
-        session: _testSession(),
-      );
-
-      await tester.pumpWidget(_wrap(_buildBody(state)));
-      await tester.pump();
-
-      final position = tester
-          .stateList<ScrollableState>(find.byType(Scrollable))
-          .firstWhere((s) => s.position.maxScrollExtent > 0)
-          .position;
-      position.jumpTo(position.maxScrollExtent);
-      await tester.pump(const Duration(milliseconds: 100));
-      // 懒构建收敛：尾部行实体化后其 key 才有 currentContext
-      for (var i = 0; i < 6; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-
-      // 导航浮层常驻树（透明度显隐），直接调回调绕过可见性
-      tester
-          .widget<IntermediateMessageNavigation>(
-            find.byType(IntermediateMessageNavigation),
-          )
-          .onPrevUserMessage();
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pump(const Duration(milliseconds: 400));
-
-      expect(
-        position.pixels,
-        greaterThan(50),
-        reason: '底部的「上一条用户消息」应精确定位到列表中部目标，'
-            '而不是退化成跳顶（_messageKeys 空表的旧行为）',
-      );
-    });
+  testWidgets('轮导航在长稿件中按相邻轮提问定位', (tester) async {
+    final session = _testSession();
+    final state = IntermediateChatState(
+      phase: IntermediatePhase.idle,
+      messages: navigationMessages(session.sessionId),
+      retryCounts: const {},
+      session: session,
+    );
+    await tester.pumpWidget(_wrap(_buildBody(state)));
+    await checkRoundNavigation(tester);
   });
 
   group('IntermediateChatBody -  轮完成反馈', () {

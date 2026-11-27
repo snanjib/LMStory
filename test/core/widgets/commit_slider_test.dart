@@ -62,28 +62,34 @@ void main() {
     expect(committed, isEmpty);
   });
 
-  testWidgets('drag starting off the thumb does not change the value',
+  testWidgets('drag crossing the thumb from the track does not commit',
       (tester) async {
     final committed = <double>[];
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: Center(
-            child: CommitSlider(
-              value: 100, // thumb at far left
-              min: 100,
-              max: 2000,
-              divisions: 19,
-              onCommit: committed.add,
+          body: SingleChildScrollView(
+            child: SizedBox(
+              height: 1200,
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: CommitSlider(
+                  value: 100, // thumb at far left
+                  min: 100,
+                  max: 2000,
+                  divisions: 19,
+                  onCommit: committed.add,
+                ),
+              ),
             ),
           ),
         ),
       ),
     );
 
-    // Start at the box center (far from the leftmost thumb) and drag.
-    final gesture =
-        await tester.startGesture(tester.getCenter(find.byType(CommitSlider)));
+    final bounds = tester.getRect(find.byType(CommitSlider));
+    final gesture = await tester.startGesture(bounds.center);
+    await gesture.moveTo(bounds.centerLeft + const Offset(7, 0));
     await gesture.moveBy(const Offset(120, 0));
     await tester.pump();
     await gesture.up();

@@ -4,6 +4,9 @@ import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/panels/retrieval_panel.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
+import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// RetrievalPanel 自动折叠时序 + stagger 淡入测试
@@ -38,6 +41,96 @@ void main() {
       );
     });
   }
+
+  setUpAll(() async {
+    await LocaleSettings.setLocale(AppLocale.enUs);
+    LocaleSettings.setLocaleSync(AppLocale.zhCn);
+  });
+
+  testWidgets('fact summary and details follow the current locale',
+      (tester) async {
+    LocaleSettings.setLocaleSync(AppLocale.enUs);
+    addTearDown(() => LocaleSettings.setLocaleSync(AppLocale.zhCn));
+    final now = DateTime(2026);
+    final facts = [
+      RetrievedFact(
+        entity: FactualEntity(
+          entityId: 'character',
+          sessionId: 'story',
+          type: FactualEntityType.character,
+          primaryName: '林晚',
+          aliases: const ['守碑人', 'Lin'],
+          importance: 4,
+          createdTurn: 1,
+          createdAt: now,
+        ),
+        attributes: [
+          FactualAttribute(
+            attributeId: 'detail',
+            entityId: 'character',
+            sessionId: 'story',
+            attrKey: '随身物件',
+            value: '银钥匙',
+            importance: 3,
+            createdAt: now,
+          ),
+        ],
+        isKeyEntity: true,
+        isKeywordMatched: true,
+      ),
+      RetrievedFact(
+        entity: FactualEntity(
+          entityId: 'location',
+          sessionId: 'story',
+          type: FactualEntityType.location,
+          primaryName: '旧码头',
+          aliases: const [],
+          importance: 3,
+          createdTurn: 1,
+          createdAt: now,
+        ),
+        attributes: const [],
+        isKeyEntity: false,
+        isKeywordMatched: true,
+      ),
+    ];
+    Widget panel(IntermediatePhase phase) => wrap(
+          RetrievalPanel(
+            phase: phase,
+            retrievedMemories:
+                phase == IntermediatePhase.retrieving ? null : memories(1),
+            retrievedFacts: facts,
+            failureContext: null,
+            onRetry: () {},
+          ),
+        );
+    await tester.pumpWidget(panel(IntermediatePhase.retrieving));
+    await tester.pumpWidget(panel(IntermediatePhase.reviewing));
+    await tester.pumpAndSettle();
+
+    final enName = find.text('Character "林晚" (Aliases: 守碑人, Lin)');
+    expect(enName, findsOneWidget);
+    expect(find.text('Location "旧码头"'), findsOneWidget);
+    expect(find.textContaining('经历摘要 0'), findsOneWidget);
+    await tester.tap(enName);
+    await tester.pumpAndSettle();
+    expect(find.text('林晚'), findsOneWidget);
+    expect(find.text('Type：Character'), findsOneWidget);
+    expect(find.text('随身物件'), findsOneWidget);
+    expect(find.text('银钥匙'), findsOneWidget);
+    Navigator.of(tester.element(find.text('林晚'))).pop();
+    await tester.pumpAndSettle();
+
+    LocaleSettings.setLocaleSync(AppLocale.zhCn);
+    await tester.pumpAndSettle();
+    expect(enName, findsNothing);
+    expect(find.text('角色"林晚"（别名：守碑人, Lin）'), findsOneWidget);
+    final zhLocation = find.text('地点"旧码头"');
+    expect(zhLocation, findsOneWidget);
+    await tester.tap(zhLocation);
+    await tester.pumpAndSettle();
+    expect(find.text('旧码头'), findsOneWidget);
+  });
 
   group('RetrievalPanel 自动折叠时序', () {
     testWidgets('1. retrieving 阶段：显示检索中提示', (tester) async {

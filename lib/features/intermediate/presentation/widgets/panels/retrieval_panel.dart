@@ -653,6 +653,17 @@ class _RetrievalPanelState extends State<RetrievalPanel> {
     RetrievedFact fact,
   ) {
     final entity = fact.entity;
+    final chat = t.intermediate.chat;
+    final name = chat.factsMatchName(
+      type: _typeGroupLabel(entity.type, t),
+      name: entity.primaryName,
+    );
+    final aliases = entity.aliases.isEmpty
+        ? ''
+        : chat.factsMatchAliases(
+            label: chat.factDetail.aliases,
+            aliases: entity.aliases.join(', '),
+          );
     return Padding(
       padding: const EdgeInsets.only(
         bottom: IntermediateSpacing.sXs,
@@ -683,7 +694,7 @@ class _RetrievalPanelState extends State<RetrievalPanel> {
                     // 实体名（primaryName）
                     Expanded(
                       child: Text(
-                        entity.displayText,
+                        '$name$aliases',
                         style: IntermediateTextStyles.caption.copyWith(
                           color: colors.ink,
                         ),
@@ -749,7 +760,7 @@ class _RetrievalPanelState extends State<RetrievalPanel> {
     );
   }
 
-  /// 类型分组的中文标签（与 FactContextBuilder._typeGroupLabel 一致）
+  /// 界面语言中的事实类型标签。
   String _typeGroupLabel(FactualEntityType type, Translations t) {
     switch (type) {
       case FactualEntityType.character:

@@ -10,11 +10,15 @@
 /// ```
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show compute;
 import 'package:lmstory/core/utils/log_tail_reader.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/core/utils/secret_redactor.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 /// 读取日志文件最后 [maxLines] 行
 ///
@@ -60,31 +64,71 @@ Future<void> clearLogFiles() async {
   }
 }
 
-/// 将当前日志与轮转备份合并写入 [targetPath]（桌面导出）
+/// 将轮转备份与当前日志按时间顺序脱敏合并，写入 [targetPath]。
 ///
 /// 轮转文件（app.log.1，上次运行——崩溃证据所在）在前、当前文件在后，
 /// 各以「===== 文件名 =====」分隔，排障时一次拿到两个阶段的日志。
 /// 通过 [compute] 在 Isolate 中读写，避免 10MB 级日志阻塞 UI 线程。
-/// 调用前须先 [Logger.flushAll] 保证内存 buffer 已落盘。
 Future<void> saveLogFilesTo({required String targetPath}) async {
+  await Logger.flushAll();
   final path = Logger.currentLogFilePath;
   if (path == null) {
     throw StateError('log file path unavailable');
   }
-  await compute(_mergeLogFiles, (currentPath: path, targetPath: targetPath));
+  await compute(_writeLogExport, (currentPath: path, targetPath: targetPath));
 }
 
-void _mergeLogFiles(({String currentPath, String targetPath}) params) {
-  final buffer = StringBuffer();
-  final rotated = File('${params.currentPath}.1');
-  if (rotated.existsSync()) {
-    buffer
-      ..writeln('===== app.log.1 =====')
-      ..write(rotated.readAsStringSync())
-      ..writeln();
+/// Shares a private temporary export while the platform share call is pending.
+Future<void> withTemporaryLogExport(
+  Future<void> Function(String path) share,
+) async {
+  final cache = await getTemporaryDirectory();
+  final dir = await cache.createTemp('lmstory-diagnostics-');
+  final target = p.join(dir.path, 'lmstory-log.log');
+  try {
+    await saveLogFilesTo(targetPath: target);
+    await share(target);
+  } finally {
+    if (dir.existsSync()) await dir.delete(recursive: true);
   }
-  buffer
-    ..writeln('===== app.log =====')
-    ..write(File(params.currentPath).readAsStringSync());
-  File(params.targetPath).writeAsStringSync(buffer.toString());
+}
+
+void _writeLogExport(({String currentPath, String targetPath}) params) {
+  final current = File(params.currentPath);
+  final prefix = '${p.basename(current.path)}.';
+  final rotated = <({int number, File file})>[];
+  for (final entity in current.parent.listSync(followLinks: false)) {
+    if (entity is! File) continue;
+    final name = p.basename(entity.path);
+    if (!name.startsWith(prefix)) continue;
+    final number = int.tryParse(name.substring(prefix.length));
+    if (number != null && number > 0) {
+      rotated.add((number: number, file: entity));
+    }
+  }
+  rotated.sort((a, b) => b.number.compareTo(a.number));
+  final sources = [...rotated.map((item) => item.file), current];
+  final target = File(params.targetPath);
+  if (target.existsSync()) {
+    final realTarget = target.resolveSymbolicLinksSync();
+    for (final source in sources) {
+      if (FileSystemEntity.identicalSync(
+        source.resolveSymbolicLinksSync(),
+        realTarget,
+      )) {
+        throw StateError('Export destination is a source log');
+      }
+    }
+  }
+
+  final buffer = StringBuffer();
+  for (final source in sources) {
+    if (buffer.isNotEmpty) buffer.writeln();
+    final contents =
+        utf8.decode(source.readAsBytesSync(), allowMalformed: true);
+    buffer
+      ..writeln('===== ${p.basename(source.path)} =====')
+      ..write(redactDiagnosticText(contents));
+  }
+  target.writeAsStringSync(buffer.toString());
 }

@@ -29,9 +29,11 @@ class IntermediateChatInput extends StatefulWidget {
     this.onTextChanged,
     this.isStopping = false,
     this.isManualCompacting = false,
+    this.isPreparingRegenerate = false,
     this.sendKey = SendKey.enter,
     this.newlineKey = NewlineKey.shiftEnter,
     this.isDirector = false,
+    this.preserveWhitespace = false,
     this.locked = false,
     super.key,
   });
@@ -58,9 +60,17 @@ class IntermediateChatInput extends StatefulWidget {
   /// 没反应。true 时发送按钮禁用（与控制器守卫同口径）。
   final bool isManualCompacting;
 
+  /// 重生成/编辑重发「准备中」窗口
+  ///
+  /// 该窗口 phase 仍为 idle 但控制器拒收新消息——发送判据不同步时，
+  /// 输入框会先清空再被控制器静默拒绝，内容蒸发。true 时发送禁用，
+  /// 文本保留在输入框。
+  final bool isPreparingRegenerate;
+
   /// 导演模式（修复 2026-08-23）：占位符用「给导演的指令…」而非
   /// 故事模式的「推动故事发展...」（导演与故事的输入语义不同）。
   final bool isDirector;
+  final bool preserveWhitespace;
 
   /// 输入锁定（通用能力）：true 时文本只读（编辑/粘贴/输入法组合全
   /// 禁），发送按钮仍可用——文本由宿主经 controller 设定，用户必须
@@ -123,24 +133,29 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
   /// 仅发送按钮根据 _isBusy/_canSend 禁用。
   bool get _inputEnabled => true;
 
-  /// 是否允许发送：idle/failed 且非停止中、非手动压缩中允许发送。
+  /// 是否允许发送：idle/failed 且非停止中、非手动压缩中、非重生成
+  /// 准备中允许发送。
   ///
   /// failed 阶段放行直发新消息（控制器先事务性清掉失败轮残留），
   /// 用户不必先点「清空本轮」。
   /// 停止中禁止发送（防止与后台 cancel 竞态）。
   /// 手动压缩中禁止发送（：压缩全程 phase=idle，控制器静默
   /// no-op，UI 必须同口径禁用）。
+  /// 重生成准备中禁止发送（同上静默 no-op 窗口，且清空先于拒绝发生
+  /// 会蒸发输入）。
   bool get _canSend =>
       (widget.phase == IntermediatePhase.idle ||
           widget.phase == IntermediatePhase.failed) &&
       !widget.isStopping &&
-      !widget.isManualCompacting;
+      !widget.isManualCompacting &&
+      !widget.isPreparingRegenerate;
 
   void _handleSend() {
-    final text = _controller.text.trim();
-    if (text.isEmpty || !_canSend) return;
+    final text = _controller.text;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || !_canSend) return;
     _controller.clear();
-    widget.onSend(text);
+    widget.onSend(widget.preserveWhitespace ? text : trimmed);
   }
 
   /// 在光标位置插入换行符（Ctrl+Enter / Alt+Enter 换行时调用）。
@@ -281,12 +296,12 @@ class IntermediateChatInputState extends State<IntermediateChatInput> {
     _focusNode.unfocus();
   }
 
-  void setText(String text) {
+  void setText(String text, {bool requestFocus = true}) {
     _controller.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
     );
-    if (!_focusNode.hasFocus) {
+    if (requestFocus && !_focusNode.hasFocus) {
       _focusNode.requestFocus();
     }
   }

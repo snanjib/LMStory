@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:lmstory/features/chat/data/database/app_database.dart';
+import 'package:lmstory/features/chat/data/database/database_connection.dart'
+    if (dart.library.js_interop) 'package:lmstory/features/chat/data/database/database_connection_web.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -15,21 +17,12 @@ Future<AppDatabase> openDemoDatabase({QueryExecutor? forTesting}) async {
   if (forTesting != null) {
     return AppDatabase.forTesting(forTesting);
   }
+  if (kIsWeb) throw UnsupportedError('The file-based demo is native-only');
   final docs = await getApplicationDocumentsDirectory();
   final dir = Directory(p.join(docs.path, 'lmstory_demo'))
     ..createSync(recursive: true);
   final file = File(p.join(dir.path, 'demo.db'));
-  return AppDatabase.forTesting(
-    NativeDatabase.createInBackground(
-      file,
-      setup: (db) {
-        db
-          ..execute('PRAGMA journal_mode = WAL')
-          ..execute('PRAGMA synchronous = NORMAL')
-          ..execute('PRAGMA journal_size_limit = 8388608');
-      },
-    ),
-  );
+  return AppDatabase.connect(await openNativeDatabase(file));
 }
 
 /// 演示数据目录（状态文件与库文件所在）

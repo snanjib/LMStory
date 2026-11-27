@@ -3,6 +3,7 @@ import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/theme/system/lm_ui_text_styles.dart';
+import 'package:lmstory/core/utils/secret_redactor.dart';
 import 'package:lmstory/features/chat/domain/services/simple_failure_classifier.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -17,8 +18,8 @@ import 'package:lmstory/i18n/strings.g.dart';
 /// message and remain visible when switching conversation branches.
 /// Style: error icon + error text on a subtle error-tinted background.
 ///
-/// 默认折叠为 3 行预览（带省略号），用户可点击"展开"按钮查看完整错误信息，
-/// 再次点击"收起"恢复预览。短错误（≤3 行）自动完整显示，不显示展开按钮。
+/// 结构化错误直接显示摘要和建议。旧格式保留三行预览与展开操作，
+/// 技术详情保持独立折叠。
 ///
 /// 识别 errorText 中的 `\n建议：` 分隔符，
 /// 将建议行单独渲染（lightbulb 图标 + error 色），其余文本作为错误描述。
@@ -49,21 +50,37 @@ class _BubbleErrorMessageState extends State<BubbleErrorMessage> {
   /// 新写入为 `lmerr:` JSON 前缀（SimpleErrorPayload），
   /// 先试结构化解码（locale 无关）；失败回退下方旧分隔符解析（存量兼容，
   /// 分隔符字面量仅为旧格式保留）。
-  ({String errorPart, String? suggestion, String? detail}) _parseErrorText() {
+  ({
+    String errorPart,
+    String? suggestion,
+    String? detail,
+    bool structured,
+  }) _parseErrorText() {
     final text = widget.errorText;
     final payload = SimpleErrorPayload.tryDecode(text);
     if (payload != null) {
-      final errorPart = payload.code == null || payload.code!.isEmpty
+      final code = payload.code;
+      final labels = Translations.of(context).chat.failure;
+      final errorPart = code == null || code.isEmpty
           ? payload.message
-          : '${payload.message}（${payload.code}）';
+          : labels.displayFormat(message: payload.message, code: code);
       return (
         errorPart: errorPart,
+        structured: true,
         suggestion: payload.suggestion == null || payload.suggestion!.isEmpty
             ? null
             : payload.suggestion,
         detail: payload.detail == null || payload.detail!.isEmpty
             ? null
             : payload.detail,
+      );
+    }
+    if (text.startsWith(SimpleErrorPayload.prefix)) {
+      return (
+        errorPart: Translations.of(context).chat.failure.messages.unknown,
+        structured: true,
+        suggestion: null,
+        detail: null,
       );
     }
     // 先拆出详细信息（格式：...\n详细信息：$detail）
@@ -81,20 +98,31 @@ class _BubbleErrorMessageState extends State<BubbleErrorMessage> {
     // suggestionLabel 默认为 "建议"，因此分隔符为 `\n建议：`
     final idx = remaining.indexOf(SimpleErrorPayload.legacySuggestionSeparator);
     if (idx == -1) {
-      return (errorPart: remaining, suggestion: null, detail: detail);
+      return (
+        errorPart: remaining,
+        suggestion: null,
+        detail: detail,
+        structured: false,
+      );
     }
     final errorPart = remaining.substring(0, idx);
     final suggestion = remaining.substring(
       idx + SimpleErrorPayload.legacySuggestionSeparator.length,
     );
-    return (errorPart: errorPart, suggestion: suggestion, detail: detail);
+    return (
+      errorPart: errorPart,
+      suggestion: suggestion,
+      detail: detail,
+      structured: false,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final t = Translations.of(context);
     final parsed = _parseErrorText();
-    final hasSuggestion = parsed.suggestion != null;
+    final suggestion = parsed.suggestion;
+    final showFullSummary = parsed.structured || _isExpanded;
     final hasDetail = parsed.detail != null && parsed.detail!.isNotEmpty;
     return Container(
       margin: const EdgeInsets.only(top: LmSpacing.sXs),
@@ -127,35 +155,36 @@ class _BubbleErrorMessageState extends State<BubbleErrorMessage> {
                   style: LmUiTextStyles.bodySm.copyWith(
                     color: widget.colors.error,
                   ),
-                  maxLines: _isExpanded ? null : 3,
-                  overflow: _isExpanded
+                  maxLines: showFullSummary ? null : 3,
+                  overflow: showFullSummary
                       ? TextOverflow.visible
                       : TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
-          // 建议行（lightbulb 图标 + error 色，单独渲染）
-          if (hasSuggestion) ...[
+          if (suggestion != null) ...[
             const SizedBox(height: LmSpacing.sXs),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  Icons.lightbulb_outline,
-                  size: 16,
-                  color: widget.colors.error,
-                ),
-                const SizedBox(width: LmSpacing.sXs),
+                if (!parsed.structured) ...[
+                  Icon(
+                    Icons.lightbulb_outline,
+                    size: 16,
+                    color: widget.colors.error,
+                  ),
+                  const SizedBox(width: LmSpacing.sXs),
+                ],
                 Expanded(
                   child: Text(
-                    '${t.chat.failure.suggestionLabel}：${parsed.suggestion}',
+                    parsed.structured
+                        ? suggestion
+                        : '${t.chat.failure.suggestionLabel}：$suggestion',
                     style: LmUiTextStyles.bodySm.copyWith(
                       color: widget.colors.error,
                       fontWeight: FontWeight.w500,
                     ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
@@ -203,7 +232,7 @@ class _BubbleErrorMessageState extends State<BubbleErrorMessage> {
                       BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
                 ),
                 child: SelectableText(
-                  parsed.detail!,
+                  redactDiagnosticText(parsed.detail!),
                   style: LmUiTextStyles.bodySm.copyWith(
                     color: widget.colors.error.withValues(alpha: 0.8),
                     fontSize: 12,
@@ -212,17 +241,17 @@ class _BubbleErrorMessageState extends State<BubbleErrorMessage> {
               ),
             ],
           ],
-          // 展开/收起按钮（右下角对齐）
-          Align(
-            alignment: Alignment.centerRight,
-            child: _ErrorToggleButton(
-              isExpanded: _isExpanded,
-              colors: widget.colors,
-              expandLabel: t.chat.messageActions.showMore,
-              collapseLabel: t.chat.messageActions.showLess,
-              onTap: () => setState(() => _isExpanded = !_isExpanded),
+          if (!parsed.structured)
+            Align(
+              alignment: Alignment.centerRight,
+              child: _ErrorToggleButton(
+                isExpanded: _isExpanded,
+                colors: widget.colors,
+                expandLabel: t.chat.messageActions.showMore,
+                collapseLabel: t.chat.messageActions.showLess,
+                onTap: () => setState(() => _isExpanded = !_isExpanded),
+              ),
             ),
-          ),
         ],
       ),
     );

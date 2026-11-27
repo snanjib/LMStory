@@ -16,10 +16,9 @@
 lib/features/advanced/presentation/controllers/advanced_chat_controller.dart:2
 lib/features/advanced/presentation/controllers/advanced_chat_controller_embeddings.dart:6
 lib/features/advanced/presentation/controllers/advanced_chat_controller_persist.dart:1
-lib/features/advanced/presentation/controllers/advanced_chat_controller_suggest.dart:5
 lib/features/advanced/presentation/controllers/agent_loop_diagnostics_controller.dart:2
 lib/features/advanced/presentation/controllers/director_round_runner.dart:3
-lib/features/advanced/presentation/controllers/director_work_trace.dart:12
+lib/features/advanced/presentation/controllers/director_work_trace.dart:11
 lib/features/advanced/presentation/tools/agent_diagnostic_tools.dart:13
 lib/features/chat/presentation/controllers/chat_mode_controller.dart:1
 lib/features/intermediate/presentation/controllers/intermediate_chat_controller_embeddings.dart:6

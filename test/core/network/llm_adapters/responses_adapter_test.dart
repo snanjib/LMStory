@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/llm/tool_calling/tool_choice.dart';
 import 'package:lmstory/core/llm/tool_calling/tool_definition.dart';
 import 'package:lmstory/core/network/llm_adapters/responses_adapter.dart';
@@ -347,6 +348,48 @@ void main() {
       expect(content[2], {
         'type': 'input_image',
         'image_url': 'https://example.com/a.png',
+      });
+    });
+  });
+
+  group('toolResult 错误信号编码', () {
+    test(
+        'isError=true 时 function_call_output 前置 [TOOL_ERROR]，isError=false 保持原样',
+        () {
+      final options = AgentWireOptions.forProtocolName('openaiResponses');
+      final errorMsg = AgentMessage.toolResult(
+        toolCallId: 'call_err',
+        content: '缺少必填字段 confidence',
+        isError: true,
+      ).toRequestMap(options);
+      final okMsg = AgentMessage.toolResult(
+        toolCallId: 'call_ok',
+        content: '已查询',
+      ).toRequestMap(options);
+
+      final body = adapter.buildRequestBody(
+        LlmRequest(
+          baseUrl: 'https://api.openai.com',
+          modelId: 'gpt-6-astra',
+          messages: [
+            const {'role': 'user', 'content': '更新'},
+            errorMsg,
+            okMsg,
+          ],
+        ),
+        stream: false,
+      );
+
+      final input = (body['input'] as List).cast<Map<String, dynamic>>();
+      expect(input[1], {
+        'type': 'function_call_output',
+        'call_id': 'call_err',
+        'output': '[TOOL_ERROR] 缺少必填字段 confidence',
+      });
+      expect(input[2], {
+        'type': 'function_call_output',
+        'call_id': 'call_ok',
+        'output': '已查询',
       });
     });
   });

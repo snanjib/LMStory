@@ -20,8 +20,10 @@ import 'package:lmstory/features/advanced/domain/entities/director_session_exten
 import 'package:lmstory/features/advanced/domain/entities/narrative_pacing.dart';
 import 'package:lmstory/features/advanced/domain/entities/retrieval_profile.dart';
 import 'package:lmstory/features/advanced/domain/entities/tool_permissions.dart';
+import 'package:lmstory/features/advanced/domain/services/engineering_context_mode.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
 import 'package:lmstory/features/advanced/presentation/pages/advanced_chat_page.dart';
+import 'package:lmstory/features/advanced/presentation/utils/auxiliary_generation_feedback.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_tool_permissions_field.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
@@ -30,6 +32,8 @@ import 'package:lmstory/features/chat/domain/services/configuration_resolver.dar
 import 'package:lmstory/features/demo/domain/demo_scene.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/collapsed_sections_store.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/collapsible_settings_section.dart';
+import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/features/settings/presentation/widgets/director_compaction_threshold_field.dart';
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_model_picker_sheet.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/story_phase_models.dart';
@@ -381,6 +385,20 @@ class _DirectorSessionSettingsSheetState
               ),
               const SizedBox(height: IntermediateSpacing.sMd),
 
+              // ── 工程上下文模式需要修复（异常三态；恒显不可折叠）──
+              if (state.engineeringMode ==
+                  EngineeringRuntimeMode.recoveryRequired) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: IntermediateSpacing.sMd),
+                  child: _EngineeringModeBlockedCard(
+                    reason: state.engineeringModeReason,
+                    enabled: !isBusy,
+                    onRepair: () => _setEngineeringMode(controller, true),
+                    onExit: () => _setEngineeringMode(controller, false),
+                  ),
+                ),
+              ],
+
               // ── 记忆管理（默认展开）：检索松紧度 + 重建向量索引 ──
               _section(
                 id: 'memoryManagement',
@@ -539,6 +557,8 @@ class _DirectorSessionSettingsSheetState
                   advanced: advanced,
                   enabled: !isBusy,
                   onChanged: (session) => _saveSession(controller, session),
+                  onEngineeringModeToggle: (v) =>
+                      _setEngineeringMode(controller, v),
                 ),
               ),
 
@@ -550,6 +570,13 @@ class _DirectorSessionSettingsSheetState
                 child: SeedResourceSection(
                   sessionId: state.session.sessionId,
                   enabled: !isBusy,
+                  ensureSessionIdForApply: () async {
+                    if (controller.isDraftSession &&
+                        !await controller.updateSession(_state.session)) {
+                      return null;
+                    }
+                    return mounted ? _state.session.sessionId : null;
+                  },
                 ),
               ),
 
@@ -725,29 +752,25 @@ class _DirectorSessionSettingsSheetState
   ) {
     final t = Translations.of(context);
     final (presetId, modelId) =
-        _state.session.phaseModels.forPhase('generating');
+        _directorGeneratingModels(_state.session.phaseModels, advanced);
     showLmSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (_) => IntermediateModelPickerSheet(
-        selectedPresetId:
-            (presetId == null || presetId.isEmpty) ? null : presetId,
-        selectedModelId: (modelId == null || modelId.isEmpty) ? null : modelId,
+        selectedPresetId: presetId,
+        selectedModelId: modelId,
         title: t.advanced.settings.sectionModel,
         // 清除=写全局当前 GM 快照（不再置回 null 跟随态）
         clearLabel: t.advanced.settings.resetToGlobalSnapshot,
         onModelSelected: (p, m) async {
           final SessionPhaseModels effective;
           if (p == null && m == null) {
-            effective = SessionPhaseModels(
-              generatingPresetId: (advanced?.generatingPresetId ?? '').isEmpty
-                  ? null
-                  : advanced?.generatingPresetId,
-              generatingModelId: (advanced?.generatingModelId ?? '').isEmpty
-                  ? null
-                  : advanced?.generatingModelId,
+            effective = ConfigurationResolver.directorGeneratingModels(
+              const SessionPhaseModels.empty(),
+              defaultPresetId: advanced?.generatingPresetId,
+              defaultModelId: advanced?.generatingModelId,
             );
           } else {
             effective = _state.session.phaseModels.copyWithPhase(
@@ -817,12 +840,73 @@ class _DirectorSessionSettingsSheetState
   }
 
   /// 生成参数/上下文覆盖写入（session-state 字段组）。
-  Future<void> _saveSession(
+  /// 工程上下文模式开关专用切换（原子路径，不走 _saveSession）。
+  ///
+  /// 开启：直接执行（同库单事务一次性捕获）。关闭：先按
+  /// advanced.harness.event_log_retention_turns 呈现动态破坏性警示——
+  /// 用户取消则零副作用（不写任何库变更，开关回弹由 state 驱动）。
+  Future<void> _setEngineeringMode(
+    AdvancedChatController controller,
+    bool enabled,
+  ) async {
+    final t = Translations.of(context);
+    if (!enabled) {
+      final retention = ref
+              .read(advancedConfigProvider)
+              .valueOrNull
+              ?.harness
+              .eventLogRetentionTurns ??
+          20;
+      final confirmed = await showLmDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(t.advanced.settings.engineeringExitTitle),
+          content: Text(
+            retention > 0
+                ? t.advanced.settings.engineeringExitWarnLimited(
+                    turns: retention,
+                  )
+                : t.advanced.settings.engineeringExitWarnUnlimited,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text(t.common.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(t.common.confirm),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    final ok = await controller.setEngineeringContextEnabled(enabled: enabled);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            ok
+                ? t.advanced.settings.saved
+                : t.advanced.settings.engineeringSwitchFailed,
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
+  Future<bool> _saveSession(
     AdvancedChatController controller,
     ChatSession session,
   ) async {
-    final saved = await controller.updateSession(session);
-    if (!mounted) return;
+    final saved = await controller.updateSession(session).catchError(
+          (Object _) => false,
+        );
+    if (!mounted) return saved;
     final t = Translations.of(context);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -835,25 +919,23 @@ class _DirectorSessionSettingsSheetState
           duration: const Duration(seconds: 1),
         ),
       );
+    return saved;
   }
 
   /// 强制更新标题 + floating SnackBar 反馈
   Future<void> _updateTitle(AdvancedChatController controller) async {
     setState(() => _titleUpdating = true);
     try {
-      final updated = await controller.updateTitle(force: true);
+      final result = await controller.updateTitleWithResult(force: true);
       if (!mounted) return;
-      final t = Translations.of(context);
+      final message = directorTitleUpdateText(Translations.of(context), result);
+      if (message == null) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
             behavior: SnackBarBehavior.floating,
-            content: Text(
-              updated
-                  ? t.advanced.settings.titleUpdated
-                  : t.advanced.settings.titleFailed,
-            ),
+            content: Text(message),
           ),
         );
     } finally {
@@ -921,7 +1003,7 @@ class _DirectorSessionSettingsSheetState
     if (watchMode != null) {
       //  过渡写点（重写面板时收敛）：运行时已改读
       // tool_permissions（监督预设 map），watchMode 列仅保留展示/兼容。
-      // （快照宪法）：开=写监督预设具体 map；关=写全局当前 12 工具
+      // （快照宪法）：开=写监督预设具体 map；关=写全局当前全量工具
       // 完整快照（未配置键展开为内置默认 allow），不再置回 null 跟随态。
       final closedSnapshot = ToolPermissions.toJson({
         for (final tool in ToolPermissions.allTools)
@@ -959,6 +1041,16 @@ class _DirectorSessionSettingsSheetState
       );
   }
 }
+
+(String?, String?) _directorGeneratingModels(
+  SessionPhaseModels session,
+  AdvancedConfig? advanced,
+) =>
+    ConfigurationResolver.directorGeneratingModels(
+      session,
+      defaultPresetId: advanced?.generatingPresetId,
+      defaultModelId: advanced?.generatingModelId,
+    ).forPhase('generating');
 
 // ==================== 分区体 ====================
 
@@ -1153,7 +1245,7 @@ class _RetrievalProfileChip extends StatelessWidget {
 }
 
 /// 模型与生成分区体：GM 主模型 + 生成参数组（会话覆盖，「重置为全局」置 null）。
-class _ModelGenerationBody extends StatelessWidget {
+class _ModelGenerationBody extends ConsumerWidget {
   const _ModelGenerationBody({
     required this.state,
     required this.advanced,
@@ -1185,7 +1277,7 @@ class _ModelGenerationBody extends StatelessWidget {
   final VoidCallback onResetMaxTokens;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
     final gen = t.advanced.settings.generation;
@@ -1205,7 +1297,23 @@ class _ModelGenerationBody extends StatelessWidget {
         ? null
         : ReasoningEffort.fromString(globalEffortStr);
 
-    final modelId = session.phaseModels.forPhase('generating').$2;
+    final (presetId, modelId) =
+        _directorGeneratingModels(session.phaseModels, advanced);
+    final presets =
+        ref.watch(settingsNotifierProvider.select((s) => s.presets));
+    final preset = presets.where((p) => p.presetId == presetId).firstOrNull;
+    final model =
+        preset?.cachedModels.where((m) => m.modelId == modelId).firstOrNull;
+    final modelLabel = modelId == null || presetId == null
+        ? t.settings.intermediate.phaseModels.notConfigured
+        : preset == null
+            ? modelId
+            : '${preset.name} · ${model?.displayName ?? modelId}';
+    final sampling = samplingControlsForModel(
+      presets,
+      (presetId, modelId),
+      reasoningEffort: sessionEffort ?? globalEffort,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1223,9 +1331,7 @@ class _ModelGenerationBody extends StatelessWidget {
                         .copyWith(color: colors.muted),
                   ),
                   Text(
-                    (modelId == null || modelId.isEmpty)
-                        ? t.settings.intermediate.phaseModels.notConfigured
-                        : modelId,
+                    modelLabel,
                     style: IntermediateTextStyles.bodyUi
                         .copyWith(color: colors.ink),
                     maxLines: 1,
@@ -1292,10 +1398,11 @@ class _ModelGenerationBody extends StatelessWidget {
           style: IntermediateTextStyles.caption.copyWith(color: colors.muted),
         ),
         const SizedBox(height: IntermediateSpacing.sXs),
-        if (ConfigVisibility.of(
-          ConfigVisibilityKeys.directorPanelGenerationTemperature,
-          level,
-        ))
+        if (sampling.showsTemperatureAndTopP &&
+            ConfigVisibility.of(
+              ConfigVisibilityKeys.directorPanelGenerationTemperature,
+              level,
+            ))
           IntermediateSliderField(
             label: gen.temperature,
             value: temperature.clamp(0, 2),
@@ -1319,10 +1426,11 @@ class _ModelGenerationBody extends StatelessWidget {
               ),
             ),
           ),
-        if (ConfigVisibility.of(
-          ConfigVisibilityKeys.directorPanelGenerationTopP,
-          level,
-        )) ...[
+        if (sampling.showsTemperatureAndTopP &&
+            ConfigVisibility.of(
+              ConfigVisibilityKeys.directorPanelGenerationTopP,
+              level,
+            )) ...[
           const SizedBox(height: IntermediateSpacing.sSm),
           IntermediateSliderField(
             label: gen.topP,
@@ -1340,10 +1448,11 @@ class _ModelGenerationBody extends StatelessWidget {
             ),
           ),
         ],
-        if (ConfigVisibility.of(
-          ConfigVisibilityKeys.directorPanelGenerationPresencePenalty,
-          level,
-        )) ...[
+        if (sampling.showsPenalties &&
+            ConfigVisibility.of(
+              ConfigVisibilityKeys.directorPanelGenerationPresencePenalty,
+              level,
+            )) ...[
           const SizedBox(height: IntermediateSpacing.sSm),
           IntermediateSliderField(
             label: gen.presencePenalty,
@@ -1368,10 +1477,11 @@ class _ModelGenerationBody extends StatelessWidget {
             ),
           ),
         ],
-        if (ConfigVisibility.of(
-          ConfigVisibilityKeys.directorPanelGenerationFrequencyPenalty,
-          level,
-        )) ...[
+        if (sampling.showsPenalties &&
+            ConfigVisibility.of(
+              ConfigVisibilityKeys.directorPanelGenerationFrequencyPenalty,
+              level,
+            )) ...[
           const SizedBox(height: IntermediateSpacing.sSm),
           IntermediateSliderField(
             label: gen.frequencyPenalty,
@@ -1505,7 +1615,7 @@ class _RulesBody extends StatelessWidget {
   }
 }
 
-/// 监督与工具分区体：监督预设开关 + 12 工具三态表（导演设置）。
+/// 监督与工具分区体：监督预设开关 + 全量工具三态表（导演设置）。
 ///
 /// 开关保留原位原交互（= 套用/清除「监督模式」预设）；其下三态表逐工具
 /// 细调。开关态三值：关（map=null）/ 开（=监督预设）/ 自定义（有值且
@@ -1835,18 +1945,101 @@ final _sessionContextWindowProvider = FutureProvider.autoDispose
 /// 阈值列恒具体值（新建/存量物化保底），面板恒显滑杆；重置 chip 写按下
 /// 时的全局快照（不再置回 null）。故事三段式遗产两行已移除；窗口上限
 /// （0=自动哨兵）在高级子折叠，重置同样写全局快照。
+/// 工程上下文模式需要修复卡片（三态异常处置入口，恒显）。
+///
+/// 需要修复态=配置与纪元矛盾/pending 残留/捕获破损/未知关键事件：数据
+/// 已原样保留（不自动切旧、不 trim、不删 pending），轮次已停；用户明确
+/// 选择「修复重捕获」（按当前可见历史重建新纪元）或「确认退出」（按保留
+/// 配置动态警示后闭合纪元恢复关闭态）后才继续。
+class _EngineeringModeBlockedCard extends StatelessWidget {
+  const _EngineeringModeBlockedCard({
+    required this.reason,
+    required this.enabled,
+    required this.onRepair,
+    required this.onExit,
+  });
+
+  final String? reason;
+  final bool enabled;
+  final VoidCallback onRepair;
+  final VoidCallback onExit;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.lm.palette;
+    final t = Translations.of(context);
+    final reasonText = switch (reason) {
+      'enabled-without-epoch' => t.advanced.settings.engineeringReasonNoEpoch,
+      'pending-epoch' => t.advanced.settings.engineeringReasonPending,
+      'enabled-but-exited' => t.advanced.settings.engineeringReasonExited,
+      'disabled-but-open-epoch' =>
+        t.advanced.settings.engineeringReasonDisabledOpen,
+      'capture-missing' => t.advanced.settings.engineeringReasonCapture,
+      'unknown-surface-event' =>
+        t.advanced.settings.engineeringReasonUnknownEvent,
+      _ => t.advanced.settings.engineeringReasonUnknown,
+    };
+    return Container(
+      padding: const EdgeInsets.all(IntermediateSpacing.sMd),
+      decoration: BoxDecoration(
+        color: colors.surfaceVariant,
+        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            t.advanced.settings.engineeringBlockedTitle,
+            style: IntermediateTextStyles.bodyUi.copyWith(color: colors.ink),
+          ),
+          const SizedBox(height: IntermediateSpacing.sXs),
+          Text(
+            t.advanced.settings.engineeringBlockedDesc,
+            style: IntermediateTextStyles.caption.copyWith(color: colors.muted),
+          ),
+          const SizedBox(height: IntermediateSpacing.sXs),
+          Text(
+            reasonText,
+            style: IntermediateTextStyles.caption.copyWith(color: colors.muted),
+          ),
+          const SizedBox(height: IntermediateSpacing.sSm),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: enabled ? onRepair : null,
+                  child: Text(t.advanced.settings.engineeringRepair),
+                ),
+              ),
+              const SizedBox(width: IntermediateSpacing.sSm),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: enabled ? onExit : null,
+                  child: Text(t.advanced.settings.engineeringExitButton),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ContextBody extends ConsumerWidget {
   const _ContextBody({
     required this.state,
     required this.advanced,
     required this.enabled,
     required this.onChanged,
+    required this.onEngineeringModeToggle,
   });
 
   final AdvancedChatState state;
   final AdvancedConfig? advanced;
   final bool enabled;
-  final ValueChanged<ChatSession> onChanged;
+  final Future<bool> Function(ChatSession) onChanged;
+  final ValueChanged<bool> onEngineeringModeToggle;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1857,10 +2050,8 @@ class _ContextBody extends ConsumerWidget {
     // 物化后列恒有值；null 仅在物化失败的容错窗口出现，回退全局生效值
     final override = session.compactionTriggerRatioOverride ?? globalTrigger;
 
-    final sessionGm = session.phaseModels;
-    final gmPreset =
-        sessionGm.generatingPresetId ?? _fallbackGmPreset(advanced);
-    final gmModel = sessionGm.generatingModelId ?? _fallbackGmModel(advanced);
+    final (gmPreset, gmModel) =
+        _directorGeneratingModels(session.phaseModels, advanced);
     final windowArgs = (
       presetId: gmPreset,
       modelId: gmModel,
@@ -1874,6 +2065,22 @@ class _ContextBody extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── 工程上下文模式（导演实验）：会话级开关，原子切换 ──────
+        SwitchListTile(
+          value: state.session.engineeringContextEnabled ?? false,
+          onChanged: enabled ? onEngineeringModeToggle : null,
+          activeThumbColor: colors.primary,
+          contentPadding: EdgeInsets.zero,
+          title: Text(
+            t.advanced.settings.engineeringTitle,
+            style: IntermediateTextStyles.bodyUi.copyWith(color: colors.ink),
+          ),
+          subtitle: Text(
+            t.advanced.settings.engineeringHint,
+            style: IntermediateTextStyles.caption.copyWith(color: colors.muted),
+          ),
+        ),
+        const SizedBox(height: IntermediateSpacing.sSm),
         DirectorCompactionThresholdField(
           ratio: override,
           effectiveWindow: effectiveWindow,
@@ -1937,16 +2144,6 @@ class _ContextBody extends ConsumerWidget {
       ],
     );
   }
-
-  static String? _fallbackGmPreset(AdvancedConfig? advanced) =>
-      advanced != null && advanced.generatingPresetId.isNotEmpty
-          ? advanced.generatingPresetId
-          : null;
-
-  static String? _fallbackGmModel(AdvancedConfig? advanced) =>
-      advanced != null && advanced.generatingModelId.isNotEmpty
-          ? advanced.generatingModelId
-          : null;
 }
 
 /// 紧凑模式 chip（选中态 primary，未选中 surfaceVariant；对齐故事侧

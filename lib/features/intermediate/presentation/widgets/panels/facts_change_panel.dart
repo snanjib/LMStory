@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
@@ -10,10 +12,12 @@ import 'package:lmstory/core/theme/system/structures/classic/narrative/facts_cha
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_change_record.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/story_phase_models.dart';
 import 'package:lmstory/features/story_runtime/presentation/pages/memory_browser_page.dart';
+import 'package:lmstory/i18n/factual_labels.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 事实层变更小窗（DOC-11 §4 配套，2026-08-13 新增）。
@@ -75,6 +79,7 @@ class _FactsChangePanelState extends State<FactsChangePanel> {
   bool _hasAutoFolded = false;
   int _foldRetryCount = 0;
   static const int _maxFoldRetries = 2;
+  final _legacyTypes = <(String, String), Future<FactualEntityType?>>{};
 
   bool get _isApplying =>
       widget.phase == IntermediatePhase.summarizing ||
@@ -93,6 +98,10 @@ class _FactsChangePanelState extends State<FactsChangePanel> {
   @override
   void didUpdateWidget(covariant FactsChangePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.artifacts != widget.artifacts ||
+        oldWidget.session?.sessionId != widget.session?.sessionId) {
+      _legacyTypes.clear();
+    }
     final wasIdleOrFailed = oldWidget.phase == IntermediatePhase.idle ||
         oldWidget.phase == IntermediatePhase.failed;
     if (wasIdleOrFailed && _isApplying) {
@@ -344,40 +353,106 @@ class _FactsChangePanelState extends State<FactsChangePanel> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        for (final record in changes)
-          Padding(
-            padding: const EdgeInsets.only(bottom: IntermediateSpacing.sXs),
-            child: InkWell(
-              onTap: () =>
-                  FactsChangeDetailDialog.show(context, record: record),
-              borderRadius:
-                  BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  vertical: IntermediateSpacing.s2xs,
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildActionBadge(colors, t, record.action),
-                    const SizedBox(width: IntermediateSpacing.sXs),
-                    Expanded(
-                      child: Text(
-                        _recordSummary(record),
-                        style: IntermediateTextStyles.caption.copyWith(
-                          color: colors.ink,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        for (final (index, record) in changes.indexed)
+          _buildChangeRow(colors, t, record, index),
       ],
     );
+  }
+
+  Widget _buildChangeRow(
+    LmPalette colors,
+    Translations t,
+    FactsChangeRecord record,
+    int index,
+  ) {
+    final recordedType = FactualEntityType.tryFromString(record.entityType);
+    final entityId = record.entityId;
+    final artifacts = widget.artifacts;
+    final sessionId = artifacts?.sessionId ?? widget.session?.sessionId;
+
+    Widget row(
+      FactualEntityType? type, {
+      Future<FactualEntityType?>? typeLookup,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: IntermediateSpacing.sXs),
+        child: InkWell(
+          onTap: () async {
+            final resolved = type ?? await typeLookup;
+            if (!mounted ||
+                widget.artifacts != artifacts ||
+                (widget.artifacts?.sessionId ?? widget.session?.sessionId) !=
+                    sessionId) {
+              return;
+            }
+            await FactsChangeDetailDialog.show(
+              context,
+              record: record,
+              entityType: resolved,
+            );
+          },
+          borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
+          child: Padding(
+            padding:
+                const EdgeInsets.symmetric(vertical: IntermediateSpacing.s2xs),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildActionBadge(colors, t, record.action),
+                const SizedBox(width: IntermediateSpacing.sXs),
+                Expanded(
+                  child: Text(
+                    _recordSummary(record, t, type),
+                    style: IntermediateTextStyles.caption
+                        .copyWith(color: colors.ink),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (recordedType != null || entityId == null || sessionId == null) {
+      return row(recordedType);
+    }
+    for (final fact in artifacts?.retrievedFacts ?? const <RetrievedFact>[]) {
+      if (fact.entity.entityId == entityId &&
+          fact.entity.sessionId == sessionId) {
+        return row(fact.entity.type);
+      }
+    }
+
+    final container = context
+        .getInheritedWidgetOfExactType<UncontrolledProviderScope>()
+        ?.container;
+    if (container == null) return row(null);
+    final lookup = _legacyTypes.putIfAbsent(
+      (sessionId, entityId),
+      () => _lookupEntityType(container, sessionId, entityId),
+    );
+    return FutureBuilder<FactualEntityType?>(
+      key: ValueKey((index, sessionId, entityId, record.attrKey)),
+      future: lookup,
+      builder: (_, snapshot) => row(snapshot.data, typeLookup: lookup),
+    );
+  }
+
+  Future<FactualEntityType?> _lookupEntityType(
+    ProviderContainer container,
+    String sessionId,
+    String entityId,
+  ) async {
+    try {
+      final repository = container.read(factualRepositoryProvider);
+      return await repository.getEntityTypeInSession(sessionId, entityId);
+    } catch (_) {
+      // A history row is still readable if the linked entity cannot be read.
+      return null;
+    }
   }
 
   /// 疑似重复行——「新名 ↔ 既有实体(命中名)」，点击进
@@ -458,7 +533,11 @@ class _FactsChangePanelState extends State<FactsChangePanel> {
   }
 
   /// 单条变更的行内摘要（实体名 + 属性 + 变更梗概）
-  String _recordSummary(FactsChangeRecord record) {
+  String _recordSummary(
+    FactsChangeRecord record,
+    Translations t,
+    FactualEntityType? type,
+  ) {
     final name = record.primaryName ?? record.entityId ?? '';
     final attr = record.attrKey;
     switch (record.action) {
@@ -466,11 +545,21 @@ class _FactsChangePanelState extends State<FactsChangePanel> {
         return name;
       case FactAction.archiveEntity:
         return name;
+      case FactAction.setImportance:
+        if (record.oldValue != null && record.newValue != null) {
+          return '$name · ${record.oldValue} → ${record.newValue}';
+        }
+        if (record.newValue != null) {
+          return '$name · ${record.newValue}';
+        }
+        return name;
       case FactAction.addAlias:
       case FactAction.updateAttr:
       case FactAction.appendList:
       case FactAction.removeFromList:
-        return attr == null || attr.isEmpty ? name : '$name · $attr';
+        if (attr == null || attr.isEmpty) return name;
+        final label = factualAttributeLabel(t, type, attr) ?? attr;
+        return '$name · $label';
     }
   }
 
@@ -488,6 +577,7 @@ class _FactsChangePanelState extends State<FactsChangePanel> {
       FactAction.removeFromList => chat.factsActionRemoveFromList,
       FactAction.addAlias => chat.factsActionAddAlias,
       FactAction.archiveEntity => chat.factsActionArchiveEntity,
+      FactAction.setImportance => chat.factsActionSetImportance,
     };
     return Container(
       padding: const EdgeInsets.symmetric(

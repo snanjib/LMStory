@@ -37,7 +37,7 @@ class SubagentRunner {
     this.defaultMaxDuration = const Duration(minutes: 2),
     this.defaultMaxTotalTokens,
     this.doomLoopThreshold = 8,
-    AgentEventSink? Function()? externalEventsResolver,
+    AgentEventSink? Function(String subagentCallId)? externalEventsResolver,
   })  : _gateway = gateway,
         _externalEventsResolver = externalEventsResolver,
         _toolsByName = {
@@ -63,17 +63,30 @@ class SubagentRunner {
   ///
   /// 惰性解析（调用时取）：主侧 durable sink 在工具装配之后才创建，
   /// 构造期拿不到引用。null / 解析为 null = 维持纯缓冲（旧行为）。
-  final AgentEventSink? Function()? _externalEventsResolver;
+  ///
+  /// 参数为本次 spawn 的 subagentCallId（HAR-09，SubagentRunner.run 的
+  /// 同名参数传入）——中继出口（如 DurableAgentEventSink
+  /// .relaySubagentEvent）据此给落账事件盖 `subagentCallId`，同轮多次
+  /// spawn 的中继事件可区分归属。
+  final AgentEventSink? Function(String subagentCallId)?
+      _externalEventsResolver;
 
-  /// 工具档位（research 档即能力位清单；plain 为空）
+  /// 工具档位（research 档即能力位清单；plain 为空）。
+  ///
+  /// research 含幕后 calc（calc_eval/calc_date）：子代理调研时常需
+  /// 数值/日期核对，仍为只读，最终与主代理 availableTools 候选集求交。
   static const Map<String, List<String>> toolsets = {
     'research': [
       'search_story',
       'search_story_text',
       'read_story',
+      'list_facts',
       'query_facts',
+      'query_memory_changes',
       'read_compact_summary',
       'read_skill',
+      'calc_eval',
+      'calc_date',
     ],
     'plain': [],
   };
@@ -106,18 +119,21 @@ class SubagentRunner {
   /// [brief] 任务书原文（角色、目标、交付物格式），进 system prompt。
   /// [toolset] 工具档位（research/plain，见 [toolsets]）。
   /// [maxSteps] 步数上限（null = [defaultMaxSteps]）。
+  /// [subagentCallId] 发起本次 spawn 的 toolCallId（HAR-09）——传给
+  /// 中继出口给落账事件盖 subagentCallId，同轮多次 spawn 可区分。
   Future<AgentTurnResult> run({
     required String brief,
     required String toolset,
     required AgentCancellationToken parentCancellation,
     int? maxSteps,
+    String? subagentCallId,
   }) {
     final whitelist = effectiveTools(toolset);
 
     final runner = AgentRunner(gateway: _gateway);
     final buffer = BufferingAgentEventSink();
     // 外部出口存在时多播（缓冲保留——SpawnTool 并账与测试断言仍读它）
-    final external = _externalEventsResolver?.call();
+    final external = _externalEventsResolver?.call(subagentCallId ?? '');
     final sink = external == null
         ? buffer as AgentEventSink
         : CompositeAgentEventSink([buffer, external]);
@@ -323,6 +339,9 @@ class SpawnTool implements AgentTool {
         toolset: toolset,
         parentCancellation: invocation.cancellation,
         maxSteps: maxSteps.value ?? _subagent.defaultMaxSteps,
+        // HAR-09：spawn 的 toolCallId 作为子代理稳定业务 id——同轮多次
+        // spawn 天然不同，中继事件据此区分归属
+        subagentCallId: invocation.callId,
       );
       final deliverable = result.lastAssistantText;
       // 子代理消耗并账进父轮——maxTotalTokens 预算从此对 spawn 生效

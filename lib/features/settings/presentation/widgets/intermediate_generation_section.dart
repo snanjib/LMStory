@@ -13,6 +13,8 @@ import 'package:lmstory/core/widgets/commit_slider.dart';
 import 'package:lmstory/core/widgets/editable_value_text.dart';
 import 'package:lmstory/core/widgets/numeric_input_dialog.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
+import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_context_budget_section.dart'
     show IntermediateContextBudgetSection;
 import 'package:lmstory/features/story_runtime/presentation/widgets/session_settings_fields.dart'
@@ -73,13 +75,28 @@ class IntermediateGenerationSection extends ConsumerWidget {
     final reasoningEffort = reasoningEffortStr != null
         ? ReasoningEffort.fromString(reasoningEffortStr)
         : null;
+    final (presets, defaultReasoningEffort) = ref.watch(
+      settingsNotifierProvider
+          .select((s) => (s.presets, s.defaultReasoningEffort)),
+    );
+    final phases = config?.phaseModels;
+    final sampling = samplingControlsForStory(
+      presets,
+      generating: (phases?.generatingPresetId, phases?.generatingModelId),
+      reviewing: (config?.reviewEnabled ?? false)
+          ? (phases?.reviewingPresetId, phases?.reviewingModelId)
+          : null,
+      extracting: (phases?.extractingPresetId, phases?.extractingModelId),
+      reasoningEffort: reasoningEffort ?? defaultReasoningEffort,
+    );
     final isLoading = configAsync.isLoading;
 
     final rows = <Widget>[
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGlobalGenerationTemperature,
-        level,
-      ))
+      if (sampling.showsTemperatureAndTopP &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGlobalGenerationTemperature,
+            level,
+          ))
         _SliderRow(
           label: t.settings.intermediate.generation.temperature,
           value: temperature,
@@ -90,10 +107,11 @@ class IntermediateGenerationSection extends ConsumerWidget {
           enabled: !isLoading,
           onChanged: isLoading ? null : (v) => _persist(ref, 'temperature', v),
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGlobalGenerationTopP,
-        level,
-      ))
+      if (sampling.showsTemperatureAndTopP &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGlobalGenerationTopP,
+            level,
+          ))
         _SliderRow(
           label: t.settings.intermediate.generation.topP,
           value: topP,
@@ -115,10 +133,11 @@ class IntermediateGenerationSection extends ConsumerWidget {
           enabled: !isLoading,
           onChanged: isLoading ? null : (v) => _persist(ref, 'max_tokens', v),
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGlobalGenerationPresencePenalty,
-        level,
-      ))
+      if (sampling.showsPenalties &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGlobalGenerationPresencePenalty,
+            level,
+          ))
         _SliderRow(
           label: t.settings.intermediate.generation.presencePenalty,
           value: presencePenalty,
@@ -130,10 +149,11 @@ class IntermediateGenerationSection extends ConsumerWidget {
           onChanged:
               isLoading ? null : (v) => _persist(ref, 'presence_penalty', v),
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGlobalGenerationFrequencyPenalty,
-        level,
-      ))
+      if (sampling.showsPenalties &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGlobalGenerationFrequencyPenalty,
+            level,
+          ))
         _SliderRow(
           label: t.settings.intermediate.generation.frequencyPenalty,
           value: frequencyPenalty,

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/features/advanced/domain/entities/tool_permissions.dart';
@@ -21,6 +21,48 @@ void main() {
   });
 
   group('Schema 验证', () {
+    test('升级现有会话时保留编辑框草稿并新增独立的导演输入列', () async {
+      final directory =
+          await Directory.systemTemp.createTemp('director-input-schema-');
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/legacy.sqlite');
+      final legacy = AppDatabase.forTesting(NativeDatabase(file));
+      const draft = '上个版本只在输入框写了这句话。\n还没发送。';
+      try {
+        await legacy.customStatement(
+          'INSERT INTO chat_sessions (session_id,title,mode,draft_input) '
+          'VALUES (?,?,?,?)',
+          ['legacy-director', '旧导演', 'advanced', draft],
+        );
+        await legacy.customStatement(
+          'ALTER TABLE chat_sessions DROP COLUMN director_pending_input',
+        );
+        await legacy.customStatement(
+          'ALTER TABLE chat_sessions DROP COLUMN director_queued_input',
+        );
+        await legacy.customStatement('PRAGMA user_version = 56');
+      } finally {
+        await legacy.close();
+      }
+      final reopened = AppDatabase.forTesting(NativeDatabase(file));
+      try {
+        final row = await reopened
+            .customSelect(
+              'SELECT draft_input, director_pending_input, director_queued_input '
+              "FROM chat_sessions WHERE session_id = 'legacy-director'",
+            )
+            .getSingle();
+        expect(row.read<String>('draft_input'), draft);
+        expect(row.readNullable<String>('director_pending_input'), isNull);
+        expect(row.readNullable<String>('director_queued_input'), isNull);
+        final version =
+            await reopened.customSelect('PRAGMA user_version').getSingle();
+        expect(version.read<int>('user_version'), 57);
+      } finally {
+        await reopened.close();
+      }
+    });
+
     test('6 张表全部创建', () async {
       final tables = await db
           .customSelect(
@@ -903,7 +945,7 @@ void main() {
         0,
         reason: '存量会话未物化时必须允许 NULL（公式惰性回退）',
       );
-      expect(db.schemaVersion, 54);
+      expect(db.schemaVersion, AppDatabase.currentSchemaVersion);
     });
 
     test('旧会话行为 NULL，物化后读回计数器值', () async {
@@ -969,7 +1011,7 @@ void main() {
         // 3. 重新打开：onUpgrade(48→49) → repairSchema 增量补表补列
         fileDb = AppDatabase.forTesting(native);
         await fileDb.customSelect('SELECT 1').get();
-        expect(fileDb.schemaVersion, 54);
+        expect(fileDb.schemaVersion, AppDatabase.currentSchemaVersion);
 
         final tables = await fileDb
             .customSelect(
@@ -1093,7 +1135,7 @@ void main() {
         // 版本号推进到当前 schemaVersion（v49 起为 49；升级完成后由 drift 写回）
         final version = await fileDb.customSelect('PRAGMA user_version').get();
         expect(version.first.read<int>('user_version'), fileDb.schemaVersion);
-        expect(fileDb.schemaVersion, 54);
+        expect(fileDb.schemaVersion, AppDatabase.currentSchemaVersion);
 
         await fileDb.close();
       } finally {

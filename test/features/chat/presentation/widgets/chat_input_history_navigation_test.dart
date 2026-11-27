@@ -29,7 +29,7 @@ void main() {
             home: Scaffold(
               body: Center(
                 child: ChatModeInputArea(
-                  onSend: (_, __) {},
+                  onSend: (text, attachments) => true,
                   onCancel: () {},
                   isSending: false,
                   isStreaming: false,

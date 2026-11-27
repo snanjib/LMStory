@@ -74,5 +74,29 @@ void main() {
       expect(usage!.promptTokens, 500);
       expect(usage.cacheReadTokens, isNull);
     });
+
+    test('完整输入随探针返回，命中率按完整输入计算', () {
+      final usage = latestStepEndUsage([
+        _event(AgentEventTypes.stepEnd, {
+          'promptTokens': 3000,
+          'totalInputTokens': 6000,
+          'cacheReadTokens': 4500,
+        }),
+      ]);
+      expect(usage!.promptTokens, 3000);
+      expect(usage.totalInputTokens, 6000);
+      expect(usage.cacheHitRatio, closeTo(0.75, 1e-9));
+    });
+
+    test('旧日志缺 totalInputTokens → 完整输入 null（不得用 prompt 冒充）', () {
+      final usage = latestStepEndUsage([
+        _event(AgentEventTypes.stepEnd, {
+          'promptTokens': 500,
+          'cacheReadTokens': 400,
+        }),
+      ]);
+      expect(usage!.totalInputTokens, isNull);
+      expect(usage.cacheHitRatio, isNull, reason: '缺完整输入面 → 不可比');
+    });
   });
 }

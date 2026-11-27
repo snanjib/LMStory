@@ -84,12 +84,15 @@ class ChatSessionsTable extends Table {
   /// 阶段由 LLM 输出并更新。null 表示尚未建立叙事时间（首轮或重置后）。
   TextColumn get currentNarrativeTime => text().nullable()();
 
-  /// 未发送输入草稿（schemaVersion 52，2026-10-04 新增）
-  ///
-  /// 跨重启的会话输入框暂存：切走会话/页面 dispose 时写入，进入会话
-  /// 恢复，发送时清空。null = 无草稿。真实会话行专用——草稿会话
-  ///（__draft_* 前缀）未物化无行，写入自然 no-op。
+  /// 跨重启的输入框草稿。
+  /// null 表示无草稿。未物化的临时会话无行可写。
   TextColumn get draftInput => text().nullable()();
+
+  /// 已提交、尚未收稿的导演首句，或由该轮派发的待发输入。
+  TextColumn get directorPendingInput => text().nullable()();
+
+  /// 与可恢复的导演轮同时存在的单条待发消息。
+  TextColumn get directorQueuedInput => text().nullable()();
 
   // ── 推荐回复会话级配置（schemaVersion ≥ 30，2026-07-29 新增）
   //
@@ -149,4 +152,10 @@ class ChatSessionsTable extends Table {
   // 建基线实体），本列留档所选卡 id（供排查/重放，运行时不消费）。
   // NULL = 未启用。经 repairSchema 开库补列（纯增量，无版本 bump）。
   TextColumn get characterInitCardId => text().nullable()();
+
+  /// 工程上下文模式开关（导演模式实验）：NULL/false = 关闭态（旧装配），
+  /// true = 开启态（事件账本纪元投影）。开启必须在同库单事务内写入
+  /// `mode/epoch` 纪元事件后本列才置 true（原子进入）。经 repairSchema
+  /// 开库补列（纯增量，无版本 bump）。
+  BoolColumn get engineeringContextEnabled => boolean().nullable()();
 }

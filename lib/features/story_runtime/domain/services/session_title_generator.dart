@@ -1,8 +1,10 @@
+import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/network/llm_adapters/sampling_params.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/auxiliary_generation_failure.dart';
 
 /// 会话标题生成器（新增）
 ///
@@ -24,7 +26,7 @@ class SessionTitleGenerator {
 
   /// 标题失败
   /// 此前 catch-all 零日志——9 例复现的「自动命名不回写」在 app.log 无痕
-  /// 迹，无法定界。失败补 warn（模型/端点/耗时/异常摘要）。
+  /// 迹，无法定界。失败时记录协议、耗时、异常类型和 HTTP 状态。
   final Logger? logger;
 
   /// 根据 [userMessage] + [assistantReply] 生成简短标题。
@@ -34,6 +36,23 @@ class SessionTitleGenerator {
   /// （network.*），此前标题/建议回复等后台调用一律吃数据源默认值。
   /// 返回生成的标题；失败时返回 null（调用方走 fallback）。
   Future<String?> generate({
+    required String userMessage,
+    required String assistantReply,
+    required NamingConfig namingConfig,
+    Duration? connectTimeout,
+    Duration? readTimeout,
+  }) async {
+    final result = await generateWithResult(
+      userMessage: userMessage,
+      assistantReply: assistantReply,
+      namingConfig: namingConfig,
+      connectTimeout: connectTimeout,
+      readTimeout: readTimeout,
+    );
+    return result.value;
+  }
+
+  Future<AuxiliaryGenerationResult<String>> generateWithResult({
     required String userMessage,
     required String assistantReply,
     required NamingConfig namingConfig,
@@ -99,25 +118,35 @@ class SessionTitleGenerator {
           .replaceAll(RegExp(r'[\n\r]'), ' ')
           .trim();
 
-      if (title.isEmpty) return null;
+      if (title.isEmpty) {
+        return (
+          value: null,
+          failure: const AuxiliaryGenerationFailure(
+            AuxiliaryGenerationFailureKind.emptyOutput,
+          ),
+        );
+      }
 
       // 限制标题长度（最多 30 字符）
       if (title.length > 30) {
         title = '${title.substring(0, 30)}...';
       }
 
-      return title;
+      return (value: title, failure: null);
     } catch (e) {
       // LLM 调用失败（网络/超时/HTTP 错误等）→ 返回 null，调用方走 fallback
-      final errorText = e.toString();
+      final status = e is AppHttpException ? e.statusCode : null;
+      final statusField = status == null ? '' : ', status=$status';
       logger?.warn(
         'Session title generation failed',
-        detail: 'model=${namingConfig.modelId}, '
-            'endpoint=${namingConfig.baseUrl}, '
+        detail: 'protocol=${namingConfig.protocol.name}, '
             'elapsed=${stopwatch.elapsedMilliseconds}ms, '
-            'error=${errorText.length > 200 ? errorText.substring(0, 200) : errorText}',
+            'errorType=${e.runtimeType}$statusField',
       );
-      return null;
+      return (
+        value: null,
+        failure: AuxiliaryGenerationFailure.fromException(e),
+      );
     }
   }
 

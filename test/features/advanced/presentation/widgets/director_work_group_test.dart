@@ -243,6 +243,31 @@ void main() {
       }
     });
 
+    testWidgets('展开聚合的旧工具记录时逐条呈现重复调用 ID', (tester) async {
+      final steps = [
+        for (var i = 0; i < 4; i++)
+          AgentTimelineBlock(
+            kind: AgentTimelineKind.action,
+            stepIndex: 0,
+            action: AgentWorkStep(
+              toolName: 'query_facts',
+              callId: 'reused-call',
+              title: '历史查证 $i',
+            ),
+          ),
+      ];
+      await tester.pumpWidget(wrap(DirectorWorkGroup(timeline: steps)));
+      await tester.tap(find.byIcon(Icons.tungsten_outlined));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('查证设定 × 4'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      for (var i = 0; i < 4; i++) {
+        expect(find.textContaining('历史查证 $i'), findsOneWidget);
+      }
+    });
+
     testWidgets('3d. G-18：≤3 或含错误的同工具段不聚合', (tester) async {
       final mixed = [
         for (var i = 0; i < 2; i++)
@@ -548,6 +573,108 @@ void main() {
         ),
       );
       expect(find.text('幕后 1 步 · 思考 0 段 · 3s'), findsOneWidget);
+    });
+  });
+
+  group('DirectorMaintenanceCapsule 任务二轻量进度胶囊', () {
+    testWidgets('默认单行折叠且固定头高，点击就地展开任务二工具卡', (tester) async {
+      const steps = [
+        AgentWorkStep(
+          toolName: 'list_facts',
+          callId: 'm-1',
+          stepIndex: 3,
+          order: 3,
+          title: '10 条动态实体',
+          output: '汇总完成',
+        ),
+        AgentWorkStep(
+          toolName: 'query_facts',
+          callId: 'm-2',
+          stepIndex: 4,
+          order: 4,
+          status: AgentStepStatus.running,
+        ),
+      ];
+      await tester.pumpWidget(
+        wrap(
+          const DirectorMaintenanceCapsule(
+            steps: steps,
+            progress: AgentRoundProgress(
+              currentStep: 9,
+              maxSteps: 14,
+              startedAtMs: 0,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.text('正文已就绪 · 周期记忆校准（第 9/14 步）· 查证设定'),
+        findsOneWidget,
+      );
+      // 默认折叠：步骤详情不在树上，头部单行定高 36
+      expect(find.text('浏览设定目录 · 10 条动态实体'), findsNothing);
+      final toggleFinder =
+          find.byKey(const ValueKey('maintenance-capsule-toggle'));
+      expect(tester.getSize(toggleFinder).height, 36);
+
+      // 点击就地展开任务二步骤
+      await tester.tap(toggleFinder);
+      await tester.pump();
+      expect(find.text('浏览设定目录 · 10 条动态实体'), findsOneWidget);
+      expect(find.text('查证设定'), findsOneWidget);
+
+      // 再次点击收起
+      await tester.tap(toggleFinder);
+      await tester.pump();
+      expect(find.text('浏览设定目录 · 10 条动态实体'), findsNothing);
+    });
+
+    testWidgets('无步骤时展示默认巡检提示，展开显示准备文案', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          const DirectorMaintenanceCapsule(
+            steps: [],
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.text('正文已就绪 · 正在执行周期记忆审查与校准…'),
+        findsOneWidget,
+      );
+
+      await tester
+          .tap(find.byKey(const ValueKey('maintenance-capsule-toggle')));
+      await tester.pump();
+      expect(find.text('正在准备记忆巡检…'), findsOneWidget);
+    });
+
+    testWidgets('纯净阅读模式仅展示克制单行状态且不可展开', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          const DirectorMaintenanceCapsule(
+            steps: [
+              AgentWorkStep(
+                toolName: 'list_facts',
+                callId: 'm-1',
+                title: '10 条动态实体',
+              ),
+            ],
+            pureReading: true,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('正文已就绪 · 后台正在校准记忆…'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('maintenance-capsule-toggle')),
+        findsNothing,
+      );
+      expect(find.text('浏览设定目录 · 10 条动态实体'), findsNothing);
     });
   });
 }

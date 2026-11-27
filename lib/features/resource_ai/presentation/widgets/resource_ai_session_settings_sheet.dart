@@ -19,7 +19,9 @@ import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/resource_ai/domain/entities/draft_entities.dart';
 import 'package:lmstory/features/resource_ai/presentation/controllers/resource_ai_controller.dart';
 import 'package:lmstory/features/resource_ai/presentation/widgets/draft_preview_content.dart';
+import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/features/settings/presentation/widgets/default_model_picker_sheet.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -157,6 +159,12 @@ class _ResourceAiSessionSettingsSheetState
     final t = Translations.of(context);
     final colors = context.lm.palette;
     final state = widget.controller.state;
+    final presets =
+        ref.watch(settingsNotifierProvider.select((s) => s.presets));
+    final sampling = samplingControlsForModel(
+      presets,
+      (state.modelPresetId, state.modelId),
+    );
 
     return Material(
       // 琉璃下面层让位 GlassBottomSheet 工厂；经典保持原槽位零变化。
@@ -213,14 +221,18 @@ class _ResourceAiSessionSettingsSheetState
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _section(t.resourceAi.sectionModel, _buildModelRow(t)),
+                    _section(
+                      t.resourceAi.sectionModel,
+                      _buildModelRow(t, presets),
+                    ),
                     const SizedBox(height: SimpleSpacing.sLg),
                     _section(
                       t.resourceAi.sectionGeneration,
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _buildTemperatureRow(t, colors),
+                          if (sampling.showsTemperatureAndTopP)
+                            _buildTemperatureRow(t, colors),
                           _buildMaxStepsRow(t, colors),
                         ],
                       ),
@@ -256,13 +268,9 @@ class _ResourceAiSessionSettingsSheetState
 
   // ── 模型行 ────────────────────────────────────────────────────────────
 
-  Widget _buildModelRow(Translations t) {
+  Widget _buildModelRow(Translations t, List<ApiPreset> presets) {
     final colors = context.lm.palette;
     final state = widget.controller.state;
-    // watch（而非 read）：嵌套选择器刷新 presets 后行内名称实时更新。
-    final presets = ref.watch(
-      settingsNotifierProvider.select((s) => s.presets),
-    );
     // 生成/落库中换模型会被控制器拒绝（下一轮才可换），先行禁用入口，
     // 避免选择器报「成功」但实际未写入的误导（终审 P2）。
     final busy = state.phase == ResourceAiPhase.generating ||

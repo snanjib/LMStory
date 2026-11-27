@@ -410,11 +410,15 @@ class ClassicComponents implements LmComponentKit {
     BuildContext context, {
     required String initialContent,
     bool allowResend = true,
+    Future<bool> Function(String content)? saveBeforeClosing,
+    String? saveErrorMessage,
   }) =>
       IntermediateEditDialog.show(
         context,
         initialContent: initialContent,
         allowResend: allowResend,
+        saveBeforeClosing: saveBeforeClosing,
+        saveErrorMessage: saveErrorMessage,
       );
 
   @override
@@ -450,11 +454,13 @@ class ClassicComponents implements LmComponentKit {
   @override
   Widget messageNavigation(
     BuildContext context, {
-    required VoidCallback onJumpToTop,
-    required VoidCallback onJumpToBottom,
-    required VoidCallback onPrevUserMessage,
-    required VoidCallback onNextUserMessage,
+    required VoidCallback? onJumpToTop,
+    required VoidCallback? onJumpToBottom,
+    required VoidCallback? onPrevUserMessage,
+    required VoidCallback? onNextUserMessage,
     required bool visible,
+    bool compact = false,
+    ValueChanged<bool>? onAccessibilityFocus,
     bool narrative = false,
   }) =>
       narrative
@@ -464,6 +470,8 @@ class ClassicComponents implements LmComponentKit {
               onPrevUserMessage: onPrevUserMessage,
               onNextUserMessage: onNextUserMessage,
               visible: visible,
+              compact: compact,
+              onAccessibilityFocus: onAccessibilityFocus,
             )
           : SimpleMessageNavigation(
               onJumpToTop: onJumpToTop,
@@ -471,6 +479,8 @@ class ClassicComponents implements LmComponentKit {
               onPrevUserMessage: onPrevUserMessage,
               onNextUserMessage: onNextUserMessage,
               visible: visible,
+              compact: compact,
+              onAccessibilityFocus: onAccessibilityFocus,
             );
 
   @override
@@ -529,6 +539,7 @@ class ClassicComponents implements LmComponentKit {
     int windowRounds = 5,
     bool actionsEnabled = true,
     bool animateEntrance = true,
+    bool softLineBreak = false,
     double fontScale = 1.0,
     Key? key,
   }) =>
@@ -543,6 +554,7 @@ class ClassicComponents implements LmComponentKit {
         windowRounds: windowRounds,
         actionsEnabled: actionsEnabled,
         animateEntrance: animateEntrance,
+        softLineBreak: softLineBreak,
         fontScale: fontScale,
         onCopy: onCopy ?? _noop,
         onRegenerate: onRegenerate ?? _noop,
@@ -562,6 +574,7 @@ class ClassicComponents implements LmComponentKit {
     required VoidCallback onClose,
     required VoidCallback onToggle,
     bool isFailed = false,
+    String? failureMessage,
     Future<bool> Function()? onRetry,
   }) =>
       SuggestReplyOverlay(
@@ -572,6 +585,7 @@ class ClassicComponents implements LmComponentKit {
         onClose: onClose,
         onToggle: onToggle,
         isFailed: isFailed,
+        failureMessage: failureMessage,
         onRetry: onRetry,
       );
 

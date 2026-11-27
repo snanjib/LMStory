@@ -668,7 +668,7 @@ const ToolDefinition kExtractFactsToolDefinition = ToolDefinition(
               'description': '属性键。update_attr/append_list/remove_from_list '
                   '时必填；create_entity 时可选（用于在创建实体的同时初始化一个 '
                   '属性）。各实体类型预定义属性：\n'
-                  'character: name/personality/background/relationships/skills（character 支持自定义属性名，如 gender/age/species/appearance 等）\n'
+                  'character: name/personality/background/relationships/skills（character 支持自定义属性名，如 gender/age/species/appearance、relationship:对方名 等关系属性）\n'
                   'location: name/description/features\n'
                   'item: name/description/owner\n'
                   'lore: name/description/category\n'
@@ -807,7 +807,7 @@ update_attr 会覆盖旧值，因此只用于"旧状态不再成立"的场景。
 - 用户主动补充的角色性格、背景、设定、关系等信息，是用户在构建自己想要的设定，必须沉淀为事实变更
 - 模型回复中的信息需更谨慎判断（可能只是剧情演绎），但用户明确陈述的设定应直接采纳
 - 例：用户说"这个角色其实很害怕孤独，只是表面上装得冷漠" -> 提取 personality 更新
-- 例：用户说"她和主角是青梅竹马" -> 提取 relationships 更新
+- 例：用户说"她和主角是青梅竹马" -> 提取 relationship:对方名 属性更新
 - 例：用户说"这把剑是上古神器，能斩杀神灵" -> 创建 item 实体并填充 description
 
 【实体重要性评分规则（create_entity 时必填 importance 字段）】
@@ -844,7 +844,11 @@ character（角色，含主角/NPC/宠物等所有角色）：
   经历重大事件后持久性格转变（经历背叛后变得多疑）。注意：偶尔一次的情绪不算性格
 - background（single，★关键属性，可 update）：背景（描述性属性，单值）。
   触发：用户描述角色过去经历、身份来历
-- relationships（dict，可 update+append）：关系。触发：用户说明角色间关系、关系发生实质变化
+- relationships（dict，仅 update，禁止 append）：群体/笼统关系（如"与师门众人交恶"）。
+  值为 JSON 对象，update 时整体维护（新对象须包含仍成立的群体条目）。触发：用户说明群体关系、群体关系变化
+- relationship:对方角色名（single，可 update）：与某个具体角色的关系。每个对象一条属性，各自独立。
+  值为该段关系的完整当前描述（有方向：从本角色视角描述，不推断对方态度对称）。触发：该关系建立或发生实质变化。
+  例：relationship:苏晴 = "信任，曾受其救助"。对象用其正式名字；不知道正式名时按剧情称呼命名，不要虚构对象
 - skills（list，可 append）：技能列表。触发：角色展示新技能、学会新能力
 - 自定义属性：character 支持自定义属性名，如 gender（性别）、age（年龄）、species（种族）、
   role（职业/身份）、appearance（外貌）等。按需使用，不必全部填充
@@ -907,7 +911,8 @@ misc（杂项，无法归类的持久性事实）：
    - 组织/势力首次被提及或发生变化（如成员变动、势力消长、首领更替）-> 创建/更新 organization 实体
    - 用户明确的职责分配/身份赋予（如"今后商会后勤就交给你了""封你为大将军""任命你为副官"）
      -> 提取该角色的 role/职业/职责属性（用户主动赋予的持久身份必须沉淀，不要因"只是口头一说"就忽略）
-   - 用户建立或明确宣告的持久关系（如"她是我未婚妻""认他做义父""我们结为盟友"）-> 更新 relationships
+   - 用户建立或明确宣告的持久关系（如"她是我未婚妻""认他做义父""我们结为盟友"）
+     -> 涉及具体角色时更新 relationship:对方名；群体/笼统关系更新 relationships
    - **已知实体属性缺失时主动补充**：若末尾【已知实体上下文】中某实体存在但缺关键属性
      （如 personality/background 为空），且本轮用户消息或回复正文中明确提及该属性
      → 应发起 update_attr 补充，并给 confidence=4-5

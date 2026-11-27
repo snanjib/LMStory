@@ -37,6 +37,12 @@ class DirectorRoundTuning {
     this.fullChunkEvents = false,
     this.foreshadowCheckInterval = 8,
     this.eventLogRetentionTurns = 20,
+    this.maintenanceGapInterval = 7,
+    this.maintenanceNudgeCooldown = 4,
+    this.majorReviewInterval = 50,
+    this.maintenanceExtraSteps = 6,
+    this.recentActiveEntitiesWindow = 15,
+    this.recentActiveEntitiesCap = 10,
   });
 
   factory DirectorRoundTuning.fromConfig(
@@ -74,6 +80,12 @@ class DirectorRoundTuning {
         fullChunkEvents: c.harness.fullChunkEvents,
         foreshadowCheckInterval: c.harness.foreshadowCheckInterval,
         eventLogRetentionTurns: c.harness.eventLogRetentionTurns,
+        maintenanceGapInterval: c.harness.maintenanceGapInterval,
+        maintenanceNudgeCooldown: c.harness.maintenanceNudgeCooldown,
+        majorReviewInterval: c.harness.majorReviewInterval,
+        maintenanceExtraSteps: c.harness.maintenanceExtraSteps,
+        recentActiveEntitiesWindow: c.harness.recentActiveEntitiesWindow,
+        recentActiveEntitiesCap: c.harness.recentActiveEntitiesCap,
       );
 
   DirectorRoundTuning withNetwork(NetworkConfig network) => DirectorRoundTuning(
@@ -100,6 +112,12 @@ class DirectorRoundTuning {
         fullChunkEvents: fullChunkEvents,
         foreshadowCheckInterval: foreshadowCheckInterval,
         eventLogRetentionTurns: eventLogRetentionTurns,
+        maintenanceGapInterval: maintenanceGapInterval,
+        maintenanceNudgeCooldown: maintenanceNudgeCooldown,
+        majorReviewInterval: majorReviewInterval,
+        maintenanceExtraSteps: maintenanceExtraSteps,
+        recentActiveEntitiesWindow: recentActiveEntitiesWindow,
+        recentActiveEntitiesCap: recentActiveEntitiesCap,
       );
 
   /// 会话 maxSteps 列 NULL 时的回退默认（advanced.defaults.max_steps）
@@ -147,11 +165,27 @@ class DirectorRoundTuning {
   /// 默认关；最小粒度聚合档恒开）
   final bool fullChunkEvents;
 
-  /// 伏笔定期清点间隔轮数（advanced.harness.foreshadow_check_interval，
-  /// 默认 8；0 = 停用）。清点轮：轮尾注入未兑现清单提醒 + finish_round
-  /// 伏笔对账闸门拦截一次——两处共用同一节奏源（isForeshadowSweepRound）。
+  /// 伏笔定期清点间隔轮数（兼容保留；0 = 停用）。
   final int foreshadowCheckInterval;
 
   /// 事件日志滚动保留轮数（批 I；0=不限制）
   final int eventLogRetentionTurns;
+
+  /// 轻量维护缺口提示触发间隔（轮数；0 = 停用）
+  final int maintenanceGapInterval;
+
+  /// 轻量维护缺口提示冷却轮数
+  final int maintenanceNudgeCooldown;
+
+  /// 周期全面审查与维护大周期触发间隔（轮数；0 = 停用）
+  final int majorReviewInterval;
+
+  /// 大周期进入维护阶段时额外追加的步数预算
+  final int maintenanceExtraSteps;
+
+  /// 近期活跃非核心动态实体的回看轮次窗口
+  final int recentActiveEntitiesWindow;
+
+  /// 近期活跃非核心动态实体在 Core Blocks 中的最多展示条数
+  final int recentActiveEntitiesCap;
 }

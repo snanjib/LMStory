@@ -1,6 +1,5 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/meta/app_meta.dart';
@@ -195,11 +194,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
 
   Future<void> _shareLog(BuildContext context) async {
     final t = Translations.of(context);
-    // 分享前确保内存 buffer 落盘，文件为最新内容
-    await Logger.flushAll();
-    final path = Logger.currentLogFilePath;
-    if (!context.mounted) return;
-    if (path == null) {
+    if (Logger.currentLogFilePath == null) {
       _showInfo(context, t.settings.diagnostics.logs.empty);
       return;
     }
@@ -207,14 +202,18 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
     // 桌面端此前走 share_plus 的 Windows 分享浮层，
     // 真机上浮层不可见时抢占输入导致整页卡死（复现 2 次），改走系统
     // 保存对话框直接落盘（轮转文件一并合并导出）。
-    if (isDesktopPlatform) {
+    if (switch (defaultTargetPlatform) {
+      TargetPlatform.linux ||
+      TargetPlatform.macOS ||
+      TargetPlatform.windows =>
+        true,
+      _ => false,
+    }) {
       await _saveLogToFile(context);
       return;
     }
 
-    // 移动端分享面板前确认（安全评测）：日志可能含会话内容与
-    // 提示词文本（密钥有 redactSecrets 防线，正文没有），提示接收方
-    // 可信后再外发。桌面保存框产物留在本机，不走此确认。
+    // 脱敏后的日志仍可能含用户主动记录的会话内容与提示词。
     {
       final colors = context.lm.palette;
       final confirmed = await showLmDialog<bool>(
@@ -227,8 +226,6 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
           ),
           content: Text(
             t.settings.diagnostics.logs.shareConfirmBody,
-            maxLines: 5,
-            overflow: TextOverflow.ellipsis,
           ),
           actions: [
             TextButton(
@@ -246,32 +243,37 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
       if (confirmed != true || !context.mounted) return;
     }
 
-    // 附带轮转出的上次运行日志——崩溃场景的证据
-    // 在重启后位于 app.log.1，只分享当前文件恰好拿不到最需要的那份。
-    final files = <XFile>[XFile(path, mimeType: 'text/plain')];
-    final rotated = '$path.1';
-    if (File(rotated).existsSync()) {
-      files.add(XFile(rotated, mimeType: 'text/plain'));
+    try {
+      await withTemporaryLogExport((path) async {
+        if (!context.mounted) return;
+        await Share.shareXFiles(
+          [XFile(path, mimeType: 'text/plain')],
+          subject: t.settings.diagnostics.logs.shareSubject,
+          sharePositionOrigin: shareOriginFrom(context),
+        );
+      });
+    } catch (_) {
+      if (context.mounted) {
+        _showInfo(
+          context,
+          Translations.of(context).settings.diagnostics.logs.shareFailed,
+        );
+      }
     }
-    await Share.shareXFiles(
-      files,
-      subject: t.settings.diagnostics.logs.shareSubject,
-      sharePositionOrigin: shareOriginFrom(context),
-    );
   }
 
   /// 桌面端日志导出：系统保存对话框选位置 → Isolate 合并落盘 → 成功确认框
   Future<void> _saveLogToFile(BuildContext context) async {
     final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final savedPath = await FilePicker.platform.saveFile(
-      fileName: 'lmstory_log_$timestamp.log',
-      type: FileType.custom,
-      allowedExtensions: const ['log'],
-    );
-    if (savedPath == null || savedPath.isEmpty || !context.mounted) return;
-
     try {
+      final savedPath = await FilePicker.platform.saveFile(
+        fileName: 'lmstory_log_$timestamp.log',
+        type: FileType.custom,
+        allowedExtensions: const ['log'],
+      );
+      if (savedPath == null || savedPath.isEmpty || !context.mounted) return;
       await saveLogFilesTo(targetPath: savedPath);
+      if (context.mounted) await showFileSavedDialog(context, savedPath);
     } catch (e) {
       if (!context.mounted) return;
       _showInfo(
@@ -280,10 +282,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
               error: e.toString(),
             ),
       );
-      return;
     }
-    if (!context.mounted) return;
-    await showFileSavedDialog(context, savedPath);
   }
 
   // ==================== 清空确认 ====================

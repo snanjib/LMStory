@@ -42,7 +42,7 @@ import '../../../test_helpers/stub_failure_log_repository.dart';
 
 Variable<String> driftVar(String v) => Variable.withString(v);
 
-/// 五份真实候选资产逐一经真实 Controller/AgentRunner/工具/事务走完整
+/// 中英文资产逐一经真实 Controller/AgentRunner/工具/事务走完整
 /// 回合并交接（不走任何注入桩；资产字节来自仓库内真实文件）。
 ///
 /// 每份包固定记录自己的独立语义证据（proseContains/entityNames/
@@ -57,8 +57,12 @@ void main() {
     jsonDecode(catalogRaw) as Map<String, dynamic>,
   );
 
-  test('候选目录装载：五候选全量参与本回归', () {
-    expect(candidates, hasLength(5));
+  test('候选目录装载：五个中文候选和一个英文样例', () {
+    expect(candidates.where((c) => c.locale == 'zh-CN'), hasLength(5));
+    expect(
+      candidates.where((c) => c.locale == 'en-US').single.id,
+      'en-us-story-sample',
+    );
   });
 
   for (final candidate in candidates) {
@@ -88,7 +92,7 @@ void main() {
           db,
           secure,
           prefs,
-          localeTag: 'zh-CN',
+          localeTag: candidate.locale,
           candidates: [candidate],
         );
 
@@ -181,7 +185,7 @@ void main() {
       test('真实工具链回合 + 候选独立语义证据 + 零远程调用企图', () async {
         expect(controller.state.phase, IntermediatePhase.idle);
 
-        // 用户亲自点击发送（固定提示词原文；五包同题）
+        // 用户亲自点击发送（固定提示词原文）
         await controller.sendMessage(pack.prompt);
 
         final deadline = DateTime.now().add(const Duration(seconds: 20));

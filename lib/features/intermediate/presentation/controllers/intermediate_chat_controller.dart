@@ -7,8 +7,10 @@ import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/config/output_token_policy.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/llm/context_overflow.dart';
-import 'package:lmstory/core/network/http_client.dart' show CancellationToken;
+import 'package:lmstory/core/network/http_client.dart'
+    show CancellationToken, CancelledException;
 import 'package:lmstory/core/network/retry_policy.dart';
+import 'package:lmstory/core/services/data_store_operation_guard.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/throttled_delta_buffer.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
@@ -37,9 +39,11 @@ import 'package:lmstory/features/memory/domain/entities/scored_memory.dart';
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
 import 'package:lmstory/features/memory/domain/services/embedding_service.dart';
 import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
+import 'package:lmstory/features/memory/domain/services/memory_index_health.dart';
 import 'package:lmstory/features/memory/domain/services/memory_query.dart';
 import 'package:lmstory/features/memory/domain/services/memory_retrieval_exception.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/classified_keywords.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/context_usage_estimate.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/message_variant_record.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_context.dart';
@@ -54,6 +58,7 @@ import 'package:lmstory/features/story_runtime/domain/services/retry_scheduler.d
 import 'package:lmstory/features/story_runtime/domain/services/round_history_utils.dart';
 import 'package:lmstory/features/story_runtime/domain/services/session_title_generator.dart';
 import 'package:lmstory/features/story_runtime/domain/services/suggest_reply_generator.dart';
+import 'package:lmstory/features/story_runtime/presentation/controllers/story_session_operations.dart';
 import 'package:lmstory/features/story_runtime/presentation/controllers/stream_runner.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:uuid/uuid.dart';
@@ -73,7 +78,7 @@ part 'intermediate_chat_controller_messages.dart';
 // - _retry.dart：失败处理 + 自动重试 + 手动续跑（_fail / _scheduleRetry / retry /
 //   continueWithFts5Only / continueFromFailed / _reloadRoundConfigPreservingOutputs）
 // - _messages.dart：消息操作 + 简化 Fork（canOperateMessage / regenerateMessage /
-//   editAndResend / deleteRound / _rollbackNarrativeTime / editPendingUserMessage /
+//   editAndResend / deleteRound / editPendingUserMessage /
 //   deletePendingUserMessage / _computeTurnNumber / _removeArtifactsFromTurn / clearRound）
 // - _suggest.dart：推荐回复气泡（generateSuggestReplies / selectSuggestReply /
 //   toggleSuggest / closeSuggest）
@@ -132,6 +137,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     required Future<IntermediateConfig> Function() getConfig,
     required Logger logger,
     required ChatSession session,
+    DataStoreOperationGuard? operationGuard,
     SessionTitleGenerator? titleGenerator,
     MemoryConsolidator? consolidator,
     FactContextBuilder? factContextBuilder,
@@ -151,6 +157,8 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
         _consolidator = consolidator,
         _factContextBuilder = factContextBuilder,
         _compactionService = compactionService,
+        _sessionOperations =
+            StorySessionOperations(operationGuard, session.sessionId),
         _streamRunner = StreamRunner(llmService: llmService),
         super(IntermediateChatState.initial(session)) {
     // 2026-07-22 修复：构造函数中加载历史消息，与 ChatModeController 一致。
@@ -160,6 +168,26 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     // UI 显示空状态（"起始背景"）。改为构造函数加载后，无论新建还是切换会话，
     // controller 创建时都会自动加载消息。
     loadHistory();
+  }
+
+  final StorySessionOperations _sessionOperations;
+
+  Future<T> _runSessionOperation<T>(
+    T rejected,
+    Future<T> Function() operation,
+  ) async {
+    if (state.isStopping ||
+        state.isManualCompacting ||
+        state.isPreparingRegenerate) {
+      return rejected;
+    }
+    return _sessionOperations.run(
+      rejected,
+      () async {
+        if (!mounted) return rejected;
+        return operation();
+      },
+    );
   }
 
   final ChatRepository _chatRepository;
@@ -281,6 +309,12 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// [cancel] 与 [onBackgroundInterrupt] 同步取消；调用点用完即清。
   CancellationToken? _activeCompactionToken;
 
+  /// 压缩前的当前预计快照：撤销压缩时原样恢复。
+  ///
+  /// 撤销可能发生在压缩后又发过新请求之后——此时最近实报已是压缩后的
+  /// 上下文，不能再拿来当撤销后的锚点。
+  ContextUsageEstimate? _preCompactionEstimate;
+
   /// 当前轮次上下文（：自动重试时复用）
   ///
   /// sendMessage 时创建，persist 成功 / cancel / clearRound / retry 时清空。
@@ -341,6 +375,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
       // await 期间用户可能已编辑会话列
       // （极速打开设置改模型）——重取最新会话为合并基线，物化只填充
       // 仍为 null 的列，防止用「开头捕获的旧 null 基线」覆盖用户刚写的值。
+      if (!mounted) return;
       final current = state.session;
       final budget = snapshot.contextBudget;
       final updated = current.copyWith(
@@ -386,33 +421,32 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   }
 
   Future<void> loadHistory() async {
-    if (isDraftSession) return;
-    if (state.phase != IntermediatePhase.idle) return;
+    if (isDraftSession || state.phase != IntermediatePhase.idle) return;
+    await _sessionOperations.initialize(_loadHistory);
+  }
+
+  Future<void> _loadHistory() async {
+    if (!mounted) return;
     try {
       // 2026-08-04 修复：按最新 CompactionPoint 过滤已压缩的旧消息，
       // 避免 UI 展示已压缩的旧消息 + 防止下一轮 shouldCompact 误触发。
       // 过滤逻辑：无 CompactionPoint → 全量；有 → [最新summary, ...boundary之后]
       final sessionId = state.session.sessionId;
-      final historyParts = await Future.wait<Object>([
+      final (filtered, artifactsMap, variantsMap, persistedSession) = await (
         _loadFilteredMessages(sessionId),
         _persistenceService.loadArtifactsBySession(sessionId),
         // 历史轮变体随装载入内存（切换器数据源）
         _persistenceService.loadMessageVariants(sessionId),
-      ]);
-      final filtered = historyParts[0] as ({
-        List<ChatMessage> messages,
-        int compactedTurnBase,
-        int? nextTurn,
-      });
-      final artifactsMap = historyParts[1] as Map<int, StoryRoundArtifacts>;
-      final variantsMap =
-          historyParts[2] as Map<int, List<MessageVariantRecord>>;
+        _loadSessionQuietly(sessionId),
+      ).wait;
+      if (!mounted) return;
       state = state.copyWith(
         messages: filtered.messages,
         artifactsByTurnNumber: artifactsMap,
         variantsByTurn: variantsMap,
         //  修复：装载历史时同步"已压缩轮次基数"，保证 turnNumber 跨压缩单调
         compactedTurnBase: filtered.compactedTurnBase,
+        session: persistedSession,
       );
 
       // 上下文容量解析（：非轮中也可显示；失败不阻断加载）
@@ -427,8 +461,42 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     }
     // 存量会话惰性物化——置于历史载入完成后：物化的
     // await 链前置于消息载入会翻转与 sendMessage 的竞态窗口
-    //（integration 时序实证），尾置则无论物化多久消息载入时机不变。
+    //（integration 时序实证，故事侧同修），尾置则无论物化多久消息载入时机不变。
+    if (!mounted) return;
     await _materializeSnapshotColumnsIfNeeded();
+    // MEM-06：会话打开冷路径附带记忆索引体检（fire-and-forget，
+    // 结果只记 logger.info——不阻塞会话打开，不弹任何 UI；与导演侧
+    // AdvancedChatController._logMemoryIndexHealth 同构）
+    unawaited(_logMemoryIndexHealth('session-open'));
+  }
+
+  /// MEM-06：记忆索引体检挂耳（MemoryIndexHealthService.inspect）
+  ///
+  /// 触发点：会话打开冷路径（loadHistory 完成）与轮失败含 E104/检索
+  /// 异常时（_fail）。结果只进 logger.info（诊断日志可查），不写 state、
+  /// 不弹 UI、不阻塞正常生成；体检自身异常全吞（观测挂耳不反噬主流程）。
+  /// 阈值与检索同源（intermediate.retrieval 双门槛）。
+  Future<void> _logMemoryIndexHealth(String trigger) async {
+    try {
+      final retrieval = (await _getConfig()).retrieval;
+      final health = await MemoryIndexHealthService(
+        experienceRepository: _experienceRepository,
+      ).inspect(
+        state.session.sessionId,
+        importanceStorageThreshold: retrieval.importanceStorageThreshold,
+        microVectorizeThreshold: retrieval.microVectorizeThreshold,
+      );
+      _logger.info(
+        'Memory index health ($trigger)',
+        detail: 'session=${state.session.sessionId}, '
+            'active=${health.activeMemories}, '
+            'unindexedIndexable=${health.unindexedIndexableMemories}, '
+            'withoutEmbedding=${health.memoriesWithoutEmbedding}, '
+            'staleEmbedding=${health.staleEmbeddingMemories}',
+      );
+    } catch (_) {
+      // 体检失败静默——不阻塞、不弹 UI（挂耳语义）
+    }
   }
 
   /// 会话打开时的上下文容量解析（上下文用量指示 §3.1）
@@ -487,7 +555,10 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// 单事务落库并重载过滤后历史；失败只写 manualCompactionError，不落任何库。
   /// 实现与导演侧 AdvancedChatController.manualCompact 同构（分母/守卫/落库
   /// 口径一致，差异仅命名配置解析链）。
-  Future<ManualCompactResult> manualCompact() async {
+  Future<ManualCompactResult> manualCompact() =>
+      _runSessionOperation(ManualCompactResult.busy, _manualCompact);
+
+  Future<ManualCompactResult> _manualCompact() async {
     if (state.isManualCompacting) return ManualCompactResult.busy;
     if (state.phase != IntermediatePhase.idle) return ManualCompactResult.busy;
     final service = _compactionService;
@@ -587,6 +658,13 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
       final previousBase = state.compactedTurnBase;
       final filtered = await _loadFilteredMessages(state.session.sessionId);
       final newlyCoveredTurns = lastTurn - previousBase;
+      // 压缩前快照：撤销时原样恢复。
+      // 只接受当前有效的内存估算；历史实报可能来自失效配置（切模型/
+      // 规则），不能再当作当前材料锚点，此时保持未知。
+      final anchor = (state.contextEstimate?.hasData ?? false)
+          ? state.contextEstimate!
+          : const ContextUsageEstimate.unknown();
+      _preCompactionEstimate = anchor;
       state = state.copyWith(
         messages: filtered.messages,
         compactedTurnBase: filtered.compactedTurnBase,
@@ -603,6 +681,15 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
             ? (from: previousBase + 1, to: lastTurn)
             : null,
         compactionFloorWarningTurn: result.hitRetentionFloor ? lastTurn : null,
+        // 压缩成功不重发主请求也要刷新「当前预计」：锚点 - 压缩前 + 压缩后
+        // （旧摘要由新摘要替代，replacedSummaryTokens 单列扣除）
+        contextEstimate: ContextUsageEstimate.afterCompaction(
+          current: anchor,
+          tokensBefore: result.tokensBefore,
+          tokensAfter: result.tokensAfter,
+          replacedSummaryTokens: result.replacedSummaryTokens,
+          at: DateTime.now(),
+        ),
       );
       _activeCompactionToken = null;
       _logger.info(
@@ -669,7 +756,9 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// 或旧对话全量恢复，压缩基数同步回剥。失败仅记日志返回 false，
   /// 不落任何脏状态。实现与导演侧 AdvancedChatController.undoCompaction
   /// 同构（守卫/重载/容量刷新口径一致）。
-  Future<bool> undoCompaction() async {
+  Future<bool> undoCompaction() => _runSessionOperation(false, _undoCompaction);
+
+  Future<bool> _undoCompaction() async {
     if (state.isManualCompacting) return false;
     if (state.phase != IntermediatePhase.idle) return false;
     try {
@@ -690,7 +779,15 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
         // 触底警示，此前残留的是被撤销那次的范围（直接误导）
         archivedTurnRange: null,
         compactionFloorWarningTurn: null,
+        // 撤销后回到压缩前材料：优先恢复压缩前快照；无快照才以最近
+        // 实报完整输入为锚点（旧行为）
+        contextEstimate: _preCompactionEstimate ??
+            ContextUsageEstimate.reported(
+              tokens: state.lastInputTokens,
+              at: DateTime.now(),
+            ),
       );
+      _preCompactionEstimate = null;
       unawaited(_refreshContextCapacity());
       _logger.info('Manual compaction undone');
       return true;
@@ -717,15 +814,29 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     String completionText = '',
   }) async {
     if (usage != null && usage.promptTokens != null) {
+      final fullInput = usage.fullInputTokens;
+      // 命中率只累计可比样本：完整输入与缓存分项都有效、无计量异常。
+      // 异常的原始分项仍保留在 last* 供诊断，但不进入均值（不把未知当
+      // 0 命中，也不扩大分母）。
+      final qualified = usage.hasQualifiedCacheSample;
       state = state.copyWith(
         lastPromptTokens: usage.promptTokens,
+        lastInputTokens: fullInput,
         lastCompletionTokens: usage.completionTokens,
         lastCacheReadTokens: usage.cacheReadTokens,
+        lastUsageWarnings: usage.warnings,
         lastUsageIsEstimated: false,
         contextPromptTokensTotal:
             state.contextPromptTokensTotal + usage.promptTokens!,
-        contextCacheReadTokensTotal:
-            state.contextCacheReadTokensTotal + (usage.cacheReadTokens ?? 0),
+        contextCacheReadTokensTotal: state.contextCacheReadTokensTotal +
+            (qualified ? usage.cacheReadTokens! : 0),
+        contextInputTokensTotal:
+            state.contextInputTokensTotal + (qualified ? fullInput! : 0),
+        // 主数字：下一次请求的预计输入 = 本次实报完整输入（无本地变更前）
+        contextEstimate: ContextUsageEstimate.reported(
+          tokens: fullInput,
+          at: DateTime.now(),
+        ),
       );
       return;
     }
@@ -738,10 +849,20 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     if (promptTokens == null && completionTokens == null) return;
     state = state.copyWith(
       lastPromptTokens: promptTokens,
+      // 本地估算值不可当完整输入（无缓存分项），命中率样本降级
+      lastInputTokens: null,
       lastCompletionTokens: completionTokens,
       // 上一轮的端点真实缓存分项不得与本轮估算值混排（口径错位）
       lastCacheReadTokens: null,
+      lastUsageWarnings: const [],
       lastUsageIsEstimated: true,
+      // 估算值不进累计；主数字标注为本地估算（面板显示 ≈）
+      contextEstimate: promptTokens == null
+          ? null
+          : ContextUsageEstimate.estimated(
+              tokens: promptTokens,
+              at: DateTime.now(),
+            ),
     );
   }
 
@@ -853,7 +974,10 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   ///
   /// 生成中（phase 既非 idle 也非 failed）拒绝更新（避免配置中途变更导致状态不一致）。
   /// idle 与 failed 状态下允许更新：failed 状态下用户可调整模型/温度后重试出错步骤。
-  Future<bool> updateSession(ChatSession updated) async {
+  Future<bool> updateSession(ChatSession updated) =>
+      _runSessionOperation(false, () => _updateSession(updated));
+
+  Future<bool> _updateSession(ChatSession updated) async {
     if (state.phase != IntermediatePhase.idle &&
         state.phase != IntermediatePhase.failed) {
       _logger.warn('updateSession rejected: phase is generating');
@@ -866,7 +990,16 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     }
     try {
       final persisted = await _chatRepository.updateSession(updated);
-      state = state.copyWith(session: persisted);
+      // 配置变化会改变下一轮材料/容量：旧「当前预计」与窗口、触发线
+      // 均失效，置 unknown 并异步重算容量。
+      final configChanged = _contextConfigChanged(state.session, persisted);
+      state = state.copyWith(
+        session: persisted,
+        contextEstimate: configChanged
+            ? const ContextUsageEstimate.unknown()
+            : state.contextEstimate,
+      );
+      if (configChanged) unawaited(_refreshContextCapacity());
       return true;
     } catch (e, stackTrace) {
       _logger.error(
@@ -877,6 +1010,28 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
       );
       return false;
     }
+  }
+
+  /// 会话配置是否影响下一轮材料或容量
+  ///
+  /// 只列会改变请求材料/窗口/触发线的字段；标题/星标/排序/推荐回复等
+  /// 展示字段不参与。
+  static bool _contextConfigChanged(ChatSession a, ChatSession b) {
+    return a.modelId != b.modelId ||
+        a.presetId != b.presetId ||
+        a.systemPromptOverride != b.systemPromptOverride ||
+        a.maxTokens != b.maxTokens ||
+        a.autoCompaction != b.autoCompaction ||
+        a.compactionThreshold != b.compactionThreshold ||
+        a.maxContextMessages != b.maxContextMessages ||
+        a.effectiveContextLimit != b.effectiveContextLimit ||
+        a.reasoningEffort != b.reasoningEffort ||
+        a.jsonModeOverride != b.jsonModeOverride ||
+        a.phaseModels != b.phaseModels ||
+        a.reviewEnabledOverride != b.reviewEnabledOverride ||
+        a.recentMinRatioOverride != b.recentMinRatioOverride ||
+        a.retrievalRatioOverride != b.retrievalRatioOverride ||
+        a.compactionTriggerRatioOverride != b.compactionTriggerRatioOverride;
   }
 
   /// 侧边栏重命名后同步主区标题
@@ -912,19 +1067,19 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// 写入会话级字段。后续用户修改全局配置不会影响已物化的会话。
   Future<void> _materializeDraftSessionWith(ChatSession updated) async {
     final draft = updated;
+    final snapshot =
+        await _configurationResolver.snapshotIntermediateDefaults();
+    final sessionId = _uuid.v4();
+    _sessionOperations.reserveMaterializedId(sessionId);
     final realSession = await _chatRepository.createSession(
       title: draft.title,
+      sessionId: sessionId,
       // v0.3 导演模式：保留草稿 mode（intermediate/advanced），不再硬编码
       mode: draft.mode,
       modelId: draft.modelId,
       presetId: draft.presetId,
     );
 
-    // 快照当前全局默认值（"快照而非引用"语义）
-    final snapshot =
-        await _configurationResolver.snapshotIntermediateDefaults();
-
-    // 合并 phaseModels：会话级 > 全局快照
     final mergedPhaseModels = _mergePhaseModels(
       draft.phaseModels,
       snapshot.phaseModels,
@@ -979,6 +1134,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     );
 
     final persisted = await _chatRepository.updateSession(sessionWithDefaults);
+    _sessionOperations.adoptMaterializedId(persisted.sessionId);
     state = state.copyWith(session: persisted);
   }
 
@@ -1023,21 +1179,21 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
   /// Stage 3：立即创建 pendingUserMessage 写入 state，UI 立即显示用户消息气泡
   /// （对齐 DOC-09A-2 §6.5）。persist 成功后清空（已落入 state.messages），
   /// 失败时保留（clearTemporary 不清空本字段）。
-  Future<void> sendMessage(String userInput) async {
+  ///
+  /// 返回值：true = 已消费（正常发送）；false = 被拒收（生成中/停止中/
+  /// 手动压缩中/重生成准备中），调用方应把文本还给输入框（故事模式无
+  /// 排队，输入框发送判据与守卫同口径时此路径只兜底竞态帧）。
+  Future<bool> sendMessage(String userInput) async {
     // 守卫：非 idle/failed 状态忽略（DOC-09C §3 单会话串行）。
     // failed 放行直发新消息——放弃失败轮不必先清空。
     if (state.phase != IntermediatePhase.idle &&
         state.phase != IntermediatePhase.failed) {
-      return;
+      return false;
     }
-    // 守卫：手动压缩以压缩事务为先（上下文用量指示 §4.3）
-    if (state.isManualCompacting) return;
-    // 守卫：停止中不允许启动新轮次（防止与后台 cancel 竞态）
-    if (state.isStopping) return;
-    // 守卫：重生成/编辑重发「准备中」窗口（快照/删除/回滚多个 await）
-    // 内 phase 仍为 idle——此窗口发送新消息会与随后的状态覆写互踩两轮。
-    if (state.isPreparingRegenerate) return;
+    return _runSessionOperation(false, () => _sendMessage(userInput));
+  }
 
+  Future<bool> _sendMessage(String userInput) async {
     // failed 态直发：先事务性清掉失败轮残留（旧 pending 气泡/半截快照/
     // 流式缓冲/失败上下文/_round），不留幽灵态再走正常首发链。
     if (state.phase == IntermediatePhase.failed) {
@@ -1071,7 +1227,8 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
           'E010',
           errorCategory: ErrorCategory.config,
         );
-        return;
+        // 预检失败但输入已被接收（state 已落 pending，可重放）——消费成立
+        return true;
       }
     }
 
@@ -1097,6 +1254,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
       suggestFailed: false,
     );
     await _prepareAndRunRound();
+    return true;
   }
 
   /// 草稿会话发送前置检查 + 物化（抽出供 [retry] 复用）
@@ -1664,6 +1822,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     // _streamRunner.cancel() 返回 Future，但其同步部分（_isCancelled=true
     // + token.cancel()）在调用时立即执行，无需 await
     final cancelFuture = _streamRunner.cancel();
+    _sessionOperations.interruptRetryWait();
     // 压缩阶段（无流式订阅）的停止走压缩令牌
     _activeCompactionToken?.cancel();
 
@@ -1730,11 +1889,14 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     Future<void> cancelFuture, {
     bool resetStreamAfter = false,
   }) async {
+    final operationDone = _sessionOperations.completion;
     try {
       await cancelFuture.timeout(const Duration(seconds: 3));
     } catch (_) {
       // 超时或异常都视为清理完成
     }
+    await operationDone;
+    if (!mounted) return;
     if (resetStreamAfter) {
       _streamRunner.resetCancelled();
     }
@@ -1789,6 +1951,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
     // fire-and-forget：_isCancelled = true 立即生效（同步），
     // 不需要 await（didChangeAppLifecycleState 是同步回调）
     _streamRunner.cancel();
+    _sessionOperations.interruptRetryWait();
     // 后台中断同样终止在途压缩
     _activeCompactionToken?.cancel();
   }
@@ -1988,6 +2151,7 @@ class IntermediateChatController extends StateNotifier<IntermediateChatState> {
 
   @override
   void dispose() {
+    _sessionOperations.interruptRetryWait();
     // dispose 冲刷压缩缓冲——压缩流
     // 中途控制器被销毁时，挂起尾段落账后销毁 Timer；否则 32ms 后 Timer
     // 回调对已 dispose 的 StateNotifier 写 state（StateError）。

@@ -225,12 +225,23 @@ extension _ChatModePageMenus on _ChatModePageState {
             return ContextUsageDetailSheet(
               contextWindowTokens: state.contextWindowTokens,
               compactionTriggerTokens: state.compactionTriggerTokens,
-              lastPromptTokens:
-                  _lastContextTokens(state.messages) + _tokenCount,
+              lastPromptTokens: state.lastPromptTokens,
+              // 主数字=当前预计上下文（含草稿）；与最近请求实报分开
+              currentEstimateTokens: state.contextEstimateTokens == null
+                  ? null
+                  : state.contextEstimateTokens! + _tokenCount,
+              currentEstimateIsLocal: state.contextEstimateIsLocal,
+              // 最近请求的完整输入（命中率分母；null = 无 usage）
+              lastRequestInputTokens: state.lastPromptTokens,
+              requestInputIsComplete: true,
+              lastRequestAt:
+                  state.contextEstimateIsLocal ? null : state.contextEstimateAt,
               // 最近一轮输出/缓存读分项（ 上一轮完成后随 usage 留 state；
               // null = 端点未回 usage / 重进会话未重新生成 →「—」+ 脚注）
               lastCompletionTokens: state.lastCompletionTokens,
               lastCacheReadTokens: state.lastCacheReadTokens,
+              lastCacheHitRatio: state.lastCacheHitRatio,
+              lastCacheSampleInvalid: state.lastCacheSampleInvalid,
               averageCacheHit: null,
               // 轮次口径走共享公式（nextTurn 计数器权威，NULL 回退推导）
               sessionRounds: resolveTurnNumber(

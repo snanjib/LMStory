@@ -6,6 +6,7 @@ import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/auxiliary_generation_failure.dart';
 
 /// 推荐回复生成器（2026-07-29 新增）
 ///
@@ -45,6 +46,35 @@ class SuggestReplyGenerator {
   ///
   /// 返回候选回复列表；失败时返回空列表。
   Future<List<String>> generate({
+    required NamingConfig namingConfig,
+    required String systemPrompt,
+    required String lastUserMessage,
+    required String lastAssistantReply,
+    required List<String> prevSummaries,
+    double temperature = 0.8,
+    int maxTokens = 600,
+    int candidateCount = 3,
+    int maxReplyLength = 150,
+    Duration? connectTimeout,
+    Duration? readTimeout,
+  }) async {
+    final result = await generateWithResult(
+      namingConfig: namingConfig,
+      systemPrompt: systemPrompt,
+      lastUserMessage: lastUserMessage,
+      lastAssistantReply: lastAssistantReply,
+      prevSummaries: prevSummaries,
+      temperature: temperature,
+      maxTokens: maxTokens,
+      candidateCount: candidateCount,
+      maxReplyLength: maxReplyLength,
+      connectTimeout: connectTimeout,
+      readTimeout: readTimeout,
+    );
+    return result.value ?? const [];
+  }
+
+  Future<AuxiliaryGenerationResult<List<String>>> generateWithResult({
     required NamingConfig namingConfig,
     required String systemPrompt,
     required String lastUserMessage,
@@ -109,13 +139,26 @@ class SuggestReplyGenerator {
       );
       final response = await _llmService.chat(request).timeout(overallCap);
 
-      return _parseReplies(response.content, candidateCount);
+      final content = response.content;
+      final replies = _parseReplies(content, candidateCount);
+      if (replies.isEmpty) {
+        final failure = AuxiliaryGenerationFailure(
+          content.trim().isEmpty
+              ? AuxiliaryGenerationFailureKind.emptyOutput
+              : AuxiliaryGenerationFailureKind.invalidCandidates,
+        );
+        _logger.warn(
+          'Suggested replies unavailable',
+          detail: failure.diagnostic,
+        );
+        return (value: null, failure: failure);
+      }
+      _logger.info('SuggestReply: 成功解析 ${replies.length} 条候选回复');
+      return (value: replies, failure: null);
     } catch (e) {
-      _logger.warn(
-        'SuggestReply: 生成候选回复失败',
-        detail: '$e',
-      );
-      return [];
+      final failure = AuxiliaryGenerationFailure.fromException(e);
+      _logger.warn('Suggested replies unavailable', detail: failure.diagnostic);
+      return (value: null, failure: failure);
     }
   }
 
@@ -130,40 +173,21 @@ class SuggestReplyGenerator {
   /// - 不足 candidateCount → 返回实际解析到的数量
   List<String> _parseReplies(String content, int candidateCount) {
     final cleaned = _extractJson(content);
-    if (cleaned == null) {
-      _logger.warn(
-        'SuggestReply: 无法从响应中提取 JSON',
-        detail:
-            'content: ${content.length > 200 ? '${content.substring(0, 200)}...' : content}',
-      );
-      return [];
-    }
+    if (cleaned == null) return const [];
 
     try {
-      final decoded = jsonDecode(cleaned) as Map<String, dynamic>;
+      final decoded = jsonDecode(cleaned);
+      if (decoded is! Map<String, dynamic>) return const [];
       final repliesRaw = decoded['replies'];
-      if (repliesRaw is! List) {
-        _logger.warn('SuggestReply: replies 字段非数组');
-        return [];
-      }
-
-      final replies = repliesRaw
+      if (repliesRaw is! List<Object?>) return const [];
+      return repliesRaw
           .whereType<String>()
           .map((r) => r.trim())
           .where((r) => r.isNotEmpty)
           .take(candidateCount)
           .toList();
-
-      _logger.info(
-        'SuggestReply: 成功解析 ${replies.length} 条候选回复',
-      );
-      return replies;
-    } catch (e) {
-      _logger.warn(
-        'SuggestReply: JSON 解析失败',
-        detail: '$e',
-      );
-      return [];
+    } on FormatException {
+      return const [];
     }
   }
 

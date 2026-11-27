@@ -13,7 +13,9 @@ import 'package:lmstory/features/settings/domain/repositories/settings_repositor
 /// - 未配置 embedding preset/model（空串）→ null（FTS5 兜底）
 /// - 已配置完整 → 返回 EmbeddingApiConfig（model/baseUrl/apiKey/timeoutMs/fallbackOnFailure）
 /// - preset 不存在（已被删除）→ null
-/// - apiKey 缺失 → null
+/// - apiKey 缺失/空串 → 仍返回配置（apiKey 原样传递，尝试匿名请求；
+///   鉴权失败按现有失败/降级策略处理，传输层仅在 Key 非空时携带
+///   Authorization）
 /// - timeoutMs/fallbackOnFailure 从 EmbeddingConfig 正确读取
 ///
 /// 权威设计：DOC-09A-1 §3.7（失败降级 FTS5）、DOC-08 §3.4（纯 API 方案）。
@@ -176,7 +178,7 @@ void main() {
       expect(await resolver.resolveEmbeddingConfig(), isNull);
     });
 
-    test('5. apiKey 缺失（null）→ null', () async {
+    test('5. apiKey 缺失（null）→ 仍返回配置（apiKey=null，尝试匿名请求）', () async {
       final resolver = ConfigurationResolver(
         presetRepository: _FakeApiPresetRepository(
           presets: [_preset('emb-preset')],
@@ -188,10 +190,18 @@ void main() {
         logger: _logger,
       );
 
-      expect(await resolver.resolveEmbeddingConfig(), isNull);
+      // 用户已选有效服务地址+模型但免密钥（本地部署/免鉴权供应商）：
+      // 不应被判成「未配置」——正常构造配置尝试匿名请求，鉴权失败按
+      // 现有失败/降级策略处理
+      final result = await resolver.resolveEmbeddingConfig();
+
+      expect(result, isNotNull);
+      expect(result!.model, 'text-embedding-3-small');
+      expect(result.baseUrl, 'https://api.emb.com/v1');
+      expect(result.apiKey, isNull);
     });
 
-    test('6. apiKey 为空串 → null', () async {
+    test('6. apiKey 为空串 → 仍返回配置（空串原样传递）', () async {
       final resolver = ConfigurationResolver(
         presetRepository: _FakeApiPresetRepository(
           presets: [_preset('emb-preset')],
@@ -203,7 +213,12 @@ void main() {
         logger: _logger,
       );
 
-      expect(await resolver.resolveEmbeddingConfig(), isNull);
+      final result = await resolver.resolveEmbeddingConfig();
+
+      expect(result, isNotNull);
+      expect(result!.model, 'text-embedding-3-small');
+      expect(result.baseUrl, 'https://api.emb.com/v1');
+      expect(result.apiKey, '');
     });
 
     test('7. 默认 EmbeddingConfig 值（timeoutMs=5000/fallbackOnFailure=false）',

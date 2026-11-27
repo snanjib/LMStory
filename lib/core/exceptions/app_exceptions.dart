@@ -25,6 +25,12 @@ class QueryException extends AppException {
   const QueryException(super.message) : super(code: 'E301');
 }
 
+/// 无法回退保存点，外层操作必须停止后续写入。
+class SavepointRollbackException extends AppException {
+  const SavepointRollbackException()
+      : super('Could not roll back a database savepoint');
+}
+
 /// 资源应用异常（世界书/角色卡投影，DOC-15）
 ///
 /// 如「同名实体已存在，应用被拒绝」等投影前置校验失败时抛出。

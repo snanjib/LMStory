@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/advanced_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
+import 'package:lmstory/core/tutorial/spotlight_registry.dart';
+import 'package:lmstory/features/demo/domain/demo_scene.dart';
 import 'package:lmstory/features/director_wizard/presentation/pages/director_wizard_page.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/entities/model_capability.dart';
@@ -116,6 +118,19 @@ void main() {
 
     expect(nextButton().enabled, isFalse, reason: '强制显式选择');
 
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(DirectorWizardPage)),
+      listen: false,
+    );
+    final registry = container.read(spotlightRegistryProvider)
+      ..refreshReporters();
+    final choices = registry.rectOf(DemoTargetIds.wizardEmbeddingChoice);
+    expect(
+      choices?.contains(tester.getCenter(find.text('暂时跳过'))),
+      isTrue,
+      reason: 'The tour must let the user tap the visible skip choice.',
+    );
+
     await tester.tap(find.text('暂时跳过'));
     await tester.pumpAndSettle();
 
@@ -159,6 +174,43 @@ void main() {
       containsPair('advanced.embedding_preset_id', 'preset-1'),
     );
     expect(repo.writes, containsPair('advanced.embedding_model_id', 'emb-1'));
+  });
+
+  testWidgets('手填嵌入模型 ID 经确认后原样写入清单与设置', (tester) async {
+    final fake = FakeWizardSettingsNotifier(
+      initialPresets: [keyedPreset()],
+      keyedPresetIds: const {'preset-1'},
+      fetchModelsFail: true,
+    );
+    await pumpWizard(tester, fake: fake);
+
+    await tester.tap(find.text('配上（推荐）'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('接一家新供应商'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('接一家新供应商'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).at(1), 'fixture-key');
+    await tester.ensureVisible(find.text('创建并获取模型列表'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('创建并获取模型列表'));
+    await tester.pumpAndSettle();
+
+    const id = 'lab/嵌入−local';
+    await tester.enterText(find.byType(TextField).at(2), id);
+    await tester.ensureVisible(find.text('用这个 ID'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('用这个 ID'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('U+2212'), findsOneWidget);
+    expect(fake.updatedModels, isEmpty);
+    expect(repo.writes, isNot(contains('advanced.embedding_model_id')));
+
+    await tester.tap(find.text('按原样保存'));
+    await tester.pumpAndSettle();
+    expect(fake.updatedModels.single.$2.single.modelId, id);
+    expect(repo.writes, containsPair('advanced.embedding_model_id', id));
   });
 
   testWidgets('完整第二供应商流：贴 Key→拉取→选嵌入模型→写新 preset 两键', (

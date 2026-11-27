@@ -175,6 +175,8 @@ abstract interface class LmComponentKit {
     BuildContext context, {
     required String initialContent,
     bool allowResend = true,
+    Future<bool> Function(String content)? saveBeforeClosing,
+    String? saveErrorMessage,
   });
 
   /// Markdown renderer for message content. [narrative] selects the story
@@ -199,11 +201,13 @@ abstract interface class LmComponentKit {
   /// Floating message navigation bar. [narrative] selects the story variant.
   Widget messageNavigation(
     BuildContext context, {
-    required VoidCallback onJumpToTop,
-    required VoidCallback onJumpToBottom,
-    required VoidCallback onPrevUserMessage,
-    required VoidCallback onNextUserMessage,
+    required VoidCallback? onJumpToTop,
+    required VoidCallback? onJumpToBottom,
+    required VoidCallback? onPrevUserMessage,
+    required VoidCallback? onNextUserMessage,
     required bool visible,
+    bool compact = false,
+    ValueChanged<bool>? onAccessibilityFocus,
     bool narrative = false,
   });
 
@@ -246,6 +250,7 @@ abstract interface class LmComponentKit {
     int windowRounds = 5,
     bool actionsEnabled = true,
     bool animateEntrance = true,
+    bool softLineBreak = false,
     double fontScale = 1.0,
     Key? key,
   });
@@ -260,6 +265,7 @@ abstract interface class LmComponentKit {
     required VoidCallback onClose,
     required VoidCallback onToggle,
     bool isFailed = false,
+    String? failureMessage,
     Future<bool> Function()? onRetry,
   });
 

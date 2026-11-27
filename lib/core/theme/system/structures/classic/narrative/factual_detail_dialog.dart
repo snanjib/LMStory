@@ -11,9 +11,8 @@ import 'package:lmstory/features/intermediate/presentation/widgets/panels/retrie
     show RetrievalPanel;
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
-import 'package:lmstory/features/memory/domain/services/fact_applier.dart'
-    show AttributeSchema;
 import 'package:lmstory/features/memory/domain/services/fact_context_builder.dart';
+import 'package:lmstory/i18n/factual_labels.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 事实层实体详情临时小窗（DOC-11 §6.1，2026-07-20 新增）。
@@ -286,7 +285,7 @@ class _FactualDetailDialog extends StatelessWidget {
                   child: Text(
                     // 与记忆库属性行同口径——本地化标签，
                     // 自定义键回退原文
-                    AttributeSchema.labelFor(fact.entity.type, attr.attrKey) ??
+                    factualAttributeLabel(t, fact.entity.type, attr.attrKey) ??
                         attr.attrKey,
                     style: LmNarrativeTextStyles.caption.copyWith(
                       color: colors.muted,

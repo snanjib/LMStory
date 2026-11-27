@@ -9,7 +9,7 @@
     "templateId": "builtin-isekai-narrator",
     "templateHash": "346f6de1553d3916",
     "promptHash": "070bde0187451cff",
-    "toolFingerprint": "224cab116c3ffa4c",
+    "toolFingerprint": "19edc9832ffbe269",
     "embeddingDimensions": 4096,
     "embeddingModelLabel": "nvidia/nemotron-3.5-embed-8b",
     "replayProfile": {

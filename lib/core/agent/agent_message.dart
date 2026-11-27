@@ -42,15 +42,18 @@ class AgentWireOptions {
     this.anthropicExtras = false,
     this.openaiReasoningContent = false,
     this.geminiThoughtSignatures = false,
+    this.openaiResponses = false,
   });
 
-  /// 按协议名构造（'anthropic' / 'gemini' / 其余按 openaiCompatible）
+  /// 按协议名构造（'anthropic' / 'geminiNative' / 'openaiResponses' /
+  /// 其余按 openaiCompatible）
   factory AgentWireOptions.forProtocolName(String protocol) {
     return AgentWireOptions(
       anthropicExtras: protocol == 'anthropic',
       openaiReasoningContent:
           protocol != 'anthropic' && protocol != 'geminiNative',
       geminiThoughtSignatures: protocol == 'geminiNative',
+      openaiResponses: protocol == 'openaiResponses',
     );
   }
 
@@ -64,6 +67,12 @@ class AgentWireOptions {
   /// `thinkingBlocks`（thinking + signature）回传（thoughtSignature 在
   /// Part 层级，官方要求多轮原样回传全部 thought 块）
   final bool geminiThoughtSignatures;
+
+  /// Responses 协议：请求 map 形态与 OpenAI 兼容一致（`reasoning_content`
+  /// 仍注入，适配器忽略该键），但适配器最终 input **不回放** reasoning
+  /// （reasoning item 携带服务端加密内容，无法从明文重建）——预算估算
+  /// 侧据此剔除该键，使估算体与最终请求体同源。
+  final bool openaiResponses;
 }
 
 /// Agent surface 消息（模型可见消息的领域表示）
@@ -79,6 +88,7 @@ class AgentMessage {
     this.reasoningContent,
     this.thinkingBlocks,
     this.contentBlocks,
+    this.isToolError = false,
   });
 
   factory AgentMessage.system(String content) =>
@@ -107,8 +117,14 @@ class AgentMessage {
   factory AgentMessage.toolResult({
     required String toolCallId,
     required String content,
+    bool isError = false,
   }) =>
-      AgentMessage._(role: 'tool', toolCallId: toolCallId, content: content);
+      AgentMessage._(
+        role: 'tool',
+        toolCallId: toolCallId,
+        content: content,
+        isToolError: isError,
+      );
 
   /// system / user / assistant / tool（OpenAI 规范 role）
   final String role;
@@ -131,6 +147,9 @@ class AgentMessage {
   /// 原始 block 顺序（Anthropic 专用；含 redacted_thinking）。
   final List<LlmContentBlock>? contentBlocks;
 
+  /// 工具结果是否为错误（协议层分别映射为原生 error 标记或文本前缀）
+  final bool isToolError;
+
   bool get hasToolCalls => toolCalls != null && toolCalls!.isNotEmpty;
 
   /// 序列化为协议 wire 格式（OpenAI 规范为基准，各适配器再转换）
@@ -143,7 +162,10 @@ class AgentMessage {
       case 'assistant':
         return {
           'role': 'assistant',
-          if (content != null && content!.isNotEmpty) 'content': content,
+          // HAR-02：assistant 恒发 content 键（空正文为 ''）——整体省略键
+          // 会让 Anthropic/Gemini 适配器收不到正文线索而产出空 content
+          // 数组/空 parts（消息形状被吞）。空串由各适配器转占位 block。
+          'content': content ?? '',
           if (hasToolCalls)
             'tool_calls': toolCalls!
                 .map(
@@ -181,10 +203,25 @@ class AgentMessage {
                 contentBlocks!.map((b) => b.toAnthropicJson()).toList(),
         };
       case 'tool':
+        if (!isToolError) {
+          return {
+            'role': 'tool',
+            'tool_call_id': toolCallId ?? '',
+            'content': content ?? '',
+          };
+        }
+        if (options.anthropicExtras || options.geminiThoughtSignatures) {
+          return {
+            'role': 'tool',
+            'tool_call_id': toolCallId ?? '',
+            'content': content ?? '',
+            'is_error': true,
+          };
+        }
         return {
           'role': 'tool',
           'tool_call_id': toolCallId ?? '',
-          'content': content ?? '',
+          'content': '[TOOL_ERROR] ${content ?? ''}',
         };
       default:
         return {

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/advanced_config.dart';
+import 'package:lmstory/features/advanced/domain/services/compaction_planning.dart';
 
 void main() {
   test('缺省 JSON 解析出全部默认值', () {
@@ -53,6 +54,56 @@ void main() {
     expect(
       () => AdvancedConfig.fromJson(const {'narrative_pacing': 'fast'}),
       throwsFormatException,
+    );
+  });
+
+  test('压缩参数段：JSON 单源解析 + fromConfig 传导 + 真实 maxTokens 优先', () {
+    // default_config.json 的 advanced.engineering_compaction 段为生产
+    // 默认唯一来源（本测试锁定解析与传导，不重复记默认值）
+    final json = AdvancedConfig.fromJson(const {
+      'engineering_compaction': {
+        'output_reserve_tokens': 12000,
+        'headroom_tokens': 4000,
+        'retain_ratio': 0.25,
+        'retain_min_tokens': 1000,
+        'retain_max_tokens': 20000,
+        'retain_max_window_ratio': 0.5,
+        'chars_per_token': 5,
+        'oversized_result_chars': 4000,
+        'degrade_head_chars': 300,
+      },
+    });
+    final tuning = EngineeringCompactionTuning.fromConfig(
+      json.engineeringCompaction,
+    );
+    expect(tuning.outputReserveTokens, 12000);
+    expect(tuning.headroomTokens, 4000);
+    expect(tuning.retainRatio, 0.25);
+    expect(tuning.charsPerToken, 5);
+    expect(tuning.oversizedResultChars, 4000);
+    expect(tuning.degradeHeadChars, 300);
+
+    // 实际请求面优先：会话真实 maxTokens 覆盖默认输出预留
+    final withReal = EngineeringCompactionTuning.fromConfig(
+      json.engineeringCompaction,
+      actualMaxTokens: 8192,
+    );
+    expect(withReal.outputReserveTokens, 8192);
+    expect(withReal.headroomTokens, 4000, reason: '其余参数不变');
+
+    // 无请求面（0）回落配置默认
+    expect(
+      EngineeringCompactionTuning.fromConfig(json.engineeringCompaction)
+          .outputReserveTokens,
+      12000,
+    );
+
+    // 缺段回落：JSON 缺 engineering_compaction 时不炸（安全回落）
+    expect(
+      AdvancedConfig.fromJson(const {})
+          .engineeringCompaction
+          .outputReserveTokens,
+      isPositive,
     );
   });
 }

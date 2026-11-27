@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/theme/shared/components/streaming_markdown_body.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_compaction_summary_card.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_markdown_body.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_actions.dart';
-import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
-import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_navigation.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/core/utils/smooth_follow_scroller.dart'
     show streamingFollowCushionPx;
@@ -13,8 +12,9 @@ import 'package:lmstory/features/advanced/domain/entities/agent_live_block.dart'
 import 'package:lmstory/features/advanced/domain/entities/agent_timeline_block.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/presentation/pages/director_chat_body.dart';
+import 'package:lmstory/features/advanced/presentation/widgets/director_act_unit.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_thinking_block.dart';
-import 'package:lmstory/features/advanced/presentation/widgets/director_work_group.dart';
+import 'package:lmstory/features/advanced/presentation/widgets/director_tool_card.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
@@ -79,6 +79,33 @@ void main() {
     );
   }
 
+  testWidgets('导演首句在失败气泡和收稿历史中均保留换行', (tester) async {
+    const input = '潮声停了，石阶依旧发亮。\n桥下传来三声回响！';
+    final user = _message('user', input);
+    final state = AdvancedChatState.initial(_testSession());
+    await tester.pumpWidget(
+      wrap(
+        state.copyWith(
+          phase: IntermediatePhase.failed,
+          pendingUserMessage: user,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text(input, findRichText: true), findsOneWidget);
+
+    await tester.pumpWidget(
+      wrap(
+        state.copyWith(
+          messages: [user, _message('assistant', '石匠从桥下拾起一枚铜扣。')],
+          session: state.session.copyWith(messageCount: 2, nextTurn: 2),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text(input, findRichText: true), findsOneWidget);
+  });
+
   testWidgets('长中间发言从首个增量开始留在幕后，不占正文位置', (tester) async {
     final narration = '我先核对前情，再查看人物关系。' * 20;
     await tester.pumpWidget(
@@ -99,9 +126,14 @@ void main() {
       ),
     );
     await tester.pump();
+    expect(find.byType(DirectorLivePulse), findsOneWidget);
+    // 默认收起，不占正文流视口
+    expect(find.text(narration), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('live-pulse-toggle')));
+    await tester.pump();
     expect(
       find.descendant(
-        of: find.byType(DirectorWorkGroup),
+        of: find.byType(DirectorLivePulse),
         matching: find.text(narration),
       ),
       findsOneWidget,
@@ -109,15 +141,63 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     expect(
       find.descendant(
-        of: find.byType(DirectorWorkGroup),
+        of: find.byType(DirectorLivePulse),
         matching: find.text(narration),
       ),
       findsOneWidget,
     );
   });
 
+  testWidgets('流式处理中同一调用 ID 的两次工具执行各自显示', (tester) async {
+    const first = AgentWorkStep(
+      toolName: 'query_facts',
+      callId: 'gemini_query_facts',
+      title: '查证灯塔位置',
+      output: '灯塔在南岸。',
+      order: 0,
+      status: AgentStepStatus.warning,
+    );
+    const second = AgentWorkStep(
+      toolName: 'query_facts',
+      callId: 'gemini_query_facts',
+      title: '查证渡船时刻',
+      output: '渡船每天清晨开船。',
+      stepIndex: 1,
+      order: 1,
+      status: AgentStepStatus.warning,
+    );
+    final request = _message('user', '核对港口设定。');
+    Widget conversation(List<AgentWorkStep> steps) => wrap(
+          AdvancedChatState(
+            phase: IntermediatePhase.reviewing,
+            messages: const [],
+            pendingUserMessage: request,
+            retryCounts: const {},
+            session: _testSession(),
+            agentSteps: steps,
+          ),
+        );
+
+    await tester.pumpWidget(conversation([first]));
+    await tester.tap(find.textContaining(first.title));
+    await tester.pump();
+    expect(find.text(first.output), findsOneWidget);
+
+    await tester.pumpWidget(conversation([first, second]));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(DirectorToolCard), findsNWidgets(2));
+    expect(find.textContaining(first.title), findsOneWidget);
+    expect(find.textContaining(second.title), findsOneWidget);
+    expect(find.text(first.output), findsOneWidget);
+    expect(find.text(second.output), findsNothing);
+    await tester.tap(find.textContaining(second.title));
+    await tester.pump();
+    expect(find.text(second.output), findsOneWidget);
+  });
+
   group('直播分块时间线', () {
-    testWidgets('1. 分块交错渲染：末个非空文本段进稿件卡，其余为话术块', (tester) async {
+    testWidgets('1. 分块交错渲染：末个非空文本段进稿件卡，其余留在直播脉搏展开区', (tester) async {
       const blocks = [
         AgentLiveBlock(
           kind: AgentLiveBlockKind.thinking,
@@ -154,18 +234,19 @@ void main() {
       );
       await tester.pump();
 
-      // 播报与稿件正文都可见（播报在折叠组内，正文在组外稿件卡）
-      expect(find.text('让我先查查设定'), findsOneWidget);
+      // 正文直接出现，中间播报与思考不撑开正文视口
       expect(find.text('第一章正文全文'), findsOneWidget);
-      // 收起的思考块显示字数标签（非 live：均折叠）
+      expect(find.text('让我先查查设定'), findsNothing);
+      expect(find.byType(DirectorLivePulse), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('live-pulse-toggle')));
+      await tester.pump();
+      expect(find.text('让我先查查设定'), findsOneWidget);
       expect(find.text('思考 · 5 字'), findsOneWidget);
       expect(find.text('思考 · 4 字'), findsOneWidget);
-      // 有增量后首增量前占位不再以呼吸标签形态叠加；纯思考直播的组
-      // 标题回退「导演正在构思…」（标题行报告状态，非占位骨架）
-      expect(find.text('等待模型响应…'), findsOneWidget);
     });
 
-    testWidgets('活跃思考显示尾部预览，正文到达后思考完全收起', (tester) async {
+    testWidgets('活跃思考可在脉搏展开查看尾部预览，正文到达后退居安静单行', (tester) async {
       final thinkingOnly = AdvancedChatState(
         phase: IntermediatePhase.reviewing,
         agentActivity: AgentActivity.thinking,
@@ -182,10 +263,12 @@ void main() {
       );
       await tester.pumpWidget(wrap(thinkingOnly));
       await tester.pump();
-      // live 末块思考展开可见
+      expect(find.text('正在思考…'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('live-pulse-toggle')));
+      await tester.pump();
       expect(find.byType(ThinkingTailPreview), findsOneWidget);
 
-      // 追加正文块：思考自动收起（内容隐藏，出现字数标签），稿件卡出现
+      // 追加正文块：思考收起为字数标签，稿件正文出现
       final withText = AdvancedChatState(
         phase: IntermediatePhase.reviewing,
         agentActivity: AgentActivity.generating,
@@ -214,8 +297,7 @@ void main() {
       expect(find.text('正文来了'), findsOneWidget);
     });
 
-    testWidgets('3. 首增量前：无步骤显示呼吸标签；有步骤时不再追加', (tester) async {
-      // 真实时序：发送瞬间即有 pending 用户气泡，正文增量未到
+    testWidgets('3. 首增量前：直播脉搏原地显示等待或当前人话动作', (tester) async {
       final pending = AdvancedChatState(
         phase: IntermediatePhase.reviewing,
         messages: const [],
@@ -225,9 +307,10 @@ void main() {
       );
       await tester.pumpWidget(wrap(pending));
       await tester.pump();
-      expect(find.text('等待模型响应…'), findsOneWidget);
+      expect(find.byType(DirectorLivePulse), findsOneWidget);
+      expect(find.text('导演正在构思…'), findsOneWidget);
 
-      // 已有工具步骤时，过程行报告动作，占位标签不再叠加
+      // 已有工具步骤时，脉搏原地更新为人话动作
       final withSteps = pending.copyWith(
         agentActivity: AgentActivity.tool,
         agentSteps: const [
@@ -240,6 +323,7 @@ void main() {
       );
       await tester.pumpWidget(wrap(withSteps));
       await tester.pump();
+      expect(find.text('正在翻阅前情…'), findsOneWidget);
       expect(find.text('导演正在构思…'), findsNothing);
     });
 
@@ -324,7 +408,7 @@ void main() {
       }
     });
 
-    testWidgets('只有工具的旧时间线仍可展开消息中的思考', (tester) async {
+    testWidgets('只有工具的旧时间线可在变动抽屉内展开消息中的思考', (tester) async {
       await tester.pumpWidget(
         wrap(
           AdvancedChatState(
@@ -350,13 +434,14 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.text('思考 · 5 字'), findsOneWidget);
-      await tester.tap(find.text('思考 · 5 字'));
+      await tester.tap(find.byKey(const ValueKey('act-pill-retrieval')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('act-thinking-toggle')));
       await tester.pump();
       expect(find.text('合并思考串'), findsOneWidget);
     });
 
-    testWidgets('5. 新数据（agentTimeline）：折叠组 + 稿件卡，消息行思考不重复', (tester) async {
+    testWidgets('5. 新数据（agentTimeline）：幕单元胶囊 + 无框正文，消息行思考不重复', (tester) async {
       await tester.pumpWidget(
         wrap(
           AdvancedChatState(
@@ -403,24 +488,25 @@ void main() {
       );
       await tester.pump();
 
-      // 收工默认折叠：标题行由元数据算出
-      expect(find.text('幕后 2 步 · 思考 1 段 · 12s'), findsOneWidget);
-      // 稿件卡在组外常显
+      expect(find.text('第 1 幕'), findsOneWidget);
+      expect(find.text('已查证 1 处前情'), findsOneWidget);
       expect(find.text('定稿正文'), findsOneWidget);
-      // 消息行思考合并串不重复渲染（思考已进组）
       expect(find.text('思考 · 5 字'), findsNothing);
 
-      // 展开组：思考/播报/动作交错可见（重进会话时间线重建）
-      await tester.tap(find.byIcon(Icons.tungsten_outlined));
+      // 展开变动抽屉：人话动作、播报与可折叠思考笔记可见，零原始工具名
+      await tester.tap(find.byKey(const ValueKey('act-pill-retrieval')));
       await tester.pumpAndSettle();
-      expect(find.text('思考 · 5 字'), findsOneWidget);
       expect(find.text('这轮让她自己出场。'), findsOneWidget);
-      // 动作卡（翻阅前情）在思考与播报之间交错
-      expect(find.text('翻阅前情'), findsOneWidget);
+      expect(find.textContaining('翻阅前情'), findsOneWidget);
+      expect(find.textContaining('search_story'), findsNothing);
+      expect(find.textContaining('finish_round'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('act-thinking-toggle')));
+      await tester.pump();
+      expect(find.text('先查前情。'), findsOneWidget);
     });
 
-    testWidgets('6. 旧数据（仅 agentSteps）：回退 DirectorProcessRow + 思考折叠',
-        (tester) async {
+    testWidgets('6. 旧数据（仅 agentSteps）：回退人话胶囊与抽屉', (tester) async {
       await tester.pumpWidget(
         wrap(
           AdvancedChatState(
@@ -441,11 +527,14 @@ void main() {
       );
       await tester.pump();
 
-      // 旧路径：动词串标题（非新口径）+ 消息行思考折叠（兜底保留）
-      expect(find.text('幕后 1 步 · 翻阅前情'), findsOneWidget);
-      expect(find.text('幕后 2 步 · 思考 1 段 · 12s'), findsNothing);
-      expect(find.text('思考 · 5 字'), findsOneWidget);
+      expect(find.text('已查证 1 处前情'), findsOneWidget);
       expect(find.text('定稿正文'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('act-pill-retrieval')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('翻阅前情'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('act-thinking-toggle')));
+      await tester.pump();
+      expect(find.text('合并思考串'), findsOneWidget);
     });
   });
 
@@ -498,12 +587,16 @@ void main() {
       );
     }
 
-    ScrollController controllerOf(WidgetTester tester) =>
-        tester.widget<ListView>(find.byType(ListView)).controller!;
+    ScrollController controllerOf(WidgetTester tester) => tester
+        .widget<CustomScrollView>(find.bySubtype<CustomScrollView>().first)
+        .controller!;
 
     /// 上拖并等惯性停止（reviewing 态的流式光标永动，不能 pumpAndSettle）。
     Future<void> dragUp(WidgetTester tester) async {
-      await tester.drag(find.byType(ListView), const Offset(0, 400));
+      await tester.drag(
+        find.bySubtype<CustomScrollView>().first,
+        const Offset(0, 400),
+      );
       for (var i = 0; i < 8; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
@@ -564,8 +657,10 @@ void main() {
       final bottomBefore = controller.position.maxScrollExtent;
       for (var i = 0; i < 3; i++) {
         controller.position.jumpTo(
-          (controller.position.pixels - 20)
-              .clamp(0, controller.position.maxScrollExtent),
+          (controller.position.pixels - 20).clamp(
+            controller.position.minScrollExtent,
+            controller.position.maxScrollExtent,
+          ),
         );
         await tester.pump(const Duration(milliseconds: 50));
       }
@@ -613,8 +708,10 @@ void main() {
       // 带内慢速上划约 60px（超出 48px 恢复带、< 80px 旧容差带）
       for (var i = 0; i < 3; i++) {
         controller.position.jumpTo(
-          (controller.position.pixels - 20)
-              .clamp(0, controller.position.maxScrollExtent),
+          (controller.position.pixels - 20).clamp(
+            controller.position.minScrollExtent,
+            controller.position.maxScrollExtent,
+          ),
         );
         await tester.pump(const Duration(milliseconds: 50));
       }
@@ -678,51 +775,39 @@ void main() {
       );
     });
 
-    testWidgets('4. 浮层互斥：生成中脱离底部显胶囊；收工显导航条；贴底都无', (tester) async {
-      // 生成中 + 脱离底部 → 胶囊
+    testWidgets('手动翻阅直播后展开四键，停稳收成可实点的回底键', (tester) async {
       await tester.pumpWidget(
-        wrap(
-          stateFor(phase: IntermediatePhase.reviewing, liveText: 'a' * 100),
-        ),
+        wrap(stateFor(phase: IntermediatePhase.reviewing, liveText: 'a' * 100)),
       );
       await pumpAligned(tester);
+      final up = find.byIcon(Icons.keyboard_arrow_up).hitTestable();
+      final bottom =
+          find.byIcon(Icons.keyboard_double_arrow_down).hitTestable();
+      expect(up, findsNothing);
       await dragUp(tester);
-      expect(find.text('回到最新'), findsOneWidget);
-      expect(find.byType(IntermediateMessageNavigation), findsNothing);
-
-      // 收工 + 脱离底部 → 四键导航条
-      await tester.pumpWidget(wrap(stateFor(phase: IntermediatePhase.idle)));
-      await tester.pump();
-      expect(find.text('回到最新'), findsNothing);
-      expect(find.byType(IntermediateMessageNavigation), findsOneWidget);
-
-      // 贴底 → 都不显示
-      await tester.tap(find.byIcon(Icons.keyboard_double_arrow_down));
-      await tester.pumpAndSettle();
-      expect(
-        controllerOf(tester).offset,
-        closeTo(controllerOf(tester).position.maxScrollExtent, 1),
-      );
-      expect(find.byType(IntermediateMessageNavigation), findsNothing);
+      expect(up, findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(up, findsNothing);
+      expect(bottom, findsOneWidget);
+      await tester.tap(bottom);
+      await pumpAligned(tester);
+      expect(controllerOf(tester).position.extentAfter, closeTo(0, 1));
+      expect(bottom, findsNothing);
     });
 
-    testWidgets('5. 脱离底部跳顶后点「回到底部」恢复贴底', (tester) async {
+    testWidgets('四键能实点跳到最旧内容，再返回最新内容', (tester) async {
       await tester.pumpWidget(wrap(stateFor(phase: IntermediatePhase.idle)));
       await pumpAligned(tester);
-      final controller = controllerOf(tester);
-
-      // 贴底时导航条不显示，先上翻使其出现
       await dragUp(tester);
-      await tester.tap(find.byIcon(Icons.keyboard_double_arrow_up));
-      await tester.pumpAndSettle();
-      expect(controller.offset, 0);
-
-      await tester.tap(find.byIcon(Icons.keyboard_double_arrow_down));
-      await tester.pumpAndSettle();
-      expect(
-        controller.offset,
-        closeTo(controllerOf(tester).position.maxScrollExtent, 1),
-      );
+      await tester
+          .tap(find.byIcon(Icons.keyboard_double_arrow_up).hitTestable());
+      await pumpAligned(tester);
+      expect(controllerOf(tester).position.extentBefore, closeTo(0, 1));
+      await tester
+          .tap(find.byIcon(Icons.keyboard_double_arrow_down).hitTestable());
+      await pumpAligned(tester);
+      expect(controllerOf(tester).position.extentAfter, closeTo(0, 1));
     });
 
     testWidgets('6. 冻结后滚回底部自动恢复跟随（新直播增长后贴底）', (tester) async {
@@ -736,8 +821,10 @@ void main() {
 
       // 冻结：一次大幅上划脱离底部
       controller.position.jumpTo(
-        (controller.position.maxScrollExtent - 400)
-            .clamp(0, controller.position.maxScrollExtent),
+        (controller.position.maxScrollExtent - 400).clamp(
+          controller.position.minScrollExtent,
+          controller.position.maxScrollExtent,
+        ),
       );
       await tester.pump(const Duration(milliseconds: 100));
       expect(
@@ -1037,7 +1124,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 350));
       final position = positionOf(tester);
-      expect(position.maxScrollExtent, greaterThan(0));
+      expect(
+        position.maxScrollExtent - position.minScrollExtent,
+        greaterThan(0),
+      );
       expect(
         position.pixels,
         closeTo(position.maxScrollExtent, 8),
@@ -1051,11 +1141,13 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 350));
+      final first = find.byKey(const ValueKey('u0')).last;
       expect(
-        position.pixels,
-        lessThan(position.maxScrollExtent / 2),
-        reason: '同会话再次搜索命中须重新定位到首轮（旧实现被 _initialAligned '
-            '单次门控挡死，纹丝不动）',
+        tester.getTopLeft(first).dy,
+        closeTo(
+          tester.getTopLeft(find.bySubtype<CustomScrollView>().first).dy,
+          1,
+        ),
       );
     });
 
@@ -1069,11 +1161,17 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 350));
       final position = positionOf(tester);
-      expect(position.maxScrollExtent, greaterThan(0));
       expect(
-        position.pixels,
-        lessThan(position.maxScrollExtent / 2),
-        reason: '首次进入定位不得被  修复破坏',
+        position.maxScrollExtent - position.minScrollExtent,
+        greaterThan(0),
+      );
+      final first = find.byKey(const ValueKey('u0')).last;
+      expect(
+        tester.getTopLeft(first).dy,
+        closeTo(
+          tester.getTopLeft(find.bySubtype<CustomScrollView>().first).dy,
+          1,
+        ),
       );
     });
   });
@@ -1268,13 +1366,13 @@ void main() {
       // → live 组标题 → 直播稿件卡
       final markers = <Finder>[
         find.text('用户一'),
-        find.text('幕后 2 步 · 思考 1 段 · 12s'),
         find.text('正文一'),
+        find.byKey(const ValueKey('act-pill-retrieval')),
         find.byType(IntermediateCompactionSummaryCard),
         find.text('孤儿正文'),
         find.text('用户二'),
         find.text('继续推进'),
-        find.text('等待模型响应…'),
+        find.byType(DirectorLivePulse),
         find.text('直播正文'),
       ];
       var previous = -1.0;
@@ -1285,7 +1383,7 @@ void main() {
       }
     });
 
-    testWidgets('删除中间轮后：展开的幕后组跟随轮迁移，不被错位继承', (tester) async {
+    testWidgets('删除中间轮后：展开的幕单元抽屉跟随轮迁移，不被错位继承', (tester) async {
       tester.view.physicalSize = const Size(800, 2000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -1323,8 +1421,8 @@ void main() {
       );
       await tester.pump();
 
-      // 展开第 2 轮幕后组（收起态图标第二个）
-      await tester.tap(find.byIcon(Icons.tungsten_outlined).at(1));
+      // 展开第 2 轮变动抽屉
+      await tester.tap(find.byKey(const ValueKey('act-pill-retrieval')).at(1));
       await tester.pumpAndSettle();
       expect(find.text('播报二'), findsOneWidget);
       expect(find.text('播报一'), findsNothing);
@@ -1357,7 +1455,7 @@ void main() {
       expect(
         find.text('播报二'),
         findsOneWidget,
-        reason: '用户展开的幕后组应跟随轮（消息 id 键）保留展开态',
+        reason: '用户展开的变动抽屉应跟随轮（消息 id 键）保留展开态',
       );
       expect(
         find.text('播报三'),
@@ -1673,36 +1771,27 @@ void main() {
       );
       await tester.pump();
 
-      // 用户气泡（含动作行）不超出版心（列表已整体收窄；行内仍有
-      // 92% 列宽等自身约束，这里只守"不超版心"的上界）。
-      // 流式版心：1280 窗口下 = max(800, 1280×85%) = 1088
+      // 导演指示块与幕尾胶囊同在阅读版心内（1280 窗口下 = max(800, 1280×85%) = 1088）
+      final directiveFinder = find.byType(DirectorDirectiveBlock);
+      expect(directiveFinder, findsOneWidget);
       expect(
-        tester.getSize(find.text('推进剧情')).width,
+        tester.getSize(directiveFinder).width,
         lessThan(1088),
       );
-      // 幕后折叠组（工作状态行）与用户气泡水平范围一致（同列）：
-      // 折叠组标题行不再通铺整窗
-      final bubbleRight = tester.getTopRight(find.text('推进剧情')).dx;
-      final groupRow = find.byType(DirectorWorkGroup);
-      expect(groupRow, findsOneWidget);
+      final pillsFinder = find.byType(DirectorChangePillsAndDrawer);
+      expect(pillsFinder, findsOneWidget);
       expect(
-        tester.getSize(groupRow).width,
+        tester.getSize(pillsFinder).width,
         lessThan(1088),
-        reason: '幕后折叠组应与正文同列（版心内），不得通铺整窗',
+        reason: '幕尾胶囊应与正文同列（版心内），不得通铺整窗',
       );
-      // 版心（1088）在 1280 视口居中：列表右缘 = 1280/2 + 1088/2 = 1184，
-      // 减横向 padding 后内容右缘 1172；气泡右缘贴版心而不再贴窗口右缘
-      expect(bubbleRight, lessThan(1172), reason: '用户气泡右缘应在版心内');
-      expect(
-        bubbleRight,
-        greaterThan(1000),
-        reason: '用户气泡仍右对齐版心右缘，而非失去右对齐',
-      );
+      final directiveRight = tester.getTopRight(directiveFinder).dx;
+      expect(directiveRight, lessThanOrEqualTo(1172), reason: '导演指示右缘应在版心内');
     });
   });
 
   group('G-30：纯净阅读模式', () {
-    testWidgets('隐藏幕后折叠组与用户气泡，稿件+Recap 保留', (tester) async {
+    testWidgets('隐藏导演指示与幕后检索胶囊，正文、幕头与世界胶囊保留', (tester) async {
       final artifacts = <int, StoryRoundArtifacts>{
         1: StoryRoundArtifacts(
           sessionId: 'dir-1',
@@ -1734,21 +1823,31 @@ void main() {
         artifactsByTurnNumber: artifacts,
       );
 
-      // 正常态：幕后折叠组与用户气泡可见
+      // 正常态：导演指示、剧情锚胶囊与查证前情胶囊可见
       await tester.pumpWidget(wrap(state));
       await tester.pump();
-      expect(find.byIcon(Icons.tungsten_outlined), findsOneWidget);
+      expect(find.byType(DirectorDirectiveBlock), findsOneWidget);
+      expect(find.byKey(const ValueKey('act-pill-retrieval')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('act-pill-foreshadow:anchor')),
+        findsOneWidget,
+      );
       expect(find.text('推进'), findsOneWidget);
 
-      // 纯净阅读：两者隐藏，稿件与 Recap 书脊保留
+      // 纯净阅读：隐藏指示与查证胶囊，正文、幕头与世界胶囊保留
       await tester.pumpWidget(
         wrap(state, pureReading: true),
       );
       await tester.pump();
-      expect(find.byIcon(Icons.tungsten_outlined), findsNothing);
+      expect(find.byType(DirectorDirectiveBlock), findsNothing);
+      expect(find.byKey(const ValueKey('act-pill-retrieval')), findsNothing);
       expect(find.text('推进'), findsNothing);
       expect(find.text('稿件正文'), findsOneWidget);
       expect(find.textContaining('第 1 幕'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('act-pill-foreshadow:anchor')),
+        findsOneWidget,
+      );
     });
   });
 
@@ -1803,10 +1902,10 @@ void main() {
   });
 
   group('T12：时间线装配签名缓存（build 期不重跑 assemble）', () {
-    // 观测探针：DirectorWorkGroup.timeline 的列表实例 identity——
+    // 观测探针：DirectorLivePulse.timeline 的列表实例 identity——
     // 缓存命中 → 装配结果列表复用（同一实例）；未命中 → 新列表。
     List<AgentTimelineBlock> liveTimelineOf(WidgetTester tester) => tester
-        .widget<DirectorWorkGroup>(find.byType(DirectorWorkGroup))
+        .widget<DirectorLivePulse>(find.byType(DirectorLivePulse))
         .timeline;
 
     testWidgets('live 输入不变时的无关重建（上下文用量变化）→ 时间线复用', (tester) async {
@@ -1980,12 +2079,12 @@ void main() {
           .fontScale;
       expect(md, 1.5, reason: '稿件卡正文随全局字号缩放');
 
-      final bubble = tester
-          .widget<IntermediateMessageBubble>(
-            find.byType(IntermediateMessageBubble).first,
+      final directive = tester
+          .widget<DirectorDirectiveBlock>(
+            find.byType(DirectorDirectiveBlock).first,
           )
           .fontScale;
-      expect(bubble, 1.5, reason: '用户气泡随全局字号缩放');
+      expect(directive, 1.5, reason: '导演指示随全局字号缩放');
     });
   });
 
@@ -2138,6 +2237,343 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(stripFinder, findsNothing);
+    });
+  });
+
+  group('大周期任务二阶段 UI 隔离', () {
+    const task1Thinking = AgentLiveBlock(
+      kind: AgentLiveBlockKind.thinking,
+      stepIndex: 0,
+      text: '先查设定',
+    );
+    const task1Prose = AgentLiveBlock(
+      kind: AgentLiveBlockKind.text,
+      stepIndex: 1,
+      source: AgentTextSource.finishRoundProse,
+      text: '任务一已交付的定稿正文内容。',
+    );
+    const task2Thinking = AgentLiveBlock(
+      kind: AgentLiveBlockKind.thinking,
+      stepIndex: 2,
+      text: '任务二后台思考不应顶动上方工作组',
+    );
+    const task1SearchStep = AgentWorkStep(
+      toolName: 'search_story',
+      callId: 't1-1',
+      order: 0,
+      title: '任务一检索',
+    );
+    const task1FinishStep = AgentWorkStep(
+      toolName: 'finish_round',
+      callId: 't1-2',
+      stepIndex: 1,
+      order: 1,
+      title: '正文已锁定',
+    );
+    const task2ListStep = AgentWorkStep(
+      toolName: 'list_facts',
+      callId: 't2-1',
+      stepIndex: 2,
+      order: 2,
+      title: '8 条动态实体',
+    );
+    const task2QueryStep = AgentWorkStep(
+      toolName: 'query_facts',
+      callId: 't2-2',
+      stepIndex: 3,
+      order: 3,
+      status: AgentStepStatus.running,
+    );
+
+    testWidgets('切入维护阶段：正文光标立即静止、上方工作组冻结、正文下方渲染折叠胶囊并可就地展开', (tester) async {
+      final writingState = AdvancedChatState(
+        phase: IntermediatePhase.reviewing,
+        messages: const [],
+        retryCounts: const {},
+        session: _testSession(),
+        pendingUserMessage: _message('user', '继续大周期剧情'),
+        liveBlocks: const [task1Thinking, task1Prose],
+        agentSteps: const [task1SearchStep, task1FinishStep],
+        agentRoundProgress: const AgentRoundProgress(
+          currentStep: 2,
+          maxSteps: 8,
+          startedAtMs: 0,
+        ),
+      );
+      await tester.pumpWidget(wrap(writingState));
+      await tester.pump();
+      // 任务一写入期间正文处于流式态，且无维护胶囊
+      expect(find.byType(StreamingMarkdownBody), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('maintenance-progress-capsule')),
+        findsNothing,
+      );
+
+      // 切换至任务二（维护阶段）并推进任务二步骤与后台思考
+      final maintState = writingState.copyWith(
+        inMaintenancePhase: true,
+        maintenanceStepStart: 2,
+        liveBlocks: const [task1Thinking, task1Prose, task2Thinking],
+        agentSteps: const [
+          task1SearchStep,
+          task1FinishStep,
+          task2ListStep,
+          task2QueryStep,
+        ],
+        agentRoundProgress: const AgentRoundProgress(
+          currentStep: 4,
+          maxSteps: 14,
+          startedAtMs: 0,
+        ),
+      );
+      await tester.pumpWidget(wrap(maintState));
+      await tester.pump();
+
+      // 1. 正文卡立即停止流式光标态
+      expect(find.byType(StreamingMarkdownBody), findsNothing);
+      expect(find.text('任务一已交付的定稿正文内容。'), findsOneWidget);
+
+      // 2. 上方任务一直播脉搏退出，不展示任务二后台思考
+      expect(find.byType(DirectorLivePulse), findsNothing);
+      expect(find.text('任务二后台思考不应顶动上方工作组'), findsNothing);
+
+      // 3. 正文下方渲染定高虚线维护槽（默认收起）
+      final capsuleFinder =
+          find.byKey(const ValueKey('maintenance-progress-capsule'));
+      expect(capsuleFinder, findsOneWidget);
+      expect(
+        tester.getTopLeft(capsuleFinder).dy,
+        greaterThan(tester.getTopLeft(find.text('任务一已交付的定稿正文内容。')).dy),
+      );
+      expect(find.text('正文已定稿 · 正在查证设定…'), findsOneWidget);
+      expect(find.text('4 / 14'), findsOneWidget);
+      expect(find.text('浏览设定目录 · 8 条动态实体'), findsNothing);
+
+      // 4. 点击槽位就地展开任务二人话步骤
+      await tester
+          .tap(find.byKey(const ValueKey('maintenance-capsule-toggle')));
+      await tester.pump();
+      expect(find.text('浏览设定目录 · 8 条动态实体'), findsOneWidget);
+      expect(find.text('查证设定'), findsOneWidget);
+      expect(find.text('翻阅前情 · 任务一检索'), findsNothing);
+    });
+
+    testWidgets('维护阶段失败仍保留任务二错误工具卡', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          AdvancedChatState(
+            phase: IntermediatePhase.failed,
+            inMaintenancePhase: true,
+            maintenanceStepStart: 2,
+            messages: const [],
+            retryCounts: const {},
+            session: _testSession(),
+            pendingUserMessage: _message('user', '继续'),
+            liveBlocks: const [task1Thinking, task1Prose],
+            agentSteps: const [
+              task1SearchStep,
+              task1FinishStep,
+              AgentWorkStep(
+                toolName: 'update_facts',
+                callId: 't2-err',
+                stepIndex: 2,
+                order: 2,
+                title: '维护提交失败',
+                output: '校验失败',
+                status: AgentStepStatus.error,
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('maintenance-progress-capsule')),
+        findsOneWidget,
+      );
+      expect(find.byType(DirectorToolCard), findsOneWidget);
+      expect(find.textContaining('维护提交失败'), findsOneWidget);
+    });
+
+    testWidgets('纯净阅读模式下维护阶段保留克制单行提示且不暴露任务二细节', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          AdvancedChatState(
+            phase: IntermediatePhase.reviewing,
+            messages: const [],
+            retryCounts: const {},
+            session: _testSession(),
+            pendingUserMessage: _message('user', '继续'),
+            liveBlocks: const [task1Thinking, task1Prose],
+            agentSteps: const [task1SearchStep, task1FinishStep, task2ListStep],
+            inMaintenancePhase: true,
+            maintenanceStepStart: 2,
+          ),
+          pureReading: true,
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(DirectorLivePulse), findsNothing);
+      expect(find.text('任务一已交付的定稿正文内容。'), findsOneWidget);
+      expect(find.text('正文已就绪 · 后台正在校准记忆…'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('maintenance-capsule-toggle')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('维护阶段暂停自动跟随滚底，任务二新增步骤不移动当前阅读视口', (tester) async {
+      String filler(int n) => '历史正文内容。' * n;
+      final history = <ChatMessage>[
+        for (var i = 1; i <= 5; i++) ...[
+          ChatMessage(
+            messageId: 'maint-u$i',
+            sessionId: 'dir-1',
+            role: 'user',
+            content: '指令 $i',
+            createdAt: DateTime(2026),
+          ),
+          ChatMessage(
+            messageId: 'maint-a$i',
+            sessionId: 'dir-1',
+            role: 'assistant',
+            content: filler(100),
+            createdAt: DateTime(2026),
+          ),
+        ],
+      ];
+      ScrollController controller() => tester
+          .widget<CustomScrollView>(find.bySubtype<CustomScrollView>().first)
+          .controller!;
+
+      final baseMaint = AdvancedChatState(
+        phase: IntermediatePhase.reviewing,
+        messages: history,
+        retryCounts: const {},
+        session: _testSession(),
+        pendingUserMessage: _message('user', '本轮指令'),
+        liveBlocks: [
+          task1Thinking,
+          AgentLiveBlock(
+            kind: AgentLiveBlockKind.text,
+            stepIndex: 1,
+            source: AgentTextSource.finishRoundProse,
+            text: '本轮超长正文。' * 120,
+          ),
+        ],
+        agentSteps: const [task1SearchStep, task1FinishStep],
+        inMaintenancePhase: true,
+        maintenanceStepStart: 2,
+      );
+
+      await tester.pumpWidget(wrap(baseMaint));
+      await tester.pump();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 30));
+      }
+
+      // 将视口停在距离底部几像素以内（但不在最底，模拟正在读正文顶部/中部且处于贴底跟随状态）
+      final scroll = controller();
+      final anchored = scroll.position.maxScrollExtent - 20;
+      scroll.position.jumpTo(anchored);
+      await tester.pump();
+      final pixelsBefore = scroll.offset;
+
+      // 任务二不断追加新步骤与后台思考，不应触发 followGrowth 拉动视口
+      await tester.pumpWidget(
+        wrap(
+          baseMaint.copyWith(
+            liveBlocks: [...baseMaint.liveBlocks, task2Thinking],
+            agentSteps: [
+              task1SearchStep,
+              task1FinishStep,
+              task2ListStep,
+              task2QueryStep,
+            ],
+          ),
+        ),
+      );
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(scroll.offset, closeTo(pixelsBefore, 1.0));
+    });
+
+    testWidgets('整轮持久化后隐藏维护胶囊并在历史工作组统一展示全轮步骤', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          AdvancedChatState(
+            phase: IntermediatePhase.idle,
+            messages: [
+              _message('user', '推进'),
+              _message('assistant', '任务一已交付的定稿正文内容。'),
+            ],
+            retryCounts: const {},
+            session: _testSession(),
+            artifactsByTurnNumber: {
+              1: StoryRoundArtifacts(
+                sessionId: 'dir-1',
+                turnNumber: 1,
+                createdAt: DateTime(2026),
+                agentTimeline: const [
+                  AgentTimelineBlock(
+                    kind: AgentTimelineKind.action,
+                    stepIndex: 0,
+                    action: task1SearchStep,
+                  ),
+                  AgentTimelineBlock(
+                    kind: AgentTimelineKind.action,
+                    stepIndex: 1,
+                    action: task1FinishStep,
+                  ),
+                  AgentTimelineBlock(
+                    kind: AgentTimelineKind.action,
+                    stepIndex: 2,
+                    action: task2ListStep,
+                  ),
+                  AgentTimelineBlock(
+                    kind: AgentTimelineKind.action,
+                    stepIndex: 3,
+                    action: AgentWorkStep(
+                      toolName: 'finish_maintenance',
+                      callId: 't2-3',
+                      stepIndex: 3,
+                      order: 3,
+                    ),
+                  ),
+                ],
+                agentWorkSummary: const AgentWorkSummary(
+                  steps: 4,
+                  totalTokens: 500,
+                  durationMs: 4000,
+                  majorReviewCompleted: true,
+                ),
+              ),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('maintenance-progress-capsule')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('act-pill-maintenance')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('act-pill-retrieval')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('act-pill-maintenance')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('翻阅前情：任务一检索'), findsOneWidget);
+      expect(find.textContaining('浏览设定目录：8 条动态实体'), findsOneWidget);
+      expect(find.textContaining('finish_maintenance'), findsNothing);
+      expect(find.textContaining('完成校准'), findsNothing);
     });
   });
 }

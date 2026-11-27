@@ -1,15 +1,18 @@
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:lmstory/core/agent/agent_budget.dart';
 import 'package:lmstory/core/agent/agent_cancellation.dart';
 import 'package:lmstory/core/agent/agent_events.dart';
 import 'package:lmstory/core/agent/agent_llm_gateway.dart';
 import 'package:lmstory/core/agent/agent_message.dart';
+import 'package:lmstory/core/agent/agent_step_surface_source.dart';
 import 'package:lmstory/core/agent/agent_tool.dart';
 import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
 import 'package:lmstory/core/agent/agent_waterfall.dart';
 import 'package:lmstory/core/agent/agent_workbench_reminder.dart';
 import 'package:lmstory/core/agent/doom_loop_detector.dart';
+import 'package:lmstory/core/llm/tool_calling/tool_choice.dart';
 import 'package:lmstory/core/network/retry_policy.dart';
 import 'package:lmstory/core/utils/logger.dart';
 
@@ -102,12 +105,23 @@ abstract class AgentEventSink {
 }
 
 /// 轮结果
+/// 可靠实报输入锚点（成对快照）：某请求 usage 有效且无计量异常时，
+/// 实报完整输入 ↔ 该次发出的出站面。缺 usage/计量异常的请求不更新
+/// 配对（保留上一个可靠锚点；全程无可靠请求为 null）——材料差分
+/// 只信任成对锚点，不得把旧请求的 usage 配到新表面上。
+typedef AgentMeasuredInputAnchor = ({
+  int inputTokens,
+  List<AgentMessage> outgoingMessages,
+});
+
 class AgentTurnResult {
   const AgentTurnResult({
     required this.reason,
     required this.steps,
     required this.appendedMessages,
     required this.usage,
+    this.lastOutgoingMessages = const [],
+    this.measuredInputAnchor,
     this.errorMessage,
     this.error,
   });
@@ -120,6 +134,13 @@ class AgentTurnResult {
   /// 本轮追加到 surface 的全部消息（assistant/tool/注入消息）
   final List<AgentMessage> appendedMessages;
   final AgentUsageAccumulator usage;
+
+  /// 最后一次主请求的出站面（材料差分的锚点表面；空=零步轮/失败轮）
+  final List<AgentMessage> lastOutgoingMessages;
+
+  /// 可靠实报锚点（实报输入与该次出站面成对；null=本轮无可靠计量）。
+  /// [lastOutgoingMessages] 语义保持不变（末次请求出站面，不论计量）。
+  final AgentMeasuredInputAnchor? measuredInputAnchor;
   final String? errorMessage;
 
   /// 原始异常对象（：error 停轮时保留类型，供上层按异常类型定错误码
@@ -185,6 +206,8 @@ class AgentTurnSpec {
     this.overflowCompactor,
     this.resumeSeed,
     this.stablePrefixEndIndex,
+    this.stepSurfaceSource,
+    this.closingToolNames = const {'finish_round', 'finish_maintenance'},
   });
 
   final String sessionId;
@@ -250,6 +273,31 @@ class AgentTurnSpec {
   /// 供 Anthropic 历史端缓存断点使用；null = 不适用（续跑投影、
   /// 溢出重写或非导演轮）。
   final int? stablePrefixEndIndex;
+
+  /// 新模式专用：每步出站消息的账本投影源（出站唯一来源）。
+  ///
+  /// null = 现状路径（outgoing 来自 preStep 瀑布产物，关闭态行为不变）。
+  /// 非 null 时每步在 request 钩子之前 project()（自带 flush→读→投影），
+  /// 并经等值守卫比对内存工作面——漂移即 fail-closed 停轮（不静默回退）。
+  final AgentStepSurfaceSource? stepSurfaceSource;
+
+  /// 终结本轮或阶段的收尾控制工具名集合（用于 doom-loop 豁免与写失败终结守卫）。
+  final Set<String> closingToolNames;
+}
+
+/// 账本投影与内存工作面漂移（等值守卫触发，fail-closed 停轮）。
+///
+/// 确定性装配下两者必须逐条相等——不相等=投影与内存分叉（事件漏账/
+/// 双计/坐标损坏等），静默任选一边都会让「进模型的」与「日志可重建的」
+/// 永久分家。守卫先落 `surface/guard` 留痕事件再抛本异常停轮。
+class AgentProjectionDriftException implements Exception {
+  const AgentProjectionDriftException(this.detail);
+
+  /// 首个失配位置/形态的诊断描述
+  final String detail;
+
+  @override
+  String toString() => 'AgentProjectionDriftException: $detail';
 }
 
 /// AgentRunner：turn/step 循环（opencode 三层中的 runLoop+process 层）
@@ -300,9 +348,13 @@ class AgentRunner {
       ),
     );
 
+    // outcome 提升到 try 外：lastOutgoing（锚点表面）在取消/异常路径
+    // 也随结果上抛，供材料差分闭合读取
+    final outcome = _TurnOutcome(
+      initialSteps: spec.resumeSeed?.initialSteps ?? 0,
+      effectiveMaxSteps: spec.budget.maxSteps,
+    );
     try {
-      final outcome =
-          _TurnOutcome(initialSteps: spec.resumeSeed?.initialSteps ?? 0);
       await _runSteps(
         spec: spec,
         working: working,
@@ -345,6 +397,8 @@ class AgentRunner {
       steps: steps,
       appendedMessages: appended,
       usage: usage,
+      lastOutgoingMessages: outcome.lastOutgoing,
+      measuredInputAnchor: outcome.lastMeasuredInputAnchor,
       errorMessage: errorMessage,
       // 异常对象随结果保留（类型化错误码判定依据）
       error: crashError,
@@ -386,10 +440,11 @@ class AgentRunner {
       //  通牒走 workbench-reminder 包裹的 user 消息通道
       //（角色约定）——保住 recency 位且不打爆缓存前缀。
       (AgentStopReason, String)? budgetTrigger;
-      if (spec.budget.maxSteps > 0 && outcome.steps >= spec.budget.maxSteps) {
+      if (outcome.effectiveMaxSteps > 0 &&
+          outcome.steps >= outcome.effectiveMaxSteps) {
         budgetTrigger = (
           AgentStopReason.maxSteps,
-          '步数预算耗尽（${spec.budget.maxSteps}）',
+          '步数预算耗尽（${outcome.effectiveMaxSteps}）',
         );
       }
       final tokenBudget = spec.budget.maxTotalTokens;
@@ -424,7 +479,7 @@ class AgentRunner {
         final headroomLine = (contextWindow * 0.85).round();
         final lastPrompt = usage.lastTotalInputTokens > 0
             ? usage.lastTotalInputTokens
-            : usage.lastPromptTokens + usage.lastCacheReadTokens;
+            : usage.lastPromptTokens + (usage.lastCacheReadTokens ?? 0);
         if (lastPrompt > 0 && lastPrompt >= headroomLine) {
           budgetTrigger = (
             AgentStopReason.contextHeadroom,
@@ -441,12 +496,12 @@ class AgentRunner {
           return;
         }
         outcome.finalNoticeIssued = true;
-        final notice = AgentMessage.user(
-          wrapWorkbenchReminder(
+        final noticeBody = outcome.phaseSoftLandingNotice ??
             '$kPriorityObedienceClause${budgetTrigger.$2}。所有工具已停用。'
-            '立即用你已掌握的材料直接输出完整的叙事正文文本收尾'
-            '（系统会自动收录为正文），然后结束本轮。',
-          ),
+                '立即用你已掌握的材料直接输出完整的叙事正文文本收尾'
+                '（系统会自动收录为正文），然后结束本轮。';
+        final notice = AgentMessage.user(
+          wrapWorkbenchReminder(noticeBody),
         );
         working.add(notice);
         appended.add(notice);
@@ -501,6 +556,19 @@ class AgentRunner {
           outgoing = messages;
       }
 
+      // ---- 账本投影出站（新模式）：flush→读→投影，出站唯一来源 ----
+      // 时序唯一：注入/preStep（改 working 并发事件）→ project（含 flush）
+      // → 等值守卫 → request 钩子（flush 幂等）→ 序列化发送。重试复用同
+      // 一 outgoing（期间无新事件，投影不变），不重投影。
+      final stepSurfaceSource = spec.stepSurfaceSource;
+      if (stepSurfaceSource != null) {
+        final step = await stepSurfaceSource.project();
+        _guardProjectionMatches(spec, step: step, working: working);
+        outgoing = step.messages;
+      }
+      // 锚点表面随步覆盖（材料差分：实报完整输入 ↔ 发出表面绑定）
+      outcome.lastOutgoing = outgoing;
+
       // ---- request 瀑布（改调用配置，不动 messages）----
       final callConfig = await runAgentWaterfall<AgentCallConfig>(
         spec.hooks.request,
@@ -521,6 +589,19 @@ class AgentRunner {
 
       outcome.steps++;
       usage.add(response.usage);
+      // 可靠实报锚点配对：本请求确有有效输入实报（正数完整输入）且无
+      // 计量异常时，把实报完整输入与本次发出的出站面成对保存。缺
+      // usage、仅输出 usage（无输入字段→累计值 0）、异常计量均不能借
+      // 助累计值伪造可靠输入——保留上一个可靠配对（子代理并账不覆盖
+      // 父轮 last* 分项）。
+      if (response.usage != null &&
+          usage.lastRequestWarnings.isEmpty &&
+          usage.lastCompleteInputTokens > 0) {
+        outcome.lastMeasuredInputAnchor = (
+          inputTokens: usage.lastCompleteInputTokens,
+          outgoingMessages: outgoing,
+        );
+      }
 
       // 正文追踪（契约 §7.3）：出现 finish_round 调用即视为已发起执笔
       if (response.toolCalls.any((c) => c.name == 'finish_round')) {
@@ -566,9 +647,13 @@ class AgentRunner {
           promptTokens: response.usage?.promptTokens,
           completionTokens: response.usage?.completionTokens,
           totalTokens: response.usage?.totalTokens,
+          // 完整输入面随步事件上抛（命中率分母；协议适配器已归一）
+          totalInputTokens: response.usage?.fullInputTokens,
           // cache 分项随步事件上抛（durable 落库 → 聚合/回填）
           cacheReadTokens: response.usage?.cacheReadTokens,
           cacheCreationTokens: response.usage?.cacheCreationTokens,
+          // 计量异常随事件持久化（诊断可追溯；命中率侧据此降级）
+          usageWarnings: response.usage?.warnings ?? const [],
         ),
       );
 
@@ -612,6 +697,7 @@ class AgentRunner {
         // 正文时收到空响应，注入一次续跑提示再给模型一次机会，而不是把
         // 空轮当作正常完成交给上层。每轮只救一次，正文已流出则不干预。
         if (response.text.isEmpty &&
+            outcome.phaseSoftLandingNotice == null &&
             !outcome.hasEmittedProse &&
             !outcome.emptyStopNudgeIssued &&
             // 审查收官 ：软着陆后不再 nudge——通牒后的空响应会在
@@ -654,10 +740,10 @@ class AgentRunner {
       var doomed = false;
       final deferredReminders = <AgentMessage>[];
       for (final call in response.toolCalls) {
-        // 已注册的 finish_round 豁免（闸门纠错流程）；被 deny 的
-        // finish_round 名（未注册）照旧登记——无视禁用信封反复调用
-        // 正是 doom 要拦的形态
-        if (call.name == 'finish_round' && toolMap.containsKey(call.name)) {
+        // 已注册的终结工具豁免（闸门纠错流程）；被 deny 的终结工具名
+        // （未注册）照旧登记——无视禁用信封反复调用正是 doom 要拦的形态
+        if (spec.closingToolNames.contains(call.name) &&
+            toolMap.containsKey(call.name)) {
           continue;
         }
         if (doom.register(call)) {
@@ -709,7 +795,10 @@ class AgentRunner {
           tool: tool,
           call: call,
           stepIndex: outcome.steps,
+          turnOutcome: outcome,
+          terminalAlreadyTriggered: terminal,
           toolsDisabled: outcome.finalNoticeIssued,
+          phaseSoftLandingNotice: outcome.phaseSoftLandingNotice,
           finishReason: response.finishReason,
           usage: usage,
         );
@@ -720,12 +809,38 @@ class AgentRunner {
         final toolMessage = AgentMessage.toolResult(
           toolCallId: call.id,
           content: pipelineOutcome.result.output,
+          isError: pipelineOutcome.result.isError,
         );
         working.add(toolMessage);
         appended.add(toolMessage);
 
         if (pipelineOutcome.result.terminal) {
           terminal = true;
+        } else {
+          final isClosingTool =
+              tool != null && spec.closingToolNames.contains(call.name);
+          if (!terminal &&
+              tool != null &&
+              !isClosingTool &&
+              tool.permission == AgentToolPermission.write) {
+            if (pipelineOutcome.result.isError && !pipelineOutcome.wasDenied) {
+              outcome.unresolvedWriteErrors[call.name] =
+                  pipelineOutcome.result.title;
+            } else if (!pipelineOutcome.result.isError) {
+              outcome.unresolvedWriteErrors.remove(call.name);
+            }
+          }
+          final extraSteps = pipelineOutcome.result.extraMaxStepsDelta;
+          if (extraSteps > 0) {
+            if (outcome.effectiveMaxSteps > 0) {
+              outcome.effectiveMaxSteps += extraSteps;
+            }
+            outcome.writeErrorGateUsed = false;
+          }
+          final phaseNotice = pipelineOutcome.result.phaseSoftLandingNotice;
+          if (phaseNotice != null && phaseNotice.isNotEmpty) {
+            outcome.phaseSoftLandingNotice = phaseNotice;
+          }
         }
 
         // finish_round 失败软上限（契约 §2.5）：豁免 doom 后的循环防线。
@@ -773,6 +888,55 @@ class AgentRunner {
     }
   }
 
+  /// 等值守卫：账本投影 vs 内存工作面（新模式 fail-closed 纪律）。
+  ///
+  /// 确定性装配 ⇒ step.messages 与 working（本轮入口投影 + 轮内已发生
+  /// 全部变更）逐条相等。不等=投影与内存漂移：先落 `surface/guard` 留痕
+  /// 事件（durable 日志可审计），再抛 [AgentProjectionDriftException] 停轮
+  /// ——不静默任选一边（回退旧拼接=工程模式随时退化且无审计）。
+  ///
+  /// 比对口径=同一 wire 选项下的请求序列化（协议无关的内容层等值；
+  /// 引用相等不可用——投影重建的消息是新实例）。
+  void _guardProjectionMatches(
+    AgentTurnSpec spec, {
+    required AgentStepSurface step,
+    required List<AgentMessage> working,
+  }) {
+    String? mismatch;
+    if (step.messages.length != working.length) {
+      mismatch =
+          'length ${step.messages.length}(projection) != ${working.length}(working)';
+    } else {
+      final wireOptions = AgentWireOptions.forProtocolName(
+        spec.endpoint.protocol,
+      );
+      const equality = DeepCollectionEquality();
+      for (var i = 0; i < step.messages.length; i++) {
+        final a = step.messages[i].toRequestMap(wireOptions);
+        final b = working[i].toRequestMap(wireOptions);
+        if (!equality.equals(a, b)) {
+          mismatch = 'first mismatch at index $i '
+              '(projection=${a['role']}:${(a['content'] ?? '').toString().length}ch, '
+              'working=${b['role']}:${(b['content'] ?? '').toString().length}ch)';
+          break;
+        }
+      }
+    }
+    if (mismatch == null) return;
+    spec.events.emit(
+      AgentSurfaceGuardTripped(
+        kind: 'projection-drift',
+        detail: '$mismatch, generation=${step.contentGeneration}, '
+            'digest=${step.digest}',
+      ),
+    );
+    _logger?.error(
+      'Agent projection drift guard tripped, stopping round',
+      detail: mismatch,
+    );
+    throw AgentProjectionDriftException(mismatch);
+  }
+
   /// 带 request-error 重试瀑布的单步请求；失败时通过 [outcome] 回填并返回 null
   ///
   ///  [working] 是本轮工作消息列表（可变）——上下文超限
@@ -809,10 +973,13 @@ class AgentRunner {
             messages: requestMessages
                 .map((m) => m.toRequestMap(wireOptions))
                 .toList(),
-            // 软着陆后工具停用（纯文本收尾请求）
-            tools: outcome.finalNoticeIssued
-                ? const []
-                : agentToolsToDefinitions(spec.tools),
+            // HAR-05 软着陆保形：软着陆步仍传完整工具定义（空数组经网关
+            // 转 null 省略 tools 键，该步全前缀缓存 miss），改以
+            // toolChoice=none 停用工具——协议层禁止调用，前缀缓存命中。
+            // 软着陆后模型的幻觉工具调用防护见 _executeToolCall
+            // toolsDisabled 分支（信封不中断轮）。
+            tools: agentToolsToDefinitions(spec.tools),
+            toolChoice: outcome.finalNoticeIssued ? ToolChoice.none : null,
             config: callConfig,
             stablePrefixEndIndex: cacheBreakpointIndex,
           ),
@@ -880,13 +1047,17 @@ class AgentRunner {
             }
             // 压缩结果落日志（surface/replace，整面替换——投影坐标
             // 是全会话累积的，轮内消息数无法换算），deriveAgentSurface
-            // 从此可反映压缩后的真实请求序列
-            spec.events.emit(
-              AgentSurfaceReplaced(
-                messages: List.unmodifiable(compacted),
-                replaceEnd: kAgentSurfaceReplaceToEnd,
-              ),
-            );
+            // 从此可反映压缩后的真实请求序列。
+            // 新模式（stepSurfaceSource 非 null）：账本压缩事务自身已是
+            // 记录（压缩服务包装完成落账），再发整面快照=重复落账——跳过发射。
+            if (spec.stepSurfaceSource == null) {
+              spec.events.emit(
+                AgentSurfaceReplaced(
+                  messages: List.unmodifiable(compacted),
+                  replaceEnd: kAgentSurfaceReplaceToEnd,
+                ),
+              );
+            }
             working
               ..clear()
               ..addAll(compacted);
@@ -996,7 +1167,10 @@ class AgentRunner {
     required AgentTool? tool,
     required AgentToolCall call,
     required int stepIndex,
+    required _TurnOutcome turnOutcome,
+    bool terminalAlreadyTriggered = false,
     bool toolsDisabled = false,
+    String? phaseSoftLandingNotice,
     String? finishReason,
     AgentUsageAccumulator? usage,
   }) async {
@@ -1012,6 +1186,8 @@ class AgentRunner {
     );
     final stopwatch = Stopwatch()..start();
 
+    final isClosingTool =
+        tool != null && spec.closingToolNames.contains(call.name);
     ToolPipelineOutcome outcome;
     if (toolsDisabled) {
       // 软着陆后模型仍幻觉工具调用：返回可行动的停用信封（不中断轮）
@@ -1019,7 +1195,18 @@ class AgentRunner {
         wasDenied: true,
         result: AgentToolResult.failure(
           title: '工具已停用',
-          output: kMaxStepsFinalNotice,
+          output: phaseSoftLandingNotice ?? kMaxStepsFinalNotice,
+        ),
+      );
+    } else if (terminalAlreadyTriggered &&
+        tool != null &&
+        !isClosingTool &&
+        tool.permission == AgentToolPermission.write) {
+      outcome = ToolPipelineOutcome(
+        wasDenied: false,
+        result: AgentToolResult.failure(
+          title: '本轮已提交',
+          output: '本轮已由前序终结工具完成提交，同一请求中的后续写入未执行。',
         ),
       );
     } else if (tool == null) {
@@ -1035,6 +1222,23 @@ class AgentRunner {
               : '工具 `${call.name}` 不存在。可用工具：'
                   '${spec.tools.map((t) => t.name).join('、')}。'
                   '请改用列出的工具。',
+        ),
+      );
+    } else if (isClosingTool &&
+        turnOutcome.unresolvedWriteErrors.isNotEmpty &&
+        !turnOutcome.writeErrorGateUsed &&
+        !turnOutcome.finalNoticeIssued) {
+      turnOutcome.writeErrorGateUsed = true;
+      final failedSummary = turnOutcome.unresolvedWriteErrors.entries
+          .map((e) => '- ${e.key}（${e.value}）')
+          .join('\n');
+      outcome = ToolPipelineOutcome(
+        wasDenied: false,
+        result: AgentToolResult.failure(
+          title: '存在未修正的写入失败',
+          output: '本轮尚有未修正的写入失败，请勿直接交卷：\n$failedSummary\n\n'
+              '请先核对失败原因、修正参数后重新调用对应写入工具使其成功；'
+              '若确认要放弃这些写入并直接结束，请再次调用 `${call.name}` 确认。',
         ),
       );
     } else {
@@ -1071,6 +1275,8 @@ class AgentRunner {
         output: outcome.result.output,
         isError: outcome.result.isError,
         duration: stopwatch.elapsed,
+        // 检索证据等元数据随事件落账（durable sink 透传）
+        metadata: outcome.result.metadata,
       ),
     );
     return outcome;
@@ -1103,6 +1309,7 @@ class AgentRunner {
         final placeholderMsg = AgentMessage.toolResult(
           toolCallId: call.id,
           content: '（$placeholder）',
+          isError: true,
         );
         working.add(placeholderMsg);
         appended.add(placeholderMsg);
@@ -1133,13 +1340,22 @@ extension AgentToolResultPreview on AgentToolResult {
 
 /// 轮内可变结果容器（循环体与重试逻辑跨方法回填停止原因/步数）
 class _TurnOutcome {
-  _TurnOutcome({int initialSteps = 0}) : steps = initialSteps;
+  _TurnOutcome({
+    required this.effectiveMaxSteps,
+    int initialSteps = 0,
+  }) : steps = initialSteps;
 
   AgentStopReason reason = AgentStopReason.completed;
   String? message;
 
   /// 已完成步数（续跑种子化时含上次尝试的步数；兼作下一个 step 的序号）
   int steps;
+
+  /// 当前有效的步数上限（0 = 不限；维护阶段可动态追加配额）
+  int effectiveMaxSteps;
+
+  /// 阶段切换覆盖的软着陆通知（null = 使用默认正文收尾提示）
+  String? phaseSoftLandingNotice;
 
   /// maxSteps 软着陆已注入最后通牒（二次到达上限才判停止）
   bool finalNoticeIssued = false;
@@ -1162,6 +1378,20 @@ class _TurnOutcome {
 
   /// 溢出压缩自愈已用过（每轮一次，防压缩-重试循环）
   bool overflowCompacted = false;
+
+  /// 本轮未修正的写失败工具名 → 最近一次失败标题（终结守卫用）
+  final Map<String, String> unresolvedWriteErrors = {};
+
+  /// 写失败终结守卫已触发（每轮或每阶段最多拦截一次，防死循环）
+  bool writeErrorGateUsed = false;
+
+  /// 最后一次主请求的出站面（每步覆盖；材料差分的锚点表面——
+  /// 实报 lastCompleteInputTokens 与该表面的消息序列绑定）
+  List<AgentMessage> lastOutgoing = const [];
+
+  /// 最近一次「实报输入 ↔ 出站面」可靠配对（每步覆盖：usage 有效且
+  /// 该请求无计量异常才更新；后续缺 usage/异常的步骤保留上一个配对）
+  AgentMeasuredInputAnchor? lastMeasuredInputAnchor;
 
   void done(AgentStopReason reason, String? message) {
     this.reason = reason;

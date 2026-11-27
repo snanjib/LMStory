@@ -37,8 +37,9 @@ class FailureLogRepositoryImpl implements FailureLogRepository {
     // redactSecrets 此前只在剪贴板复制路径使用，防线画错了地方。
     // 在此单一收口点处理，三个模式控制器的调用方无需各自处理。
     final safeErrorMessage =
-        errorMessage == null ? null : redactSecrets(errorMessage);
-    final safeRawError = rawError == null ? null : redactSecrets(rawError);
+        errorMessage == null ? null : redactDiagnosticText(errorMessage);
+    final safeRawError =
+        rawError == null ? null : redactDiagnosticText(rawError);
     final now = DateTime.now();
     try {
       final id = await _database.into(_database.failureLogsTable).insert(

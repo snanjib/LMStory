@@ -77,12 +77,13 @@ class _IntegrationChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = 'simple',
     String? modelId,
     String? presetId,
   }) async {
     return ChatSession(
-      sessionId: 'real-session-1',
+      sessionId: sessionId ?? 'real-session-1',
       title: title,
       mode: mode,
       createdAt: DateTime(2026),
@@ -339,6 +340,7 @@ class _RecordingPersistenceService implements StoryPersistenceService {
     FactualConfig? factualConfig,
     CompactionPersistenceData? compaction,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     persistRoundCalls++;
     lastEmbedding = embedding;

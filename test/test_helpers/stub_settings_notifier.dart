@@ -15,17 +15,23 @@ import 'package:lmstory/features/templates/domain/repositories/template_reposito
 
 /// 预置供应商/模型的 SettingsNotifier（构造即装载，异步完成）。
 class StubSettingsNotifier extends SettingsNotifier {
-  StubSettingsNotifier()
+  StubSettingsNotifier({List<ApiPreset>? presets})
       : super(
-          presetRepo: _StubPresetRepo(),
+          presetRepo: _StubPresetRepo(presets),
           templateRepo: _StubTemplateRepo(),
           settingsRepo: _StubSettingsRepo(),
         );
 }
 
 class _StubPresetRepo implements ApiPresetRepository {
+  _StubPresetRepo(this.presets);
+
+  final List<ApiPreset>? presets;
+
   @override
-  Future<List<ApiPreset>> getAllPresets() async => [
+  Future<List<ApiPreset>> getAllPresets() async =>
+      presets ??
+      [
         ApiPreset(
           presetId: 'preset-1',
           name: '测试供应商',
@@ -61,6 +67,12 @@ class _StubSettingsRepo implements SettingsRepository {
 
   @override
   Future<String?> getApiKey(String presetId) async => null;
+
+  @override
+  Future<void> setUserOverride(String key, dynamic value) async {}
+
+  @override
+  Future<void> removeUserOverride(String key) async {}
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>

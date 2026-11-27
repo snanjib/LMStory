@@ -49,11 +49,17 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   /// 流程：
   /// 1. 守卫：phase=idle + 推导 assistantTarget
   /// 2. 推导 targetTurn 和 messageIdsToDelete（含 assistant_N + 下游所有消息，不含 user_N）
-  /// 3. 调 [StoryPersistenceService.deleteRoundAndDownstream]
+  /// 3. 调 [StoryPersistenceService.rollbackRoundAndDownstream] 保存旧稿并回退。
   /// 4. 更新 state.messages（移除删除部分）+ state.userInput = user_N 内容
   /// 5. state.regenerateTurnNumber = targetTurn（标识走 persistRegeneratedRound 分支）
   /// 6. 调 [_prepareAndRunRound] 启动故事模式生成
-  Future<void> regenerateMessage(ChatMessage targetMessage) async {
+  Future<void> regenerateMessage(ChatMessage targetMessage) =>
+      _runSessionOperation<void>(
+        null,
+        () => _regenerateMessage(targetMessage),
+      );
+
+  Future<void> _regenerateMessage(ChatMessage targetMessage) async {
     if (state.phase != IntermediatePhase.idle) return;
     // 手动压缩期间 phase 仍为 idle，但 boundary 消息若被删，
     // persistManualCompaction 会插入引用已删 boundary 的悬空压缩点。
@@ -92,49 +98,32 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     // 立即置"准备中"标识：DB 删除 await 期间 UI 显示遮罩，避免下游消息残留
     state = state.copyWith(isPreparingRegenerate: true);
 
-    // 删除阶段前把旧版快照为变体
-    // （非破坏性重生成）。快照失败则中止重生成——否则旧版被物理删除，
-    // 违背「不再覆盖旧版」的设计原则（宁可不出新变体，不可丢旧版）。
+    final RoundRollbackResult rollback;
     try {
-      await _persistenceService.snapshotMessageVariant(
-        sessionId: state.session.sessionId,
-        turnNumber: targetTurn,
-        content: assistantTarget.content,
-        thinkingContent: assistantTarget.thinkingContent,
-        sourceInput: userMessage.content,
-        process: state.artifactsByTurnNumber?[targetTurn],
-      );
-    } catch (e, stackTrace) {
-      _logger.error(
-        'Regenerate variant snapshot failed',
-        detail: '$e',
-        error: e,
-        stackTrace: stackTrace,
-      );
-      state = state.copyWith(isPreparingRegenerate: false);
-      return;
-    }
-
-    try {
-      await _persistenceService.deleteRoundAndDownstream(
+      rollback = await _persistenceService.rollbackRoundAndDownstream(
         sessionId: state.session.sessionId,
         fromTurnNumber: targetTurn,
         messageIdsToDelete: messageIdsToDelete,
-        // 起始轮旧版快照已在删除前落库，必须保留
-        keepVariantsAtFromTurn: true,
+        variantSnapshot: (
+          assistant: assistantTarget,
+          sourceInput: userMessage.content,
+          process: state.artifactsByTurnNumber?[targetTurn],
+        ),
       );
     } catch (e, stackTrace) {
       _logger.error(
-        'Regenerate delete failed',
+        'Regenerate rollback failed',
         detail: '$e',
         error: e,
         stackTrace: stackTrace,
       );
       // 删除失败不进入 failed（无 LLM 调用），仅记录日志并返回
       // 回退"准备中"标识，避免 UI 永久遮罩
-      state = state.copyWith(isPreparingRegenerate: false);
+      if (mounted) state = state.copyWith(isPreparingRegenerate: false);
       return;
     }
+
+    if (!mounted) return;
 
     // 更新 state：移除删除部分，保留 user_N 作为本轮输入
     final remainingMessages = state.messages.sublist(0, targetIndex);
@@ -143,13 +132,13 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     // 同步收缩内存变体表（与 DB 删除/保留语义一致：起始轮变体
     // 由 keepVariantsAtFromTurn 保留在 DB，切换器数据以收稿路径重载重建）
     final updatedVariants = _removeVariantsFromTurn(targetTurn);
-    // 2026-07-28 修复：删除/回滚后同步 narrativeTime，避免后续轮次时间线混乱
-    final updatedSession =
-        await _rollbackNarrativeTime(state.session.sessionId);
     state = state.copyWith(
       messages: remainingMessages,
-      session: updatedSession.copyWith(
+      session: state.session.copyWith(
         messageCount: remainingMessages.length,
+        currentNarrativeTime: rollback.narrativeTime,
+        storyAnchor: rollback.storyAnchor,
+        nextTurn: targetTurn,
       ),
       userInput: userMessage.content,
       regenerateTurnNumber: targetTurn,
@@ -166,6 +155,15 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   ///
   /// 与 [regenerateMessage] 的差异：user_N 也删除（用新内容重写），走 persistRound 分支。
   Future<void> editAndResend(
+    ChatMessage targetMessage,
+    String newContent,
+  ) =>
+      _runSessionOperation<void>(
+        null,
+        () => _editAndResend(targetMessage, newContent),
+      );
+
+  Future<void> _editAndResend(
     ChatMessage targetMessage,
     String newContent,
   ) async {
@@ -187,60 +185,44 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     // 立即置"准备中"标识：DB 删除 await 期间 UI 显示遮罩，避免下游消息残留
     state = state.copyWith(isPreparingRegenerate: true);
 
-    // 删除阶段前把旧版快照为变体（与 regenerate 同
-    // 语义；sourceInput 记旧指令——editAndResend 的各变体来源指令可能
-    // 不同）。快照失败中止重发，理由同 regenerate。
-    if (targetIndex + 1 < state.messages.length &&
-        state.messages[targetIndex + 1].role == 'assistant') {
-      try {
-        await _persistenceService.snapshotMessageVariant(
-          sessionId: state.session.sessionId,
-          turnNumber: targetTurn,
-          content: state.messages[targetIndex + 1].content,
-          thinkingContent: state.messages[targetIndex + 1].thinkingContent,
-          sourceInput: targetMessage.content,
-          process: state.artifactsByTurnNumber?[targetTurn],
-        );
-      } catch (e, stackTrace) {
-        _logger.error(
-          'EditAndResend variant snapshot failed',
-          detail: '$e',
-          error: e,
-          stackTrace: stackTrace,
-        );
-        state = state.copyWith(isPreparingRegenerate: false);
-        return;
-      }
-    }
-
+    final assistantIndex = targetIndex + 1;
+    final assistant = assistantIndex < state.messages.length
+        ? state.messages[assistantIndex]
+        : null;
+    final RoundRollbackResult rollback;
     try {
-      await _persistenceService.deleteRoundAndDownstream(
+      rollback = await _persistenceService.rollbackRoundAndDownstream(
         sessionId: state.session.sessionId,
         fromTurnNumber: targetTurn,
         messageIdsToDelete: messageIdsToDelete,
-        // 起始轮旧版快照已在删除前落库，必须保留
         keepVariantsAtFromTurn: true,
+        variantSnapshot: assistant != null && assistant.role == 'assistant'
+            ? (
+                assistant: assistant,
+                sourceInput: targetMessage.content,
+                process: state.artifactsByTurnNumber?[targetTurn],
+              )
+            : null,
       );
     } catch (e, stackTrace) {
       _logger.error(
-        'EditAndResend delete failed',
+        'EditAndResend rollback failed',
         detail: '$e',
         error: e,
         stackTrace: stackTrace,
       );
       // 回退"准备中"标识，避免 UI 永久遮罩
-      state = state.copyWith(isPreparingRegenerate: false);
+      if (mounted) state = state.copyWith(isPreparingRegenerate: false);
       return;
     }
+
+    if (!mounted) return;
 
     final remainingMessages = state.messages.sublist(0, targetIndex);
     // 清理 turn >= targetTurn 的历史 artifacts（与数据库 DELETE 同步）
     final updatedArtifacts = _removeArtifactsFromTurn(targetTurn);
     // 同步收缩内存变体表（同 regenerate 口径）
     final updatedVariants = _removeVariantsFromTurn(targetTurn);
-    // 2026-07-28 修复：删除/回滚后同步 narrativeTime
-    final updatedSession =
-        await _rollbackNarrativeTime(state.session.sessionId);
     // 立即创建 pendingUserMessage，UI 即时显示新用户消息气泡（对齐 sendMessage）
     // 修复「编辑重发期间用户消息消失」问题：原实现删除旧 user_N 后直接调
     // _prepareAndRunRound，UI 在生成完成前看不到用户消息。补齐 pendingUserMessage
@@ -254,8 +236,11 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     );
     state = state.copyWith(
       messages: remainingMessages,
-      session: updatedSession.copyWith(
+      session: state.session.copyWith(
         messageCount: remainingMessages.length,
+        currentNarrativeTime: rollback.narrativeTime,
+        storyAnchor: rollback.storyAnchor,
+        nextTurn: targetTurn,
       ),
       userInput: newContent,
       regenerateTurnNumber: null, // 走 persistRound 分支
@@ -284,6 +269,15 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   Future<bool> editMessageContent(
     ChatMessage targetMessage,
     String newContent,
+  ) =>
+      _runSessionOperation<bool>(
+        false,
+        () => _editMessageContent(targetMessage, newContent),
+      );
+
+  Future<bool> _editMessageContent(
+    ChatMessage targetMessage,
+    String newContent,
   ) async {
     if (state.phase != IntermediatePhase.idle) return false;
     if (state.isManualCompacting) return false; // 与手动压缩互斥
@@ -294,6 +288,7 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     final editedTurn = targetMessage.role == 'assistant'
         ? _computeTurnNumber(targetMessage)
         : null;
+    if (targetMessage.role == 'assistant' && editedTurn == null) return false;
     try {
       var saved = false;
       if (editedTurn != null) {
@@ -302,6 +297,14 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
           sessionId: state.session.sessionId,
           turnNumber: editedTurn,
           assistantMessageId: targetMessage.messageId,
+          newContent: newContent,
+        );
+      } else if (targetMessage.role == 'user') {
+        saved =
+            await _persistenceService.updateUserContentAndInvalidateSourceTurn(
+          sessionId: state.session.sessionId,
+          turnNumber: _computeTurnNumber(targetMessage),
+          userMessageId: targetMessage.messageId,
           newContent: newContent,
         );
       } else {
@@ -365,7 +368,13 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   ///
   /// [targetMessage] 可以是轮次中的 user 或 assistant，均删除整轮 + 下游。
   /// 删除后保持 idle，不启动故事模式生成。
-  Future<void> deleteRound(ChatMessage targetMessage) async {
+  Future<void> deleteRound(ChatMessage targetMessage) =>
+      _runSessionOperation<void>(
+        null,
+        () => _deleteRound(targetMessage),
+      );
+
+  Future<void> _deleteRound(ChatMessage targetMessage) async {
     if (state.phase != IntermediatePhase.idle) return;
     // 手动压缩期间删轮 = 压缩点引用已删 boundary → 压缩静默失效。
     if (state.isManualCompacting) return;
@@ -384,8 +393,9 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     final messageIdsToDelete =
         state.messages.sublist(startIndex).map((m) => m.messageId).toList();
 
+    final RoundRollbackResult rollback;
     try {
-      await _persistenceService.deleteRoundAndDownstream(
+      rollback = await _persistenceService.rollbackRoundAndDownstream(
         sessionId: state.session.sessionId,
         fromTurnNumber: targetTurn,
         messageIdsToDelete: messageIdsToDelete,
@@ -400,21 +410,25 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
       return;
     }
 
+    if (!mounted) return;
+
     final remainingMessages = state.messages.sublist(0, startIndex);
     // 清理 turn >= targetTurn 的历史 artifacts（与数据库 DELETE 同步）
     final updatedArtifacts = _removeArtifactsFromTurn(targetTurn);
     // 删轮不传 keepVariants（起始轮变体一并物理删除），内存表同步收缩
     final updatedVariants = _removeVariantsFromTurn(targetTurn);
-    // 2026-07-28 修复：删除/回滚后同步 narrativeTime
-    final updatedSession =
-        await _rollbackNarrativeTime(state.session.sessionId);
     state = state.copyWith(
       messages: remainingMessages,
-      session: updatedSession.copyWith(
+      session: state.session.copyWith(
         messageCount: remainingMessages.length,
+        currentNarrativeTime: rollback.narrativeTime,
+        storyAnchor: rollback.storyAnchor,
+        nextTurn: targetTurn,
       ),
       artifactsByTurnNumber: updatedArtifacts,
       variantsByTurn: updatedVariants,
+      // 删轮改变请求材料且无法可靠量化 → 主数字失效（显示「—」）
+      contextEstimate: const ContextUsageEstimate.unknown(),
       // 不进入 generating，保持 idle
     );
 
@@ -422,30 +436,11 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     // 宏摘要现在由压缩服务在压缩时生成，删除轮次不会影响已有的分段宏摘要。
   }
 
-  /// 删除/回滚后同步叙事时间（DOC-08 §5.x，2026-07-28 修复）
-  ///
-  /// 取值口径见 [latestNarrativeTimeOf]（倒序找最后一条
-  /// narrativeTime 非空的记忆，跳过 macro/未输出时间的 micro；全空回 null）。
-  Future<ChatSession> _rollbackNarrativeTime(String sessionId) async {
-    final experiences = await _experienceRepository.getAllExperiences(
-      sessionId,
-    );
-    final latestNarrativeTime = latestNarrativeTimeOf(experiences);
-    final currentSession = state.session;
-    if (currentSession.currentNarrativeTime != latestNarrativeTime) {
-      final updatedSession = currentSession.copyWith(
-        currentNarrativeTime: latestNarrativeTime,
-      );
-      await _chatRepository.updateSession(updatedSession);
-      return updatedSession;
-    }
-    return currentSession;
-  }
-
   /// 更新 pendingUserMessage 的文本内容（仅内存，不持久化、不发送）
   ///
   /// 适用于失败/取消后保留的临时用户消息，用户编辑后只想保存修改不立即发送。
   void updatePendingUserMessageContent(String newContent) {
+    if (_sessionOperations.isBusy) return;
     if (state.pendingUserMessage == null) return;
     state = state.copyWith(
       pendingUserMessage:
@@ -460,7 +455,13 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   ///
   /// 适用场景（DOC-09A-2 §6.5 修订）：失败/取消后保留的临时用户消息，
   /// 用户编辑后重发。支持 phase=idle（取消后）和 phase=failed（失败后）两种状态。
-  Future<void> editPendingUserMessage(String newContent) async {
+  Future<void> editPendingUserMessage(String newContent) =>
+      _runSessionOperation<void>(
+        null,
+        () => _editPendingUserMessage(newContent),
+      );
+
+  Future<void> _editPendingUserMessage(String newContent) async {
     // 守卫：仅 idle/failed 可操作（与 body 中 actionsEnabled 判断一致）
     if (state.phase != IntermediatePhase.idle &&
         state.phase != IntermediatePhase.failed) {
@@ -476,7 +477,7 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     _round = null;
 
     // 用新内容走 sendMessage（会创建新的 pendingUserMessage + 启动状态机）
-    await sendMessage(newContent);
+    await _sendMessage(newContent);
   }
 
   /// 重发未持久化的临时用户消息（失败/中断轮的「重新生成」入口）
@@ -494,13 +495,7 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     final content = pending.content ?? '';
     if (content.isEmpty) return;
 
-    state = state.clearTemporary().copyWith(
-          pendingUserMessage: null,
-          userInput: null,
-        );
-    _round = null;
-
-    await sendMessage(content);
+    await editPendingUserMessage(content);
   }
 
   /// 删除 pendingUserMessage（未持久化的临时用户消息）
@@ -511,6 +506,7 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   /// 适用场景（DOC-09A-2 §6.5 修订）：失败/取消后保留的临时用户消息，
   /// 用户主动删除。支持 phase=idle（取消后）和 phase=failed（失败后）两种状态。
   void deletePendingUserMessage() {
+    if (_sessionOperations.isBusy) return;
     // 守卫：仅 idle/failed 可操作
     if (state.phase != IntermediatePhase.idle &&
         state.phase != IntermediatePhase.failed) {
@@ -577,8 +573,22 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   /// 切换该轮稿件到指定变体（同事务改写 DB；随后整面重载 artifacts+变体）
   ///
   /// 切换即改变后续叙事走向：上下文组装读 chat_messages.content（已物化
-  /// 为所选变体）。故事模式变体不带 agent 过程列，回放面差异天然为零。
+  /// 为所选变体）。记忆层随所选正文同步交换（正文=事实真源）。
+  ///
+  /// 拒绝切换的安全边界（记忆无法交换时不切换，正文保持原版本）：
+  /// - 该轮之后还有后续轮：后续轮及其派生记忆基于当前版本生成，切换
+  ///   早期版本会造成记忆与正文混线；先删除后续轮再切换。
+  /// - 该轮已进入压缩归档区：压缩摘要已并入历史，无法安全拆出交换。
   Future<void> switchMessageVariant(
+    ChatMessage assistantMessage,
+    int variantIndex,
+  ) =>
+      _runSessionOperation<void>(
+        null,
+        () => _switchMessageVariant(assistantMessage, variantIndex),
+      );
+
+  Future<void> _switchMessageVariant(
     ChatMessage assistantMessage,
     int variantIndex,
   ) async {
@@ -587,6 +597,22 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
     final turn = _computeTurnNumber(assistantMessage);
     if (turn == null) return;
 
+    if (turn <= state.compactedTurnBase) {
+      _notifyVariantSwitchBlocked('compacted');
+      return;
+    }
+    final artifacts = state.artifactsByTurnNumber;
+    if (artifacts == null) {
+      // 轮产物未装载（异常态）：无法核实是否存在后续轮，拒绝切换保数据
+      _notifyVariantSwitchBlocked('downstream');
+      return;
+    }
+    if (artifacts.keys.any((t) => t > turn)) {
+      _notifyVariantSwitchBlocked('downstream');
+      return;
+    }
+
+    final config = await _getConfig();
     bool switched;
     try {
       switched = await _persistenceService.switchMessageVariant(
@@ -594,17 +620,21 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
         turnNumber: turn,
         variantIndex: variantIndex,
         assistantMessageId: assistantMessage.messageId,
+        factualConfig: config.memory.factual,
       );
     } catch (e, stackTrace) {
       _logger.error(
         'SwitchMessageVariant failed',
-        detail: '$e',
-        error: e,
+        detail: e.runtimeType.toString(),
         stackTrace: stackTrace,
       );
+      _notifyVariantSwitchBlocked('restore');
       return;
     }
-    if (!switched) return;
+    if (!switched) {
+      _notifyVariantSwitchBlocked('restore');
+      return;
+    }
 
     // 整面重载（artifacts 过程列/指针 + 变体列表 + 消息 content）——
     // 单次用户动作两查可接受，避免在内存里二次拼装变体过程数据
@@ -657,6 +687,15 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
   Future<void> deleteMessageVariant(
     ChatMessage assistantMessage,
     int variantIndex,
+  ) =>
+      _runSessionOperation<void>(
+        null,
+        () => _deleteMessageVariant(assistantMessage, variantIndex),
+      );
+
+  Future<void> _deleteMessageVariant(
+    ChatMessage assistantMessage,
+    int variantIndex,
   ) async {
     if (state.phase != IntermediatePhase.idle) return;
     final turn = _computeTurnNumber(assistantMessage);
@@ -696,6 +735,15 @@ extension IntermediateChatControllerMessages on IntermediateChatController {
         variantFlashStartedAtMs: null,
       );
     }
+  }
+
+  /// 变体切换被拒的用户提示（页面监听 tick 弹 toast，原因见
+  /// IntermediateChatState.variantSwitchBlockedReason）
+  void _notifyVariantSwitchBlocked(String reason) {
+    state = state.copyWith(
+      variantSwitchBlockedTick: state.variantSwitchBlockedTick + 1,
+      variantSwitchBlockedReason: reason,
+    );
   }
 
   /// 清空本轮：移除中间产物 + 清空 pendingUserMessage，回 idle

@@ -197,6 +197,71 @@ void main() {
     });
   });
 
+  group('stable system cache capability', () {
+    test('official defaults to enabled; third-party defaults to disabled', () {
+      expect(resolve().allowStableSystemCache, isTrue);
+      expect(
+        resolve(baseUrl: 'https://relay.example.com').allowStableSystemCache,
+        isFalse,
+      );
+    });
+
+    test('explicit true enables on third-party', () {
+      final options = resolve(
+        baseUrl: 'https://relay.example.com',
+        providerOptions: const {
+          kAnthropicCapabilitiesOption: {'stable_system_cache': true},
+        },
+      );
+      expect(options.allowStableSystemCache, isTrue);
+    });
+
+    test('explicit false disables on official', () {
+      final options = resolve(
+        providerOptions: const {
+          kAnthropicCapabilitiesOption: {'stable_system_cache': false},
+        },
+      );
+      expect(options.allowStableSystemCache, isFalse);
+    });
+
+    test('non-bool falls back to endpoint default', () {
+      expect(
+        resolve(
+          baseUrl: 'https://relay.example.com',
+          providerOptions: const {
+            kAnthropicCapabilitiesOption: {'stable_system_cache': 'yes'},
+          },
+        ).allowStableSystemCache,
+        isFalse,
+      );
+      expect(
+        resolve(
+          providerOptions: const {
+            kAnthropicCapabilitiesOption: {'stable_system_cache': 1},
+          },
+        ).allowStableSystemCache,
+        isTrue,
+      );
+    });
+
+    test('non-map capabilities falls back to endpoint default', () {
+      expect(
+        resolve(
+          providerOptions: const {kAnthropicCapabilitiesOption: 'invalid'},
+        ).allowStableSystemCache,
+        isTrue,
+      );
+      expect(
+        resolve(
+          baseUrl: 'https://relay.example.com',
+          providerOptions: const {kAnthropicCapabilitiesOption: <String>[]},
+        ).allowStableSystemCache,
+        isFalse,
+      );
+    });
+  });
+
   group('max tokens', () {
     test('positive is clamped to model max', () {
       final options = resolve(

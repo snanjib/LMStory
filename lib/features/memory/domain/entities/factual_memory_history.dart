@@ -22,6 +22,7 @@ class FactualMemoryHistory {
     required this.action,
     required this.turnNumber,
     required this.createdAt,
+    this.historyId,
     this.attributeId,
     this.oldValue,
     this.newValue,
@@ -31,6 +32,9 @@ class FactualMemoryHistory {
 
   /// 实体 ID（指向 FactualEntity.entityId）
   final String entityId;
+
+  /// 数据库流水行号。仅用于稳定排序与查询游标，不参与写入契约。
+  final int? historyId;
 
   /// 属性 ID（nullable：CREATE_ENTITY / ADD_ALIAS / ARCHIVE_ENTITY 时无）
   final String? attributeId;

@@ -80,26 +80,33 @@ class DemoRuntime extends ChangeNotifier {
   /// 启动加载完成（含邀请门控预判）
   bool loaded = false;
 
-  /// 当前 locale 是否有可用演示包
-  bool packAvailable = false;
+  final _packChecks = <String, Future<bool>>{};
+  bool _offerInvite = false;
 
-  /// 正式环境是否已有带 Key 供应商（有则不弹首问）
-  bool hasKeyedPreset = false;
+  /// 启动邀请与帮助页共用同一语言的校验结果。候选菜单仍逐包核验。
+  Future<bool> isPackAvailable(String localeTag) =>
+      _packChecks.putIfAbsent(localeTag, () => _loader.isAvailable(localeTag));
 
   /// 邀请门控：首问是否应弹（onboarding 未完成由宿主另判）
   bool get inviteEligible =>
-      loaded &&
-      state.inviteStatus == DemoInviteStatus.pending &&
-      packAvailable &&
-      !hasKeyedPreset;
+      loaded && state.inviteStatus == DemoInviteStatus.pending && _offerInvite;
 
   /// 启动加载状态文件 + 核验并补跑中断的交接（幂等）
   Future<void> load() async {
     if (loaded) return;
+    if (kIsWeb) {
+      loaded = true;
+      if (!_disposed) notifyListeners();
+      return;
+    }
     _state = await _store.load();
-    final localeTag = LocaleSettings.currentLocale.languageTag;
-    packAvailable = await _loader.isAvailable(localeTag);
-    hasKeyedPreset = await _realHasKeyedPreset();
+    if (_state.inviteStatus == DemoInviteStatus.pending &&
+        (_state.phase == DemoPhase.idle || _state.phase == DemoPhase.invited) &&
+        !await _realHasKeyedPreset()) {
+      _offerInvite = await isPackAvailable(
+        LocaleSettings.currentLocale.languageTag,
+      );
+    }
     loaded = true;
     if (!_disposed) notifyListeners();
     // handoverPending：打开源库核验/补跑（不依赖 start 挂载的库句柄）

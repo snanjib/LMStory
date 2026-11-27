@@ -130,8 +130,12 @@ class _GroupDef {
       'search_story_text',
       'read_story',
       'query_facts',
+      'list_facts',
+      'query_memory_changes',
       'read_compact_summary',
       'read_skill',
+      'calc_eval',
+      'calc_date',
     ]),
     _GroupDef('write', [
       'update_facts',
@@ -139,7 +143,12 @@ class _GroupDef {
       'update_story_anchor',
       'record_event_memory',
     ]),
-    _GroupDef('control', ['spawn', 'ask_user', 'finish_round']),
+    _GroupDef('control', [
+      'spawn',
+      'ask_user',
+      'finish_round',
+      'finish_maintenance',
+    ]),
   ];
 }
 
@@ -185,9 +194,8 @@ class _SessionToolRow extends StatelessWidget {
           SizedBox(
             height: 32,
             child: SegmentedButton<ToolPermissionState>(
-              // finish_round（提交本轮）锁死
-              // allow——只渲染 allow 段，UI 上不存在可切至 ask/deny 的入口
-              segments: toolName == ToolPermissions.lockedAllowTool
+              // 控制收尾工具锁死 allow——只渲染 allow 段，UI 上不存在可切至 ask/deny 的入口
+              segments: ToolPermissions.isLockedAllow(toolName)
                   ? [
                       ButtonSegment(
                         value: ToolPermissionState.allow,

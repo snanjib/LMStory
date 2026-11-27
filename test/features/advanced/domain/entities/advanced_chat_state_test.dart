@@ -164,6 +164,42 @@ void main() {
       expect(cleared.agentTimeline, isEmpty);
       expect(cleared.clearTemporary().agentTimeline, isEmpty);
     });
+
+    test('维护阶段标识默认关闭，随 clearAgentSteps 与 clearTemporary 复位', () {
+      final initial = AdvancedChatState.initial(_testSession());
+      expect(initial.inMaintenancePhase, isFalse);
+      expect(initial.maintenanceStepStart, 0);
+
+      final inMaint = initial.copyWith(
+        inMaintenancePhase: true,
+        maintenanceStepStart: 4,
+        agentRoundProgress: const AgentRoundProgress(
+          currentStep: 5,
+          maxSteps: 8,
+          startedAtMs: 1000,
+        ),
+      );
+      expect(inMaint.inMaintenancePhase, isTrue);
+      expect(inMaint.maintenanceStepStart, 4);
+
+      final updatedProgress =
+          inMaint.agentRoundProgress!.copyWith(currentStep: 6, maxSteps: 14);
+      expect(updatedProgress.currentStep, 6);
+      expect(updatedProgress.maxSteps, 14);
+      expect(updatedProgress.startedAtMs, 1000);
+
+      final kept = inMaint.copyWith(phase: IntermediatePhase.reviewing);
+      expect(kept.inMaintenancePhase, isTrue);
+      expect(kept.maintenanceStepStart, 4);
+
+      final clearedSteps = inMaint.copyWith(clearAgentSteps: true);
+      expect(clearedSteps.inMaintenancePhase, isFalse);
+      expect(clearedSteps.maintenanceStepStart, 0);
+
+      final clearedTemp = inMaint.clearTemporary();
+      expect(clearedTemp.inMaintenancePhase, isFalse);
+      expect(clearedTemp.maintenanceStepStart, 0);
+    });
   });
 
   group('上下文容量字段（上下文用量指示 T4/T5）', () {

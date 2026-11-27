@@ -16,8 +16,8 @@ import 'package:lmstory/i18n/strings.g.dart';
 
 /// 种子资源应用区段（DOC-15 §9.3， 自故事模式抽取共享）。
 ///
-/// 会话级参数化、无模式依赖：故事/导演会话设置面板同款挂载。三张卡：
-/// 应用角色卡 / 应用世界书 / 取消应用资源。占用名预检与投影
+/// 故事与导演会话设置共用，按当前会话显示已应用资源及应用、取消应用入口。
+/// 占用名预检与投影
 /// 均在 [ResourceApplyService]/[ResourceProjectionService] 领域层，
 /// 随本组件天然共享，语义不变。
 ///
@@ -26,11 +26,15 @@ class SeedResourceSection extends ConsumerStatefulWidget {
   const SeedResourceSection({
     required this.sessionId,
     required this.enabled,
+    required this.ensureSessionIdForApply,
     super.key,
   });
 
   final String sessionId;
   final bool enabled;
+
+  /// Resolve the selected session after the user confirms a resource.
+  final Future<String?> Function() ensureSessionIdForApply;
 
   @override
   ConsumerState<SeedResourceSection> createState() =>
@@ -38,12 +42,129 @@ class SeedResourceSection extends ConsumerStatefulWidget {
 }
 
 class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
+  late Future<Map<String, ProjectedSeedGroup>> _appliedGroups;
+
+  @override
+  void initState() {
+    super.initState();
+    _appliedGroups = _loadAppliedGroups(widget.sessionId);
+  }
+
+  @override
+  void didUpdateWidget(covariant SeedResourceSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessionId != widget.sessionId) {
+      _appliedGroups = _loadAppliedGroups(widget.sessionId);
+    }
+  }
+
+  Future<Map<String, ProjectedSeedGroup>> _loadAppliedGroups(
+    String sessionId,
+  ) async {
+    final entities = await ref.read(factualRepositoryProvider).getEntities(
+          sessionId,
+          includeArchived: true,
+        );
+    final hasSeeds = entities.any(
+      (entity) =>
+          entity.source != FactualSource.auto &&
+          (entity.sourceRef?.isNotEmpty ?? false),
+    );
+    if (!mounted || !hasSeeds) return {};
+    final resourceRepository = ref.read(resourceLibraryRepositoryProvider);
+    final cards = await resourceRepository.getAllCharacterCards();
+    final books = await resourceRepository.getAllWorldbooks();
+    return groupProjectedSeedEntities(
+      entities,
+      cardNamesById: {for (final card in cards) card.cardId: card.name},
+      bookNamesById: {for (final book in books) book.bookId: book.name},
+    );
+  }
+
+  void _refreshAppliedGroups() {
+    final groups = _loadAppliedGroups(widget.sessionId);
+    setState(() {
+      _appliedGroups = groups;
+    });
+  }
+
+  Future<String?> _resolveApplySession(String originalSessionId) async {
+    if (!mounted || !widget.enabled || widget.sessionId != originalSessionId) {
+      return null;
+    }
+    final sessionId = await widget.ensureSessionIdForApply();
+    if (!mounted ||
+        (widget.sessionId != originalSessionId &&
+            widget.sessionId != sessionId)) {
+      return null;
+    }
+    if (sessionId == null) {
+      _showResourceSnack(
+        Translations.of(context).common.seedResource.applySessionUnavailable,
+      );
+    }
+    return sessionId;
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = Translations.of(context);
+    final colors = context.lm.palette;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          t.common.seedResource.appliedTitle,
+          style: SimpleTextStyles.body.copyWith(
+            color: colors.ink,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: IntermediateSpacing.sXs),
+        FutureBuilder<Map<String, ProjectedSeedGroup>>(
+          future: _appliedGroups,
+          builder: (context, snapshot) {
+            final style = SimpleTextStyles.body.copyWith(color: colors.muted);
+            if (snapshot.connectionState != ConnectionState.done) {
+              return Text(t.common.loading, style: style);
+            }
+            if (snapshot.hasError) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(t.common.seedResource.appliedLoadFailed, style: style),
+                  TextButton(
+                    onPressed: _refreshAppliedGroups,
+                    child: Text(t.common.retry),
+                  ),
+                ],
+              );
+            }
+            final groups =
+                snapshot.data?.values ?? const <ProjectedSeedGroup>[];
+            if (groups.isEmpty) {
+              return Text(t.common.seedResource.appliedEmpty, style: style);
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final group in groups)
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      bottom: IntermediateSpacing.sXs,
+                    ),
+                    child: Text(
+                      group.source == FactualSource.card
+                          ? t.common.seedResource.appliedCard(name: group.name)
+                          : t.common.seedResource.appliedBook(name: group.name),
+                      style: style.copyWith(color: colors.ink),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: IntermediateSpacing.sMd),
         context.lmUi.settingCard(
           context,
           narrative: true,
@@ -80,25 +201,10 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
   /// 取消应用：列出会话内已投影的种子（按来源分组）供选择移除
   Future<void> _unapplyResource() async {
     final t = Translations.of(context);
+    final sessionId = widget.sessionId;
     try {
-      final repository = ref.read(factualRepositoryProvider);
-      final entities = await repository.getEntities(
-        widget.sessionId,
-        includeArchived: true,
-      );
-
-      // 分组名用资源名（书名/卡名）。sourceRef 即
-      // bookId/cardId，反查资源表一次取全量建索引——此前用首个实体
-      // 主名，世界书组显示的是词条名，用户认不出是哪本书。
-      final resourceRepository = ref.read(resourceLibraryRepositoryProvider);
-      final cards = await resourceRepository.getAllCharacterCards();
-      final books = await resourceRepository.getAllWorldbooks();
-      if (!mounted) return;
-      final groups = groupProjectedSeedEntities(
-        entities,
-        cardNamesById: {for (final c in cards) c.cardId: c.name},
-        bookNamesById: {for (final b in books) b.bookId: b.name},
-      );
+      final groups = await _loadAppliedGroups(sessionId);
+      if (!mounted || widget.sessionId != sessionId) return;
       if (groups.isEmpty) {
         _showResourceSnack(t.common.seedResource.unapplyEmpty);
         return;
@@ -117,7 +223,7 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
             )
             .toList(),
       );
-      if (selected == null || !mounted) return;
+      if (selected == null || !mounted || widget.sessionId != sessionId) return;
 
       final group = groups[selected]!;
       final confirmed = await showLmDialog<bool>(
@@ -152,13 +258,16 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
           ],
         ),
       );
-      if (confirmed != true || !mounted) return;
+      if (confirmed != true || !mounted || widget.sessionId != sessionId) {
+        return;
+      }
 
       final removed = await _resourceApplyService().unapplyResource(
-        sessionId: widget.sessionId,
+        sessionId: sessionId,
         sourceRef: selected,
       );
-      if (!mounted) return;
+      if (!mounted || widget.sessionId != sessionId) return;
+      _refreshAppliedGroups();
       _showResourceSnack(
         t.common.seedResource.unapplyDone(count: removed),
       );
@@ -345,6 +454,7 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
 
   Future<void> _applyResourceCard() async {
     final t = Translations.of(context);
+    final sessionId = widget.sessionId;
     try {
       final cards = await ref
           .read(resourceLibraryRepositoryProvider)
@@ -365,16 +475,23 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
       );
       if (!mounted) return;
       final confirmed = await _showApplyPreviewDialog(preview);
-      if (confirmed != true || !mounted) return;
+      if (confirmed != true) return;
+      final applySessionId = await _resolveApplySession(sessionId);
+      if (applySessionId == null || !mounted) return;
       final count = await _resourceApplyService().applyCharacterCard(
-        sessionId: widget.sessionId,
+        sessionId: applySessionId,
         cardId: selected,
         defaultCharacterName: t.settings.resourceLibrary.unnamedCharacter,
         defaultSettingName: t.settings.resourceLibrary.unnamedSetting,
         duplicateErrorMessage:
             t.common.seedResource.duplicateCharacter(name: preview.title),
       );
-      if (!mounted) return;
+      if (!mounted ||
+          (widget.sessionId != sessionId &&
+              widget.sessionId != applySessionId)) {
+        return;
+      }
+      _refreshAppliedGroups();
       _showResourceSnack(
         t.common.seedResource.resourceApplied(count: count),
       );
@@ -391,6 +508,7 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
 
   Future<void> _applyResourceBook() async {
     final t = Translations.of(context);
+    final sessionId = widget.sessionId;
     try {
       final books =
           await ref.read(resourceLibraryRepositoryProvider).getAllWorldbooks();
@@ -410,13 +528,20 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
       );
       if (!mounted) return;
       final confirmed = await _showApplyPreviewDialog(preview);
-      if (confirmed != true || !mounted) return;
+      if (confirmed != true) return;
+      final applySessionId = await _resolveApplySession(sessionId);
+      if (applySessionId == null || !mounted) return;
       final count = await _resourceApplyService().applyWorldbook(
-        sessionId: widget.sessionId,
+        sessionId: applySessionId,
         bookId: selected,
         defaultSettingName: t.settings.resourceLibrary.unnamedSetting,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          (widget.sessionId != sessionId &&
+              widget.sessionId != applySessionId)) {
+        return;
+      }
+      _refreshAppliedGroups();
       _showResourceSnack(
         t.common.seedResource.resourceApplied(count: count),
       );
@@ -459,6 +584,13 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
   }
 }
 
+typedef ProjectedSeedGroup = ({
+  String sourceRef,
+  int count,
+  String name,
+  FactualSource source,
+});
+
 /// 按 sourceRef（cardId/bookId）聚合会话内已投影的种子实体。
 ///
 /// 分组显示名取**资源名**（书名/卡名，由调用方
@@ -466,13 +598,12 @@ class _SeedResourceSectionState extends ConsumerState<SeedResourceSection> {
 /// 此前一律用首个实体主名，世界书组显示的是第一个词条名，用户
 /// 认不出是哪本书，与 unapplyConfirm(name:...) 联动误导。
 /// auto 来源与空 sourceRef 的实体不参与分组。
-Map<String, ({String sourceRef, int count, String name})>
-    groupProjectedSeedEntities(
+Map<String, ProjectedSeedGroup> groupProjectedSeedEntities(
   Iterable<FactualEntity> entities, {
   Map<String, String> cardNamesById = const {},
   Map<String, String> bookNamesById = const {},
 }) {
-  final groups = <String, ({String sourceRef, int count, String name})>{};
+  final groups = <String, ProjectedSeedGroup>{};
   for (final e in entities) {
     final ref = e.sourceRef;
     if ((e.source == FactualSource.card ||
@@ -480,13 +611,16 @@ Map<String, ({String sourceRef, int count, String name})>
         ref != null &&
         ref.isNotEmpty) {
       final existing = groups[ref];
-      final resourceName = e.source == FactualSource.card
-          ? cardNamesById[ref]
-          : bookNamesById[ref];
+      // A card's embedded lore keeps the card ID as its source reference.
+      final cardName = cardNamesById[ref];
+      final bookName = bookNamesById[ref];
       groups[ref] = (
         sourceRef: ref,
         count: (existing?.count ?? 0) + 1,
-        name: existing?.name ?? (resourceName ?? e.primaryName),
+        name: cardName ?? bookName ?? existing?.name ?? e.primaryName,
+        source: cardName != null
+            ? FactualSource.card
+            : existing?.source ?? e.source,
       );
     }
   }

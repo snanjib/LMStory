@@ -7,7 +7,7 @@
       "virtualModelId": "demo-narrator-glm",
       "locale": "zh-CN",
       "assetPath": "assets/demo/first_launch/zh-CN.json",
-      "packSha256": "af3b8dae18869d68dc107511239381157a490661d8e72a7caa9c956cb95c4c3b",
+      "packSha256": "ef37c3e0f72d6bb9e6c7bf01a266e33662bf9c46c87ca75ffca7b3f147144797",
       "isDefault": true,
       "displayNameZh": "仿真 · GLM-5.3",
       "displayNameEn": "Sim · GLM-5.3"
@@ -18,7 +18,7 @@
       "virtualModelId": "demo-narrator-deepseek-v4.1-flash",
       "locale": "zh-CN",
       "assetPath": "assets/demo/first_launch/zh-CN/deepseek-v4.1-flash.json",
-      "packSha256": "9f1f03acbc0d2a2562b5e12fab0a51b8369515c791f2822db50ebb1064072428",
+      "packSha256": "d948e942bdc7ee42caca92c47336dce00baae194cb6673ed2d9c9bfcbeaced29",
       "isDefault": false,
       "displayNameZh": "仿真 · DeepSeek-V4.1-Flash",
       "displayNameEn": "Sim · DeepSeek-V4.1-Flash"
@@ -29,7 +29,7 @@
       "virtualModelId": "demo-narrator-glm-5.3-flash",
       "locale": "zh-CN",
       "assetPath": "assets/demo/first_launch/zh-CN/glm-5.3-flash.json",
-      "packSha256": "861b8940728076a6d1f83013ad4ade38fdcdb62822e7f2d9d8a060643e8954ac",
+      "packSha256": "dd0570197770d5181b9f63aa202d40276beed74b1894a810d92787ae3b8210ef",
       "isDefault": false,
       "displayNameZh": "仿真 · GLM-5.3-Flash",
       "displayNameEn": "Sim · GLM-5.3-Flash"
@@ -40,7 +40,7 @@
       "virtualModelId": "demo-narrator-kimi-k3.1-pro",
       "locale": "zh-CN",
       "assetPath": "assets/demo/first_launch/zh-CN/kimi-k3.1-pro.json",
-      "packSha256": "739e9ca66536edaa8d5bf03ee1ad6d3ef520481d883ac1ec5b5266767533a225",
+      "packSha256": "c9e8123f5588c6da309b9ec056763ebc7807a59e8e92e238967a732bc39f4067",
       "isDefault": false,
       "displayNameZh": "仿真 · Kimi-K3.1-Pro",
       "displayNameEn": "Sim · Kimi-K3.1-Pro"
@@ -51,10 +51,21 @@
       "virtualModelId": "demo-narrator-mimo-v2.6-flash",
       "locale": "zh-CN",
       "assetPath": "assets/demo/first_launch/zh-CN/mimo-v2.6-flash.json",
-      "packSha256": "bc5ec61b2c7274c97f6932053c27ed495708ae96dad4f93137abbf8a66c7b5a8",
+      "packSha256": "c155a884fed4806654c3d56f3a6351e6ab26247ecf01c060e4ae7e4a525260f2",
       "isDefault": false,
       "displayNameZh": "仿真 · MiMo-V2.6-Flash",
       "displayNameEn": "Sim · MiMo-V2.6-Flash"
+    },
+    {
+      "id": "en-us-story-sample",
+      "sourceModelId": "local-story-sample",
+      "virtualModelId": "demo-narrator-en-sample",
+      "locale": "en-US",
+      "assetPath": "assets/demo/first_launch/en-US-sample.json",
+      "packSha256": "8c720d292749a27cae953642be8ee263561e9b4d5b43f21a7a8f58cc72d724ad",
+      "isDefault": false,
+      "displayNameZh": "英文离线故事样例",
+      "displayNameEn": "English story sample"
     }
   ]
 }

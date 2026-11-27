@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_loader.dart';
+import 'package:lmstory/core/services/data_store_operation_guard.dart';
 import 'package:lmstory/core/utils/logger.dart';
-import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/fork_anchor.dart';
@@ -17,6 +17,7 @@ import 'package:lmstory/features/settings/domain/repositories/api_preset_reposit
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
 
 import '../../../../test_helpers/stub_failure_log_repository.dart';
+import '../../../../test_helpers/stub_token_counter.dart';
 
 /// 压缩收尾窗迟到取消回归：
 ///
@@ -31,12 +32,14 @@ void main() {
   late _CompactionRepo repo;
   late _ScriptedLlmService llmService;
   late StreamController<LlmStreamEvent> events;
+  late DataStoreOperationGuard guard;
 
   setUp(() {
     repo = _CompactionRepo();
     llmService = _ScriptedLlmService();
     events = StreamController<LlmStreamEvent>();
     llmService.stream = events.stream;
+    guard = DataStoreOperationGuard();
   });
 
   tearDown(() {
@@ -44,9 +47,10 @@ void main() {
   });
 
   ChatModeController build() {
+    final tokenCounter = StubTokenCounter();
     final compaction = CompactionService(
       chatRepository: repo,
-      tokenCounter: TokenCounter(),
+      tokenCounter: tokenCounter,
       settingsRepository: _FakeSettingsRepository(),
       presetRepository: _NoopPresetRepository(),
       streamer: CompactionStreamer(llmService: llmService),
@@ -60,7 +64,9 @@ void main() {
       llmService: llmService,
       logger: const Logger('test'),
       failureLogRepository: const StubFailureLogRepository(),
+      tokenCounter: tokenCounter,
       session: _session(),
+      operationGuard: guard,
     );
   }
 
@@ -97,10 +103,10 @@ void main() {
           !controller.state.isLoading && controller.state.messages.length == 3,
     );
 
-    // 第 3 次 getMessages = onComplete 内 _loadMessages（addCompactionPoint
-    // 之后）——在该 await 点注入「用户按停止」。
-    repo.onGetMessagesCall = (count) {
-      if (count == 3) controller.cancelCompaction();
+    var stoppedAfterWrite = false;
+    repo.onCompactionPointSaved = () {
+      stoppedAfterWrite = true;
+      controller.cancelCompaction();
     };
 
     final future = controller.compressHistory();
@@ -112,6 +118,7 @@ void main() {
     await events.close();
 
     final result = await future;
+    expect(stoppedAfterWrite, isTrue);
     expect(result, CompressResult.success, reason: '摘要已完整落库，迟到取消不算取消');
     expect(summaryDeleted(), isFalse, reason: '不得删除已被压缩点引用的摘要');
     expect(repo.compactionPointCalls, hasLength(1), reason: '压缩点恰好建了一个');
@@ -143,6 +150,42 @@ void main() {
     expect(repo.compactionPointCalls, isEmpty);
     expect(summaryDeleted(), isTrue, reason: '占位摘要被清理');
   });
+
+  test('停止压缩等待已开始的节流写入，再清理摘要和释放覆盖保护', () async {
+    repo.messages = [
+      msg('u1', 'user', '合成问题'),
+      msg('a1', 'assistant', '合成回答'),
+    ];
+    final controller = build();
+    await until(() => !controller.state.isLoading);
+
+    final writing = Completer<void>();
+    final finishWrite = Completer<void>();
+    repo.beforeUpdateContent = (content) async {
+      expect(content, '半截摘要');
+      writing.complete();
+      await finishWrite.future;
+    };
+    final compressing = controller.compressHistory();
+    await until(() => repo.addMessageCalls.any((m) => m.isSummary));
+    events.add(const LlmTextDelta('半截摘要'));
+    await writing.future;
+
+    try {
+      controller.cancelCompaction();
+      await events.close();
+      expect(guard.tryBeginOverwrite(), isNull);
+      expect(summaryDeleted(), isFalse);
+    } finally {
+      finishWrite.complete();
+      expect(await compressing, CompressResult.cancelled);
+    }
+    expect(summaryDeleted(), isTrue);
+    expect(repo.compactionPointCalls, isEmpty);
+    final releaseOverwrite = guard.tryBeginOverwrite();
+    expect(releaseOverwrite, isNotNull);
+    releaseOverwrite?.call();
+  });
 }
 
 class _CompactionRepo implements ChatRepository {
@@ -150,22 +193,12 @@ class _CompactionRepo implements ChatRepository {
   final List<ChatMessage> addMessageCalls = [];
   final List<String> deletedMessageIds = [];
   final List<Map<String, dynamic>> compactionPointCalls = [];
+  Future<void> Function(String content)? beforeUpdateContent;
 
-  /// 每次 getMessages 调用后回调（1 起）——用于在指定 await 点注入副作用。
-  void Function(int count)? onGetMessagesCall;
-  int _getMessagesCount = 0;
+  void Function()? onCompactionPointSaved;
 
   @override
-  Future<List<ChatMessage>> getMessages(String sessionId) async {
-    _getMessagesCount++;
-    final hook = onGetMessagesCall;
-    if (hook != null) {
-      // 微任务边界注入副作用，保证取消发生在本次 await 完成之后、
-      // 后续 await 之前
-      scheduleMicrotask(() => hook(_getMessagesCount));
-    }
-    return messages;
-  }
+  Future<List<ChatMessage>> getMessages(String sessionId) async => messages;
 
   @override
   Future<ChatMessage> addMessage(ChatMessage message) async {
@@ -180,7 +213,9 @@ class _CompactionRepo implements ChatRepository {
   }
 
   @override
-  Future<void> updateMessageContent(String messageId, String content) async {}
+  Future<void> updateMessageContent(String messageId, String content) async {
+    await beforeUpdateContent?.call(content);
+  }
 
   @override
   Future<void> updateMessageTokensUsed(
@@ -199,6 +234,7 @@ class _CompactionRepo implements ChatRepository {
       'summaryMessageId': summaryMessageId,
       'boundaryMessageId': boundaryMessageId,
     });
+    onCompactionPointSaved?.call();
   }
 
   @override

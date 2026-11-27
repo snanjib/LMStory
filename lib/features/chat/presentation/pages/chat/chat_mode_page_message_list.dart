@@ -18,6 +18,7 @@ extension _ChatModePageMessageList on _ChatModePageState {
   /// 消息列表 + 导航浮层（原 build 内 Expanded(Stack(...)) 块，
   /// 逻辑原样搬运）。
   Widget _buildMessageListArea(ChatModeState state) {
+    _roundNavigation.update(state.messages);
     final colors = context.lm.palette;
     final t = Translations.of(context);
     final displayPreferences = ref.watch(
@@ -73,223 +74,243 @@ extension _ChatModePageMessageList on _ChatModePageState {
             // ListView 内部），且只作用于列表自身——Stack 内的导航浮层等
             // 兄弟节点仍铺满，定位与宽度不受影响；视口窄于上限时取满宽，
             // 行为与改动前一致。
-            Center(
-              child: RepaintBoundary(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: LmLayout.readingWidthOf(context),
-                  ),
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    scrollCacheExtent: const ScrollCacheExtent.pixels(600),
-                    //  滚动终案：普通方向列表（index 0 = 最旧，末尾 = 最新）。
-                    // reverse 列表在阅读态直播增长会把视口内容逐帧顶走、
-                    // 补偿慢一帧导致闪屏（导演模式 2026-08-31 已终案验证）。
-                    // 2026-09-10：底部缓冲留白（惰性跟随用）——写入行
-                    // 在缓冲内下走时视口不动，已读文字保持静止。
-                    padding: const EdgeInsets.fromLTRB(
-                      SimpleSpacing.sMd,
-                      SimpleSpacing.sMd,
-                      SimpleSpacing.sMd,
-                      SimpleSpacing.sMd + streamingFollowCushionPx,
+            ConversationNavigation(
+              key: ValueKey(state.session.sessionId),
+              controller: _scrollController,
+              onTop: _jumpToTop,
+              onBottom: _jumpToBottom,
+              jumpRound: _jumpRound,
+              canJumpRound: _roundNavigation.canJump,
+              hasReadingTail: () => _roundNavigation.tail > 0,
+              onUserScroll: _roundNavigation.cancelSelection,
+              child: Center(
+                child: RepaintBoundary(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: LmLayout.readingWidthOf(context),
                     ),
-                    itemCount: state.messages.length +
-                        (showGeneratingPlaceholder ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      // "生成中"占位气泡放最末尾（视觉底部），即生成中
-                      // 助手回复的最终落点；复用 SimpleMessageBubble
-                      // （空助手消息 + isStreaming=true）自动渲染旋转头像
-                      // + bouncing dots 指示器
-                      if (showGeneratingPlaceholder &&
-                          index == state.messages.length) {
-                        // 查找占位气泡对应的 Fork 锚点（regenerate/editAndResend 时）
-                        final placeholderAnchor =
-                            state.generatingAnchorUserMsgId != null
-                                ? forkAnchorMap[state.generatingAnchorUserMsgId]
-                                : null;
-                        final placeholderHasFork = placeholderAnchor != null;
-                        return RepaintBoundary(
-                          key: const ValueKey(
-                            '__generating_placeholder__',
-                          ),
-                          child: ChatGeneratingPlaceholderBubble(
-                            // 2026-07-22 修复：用 state.session.sessionId（物化后的真实 id），
-                            // 而非 widget.session.sessionId（可能是 draft id）。
-                            sessionId: state.session.sessionId,
-                            parentUserMsgId: state.generatingAnchorUserMsgId,
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      scrollCacheExtent: const ScrollCacheExtent.pixels(600),
+                      //  滚动终案：普通方向列表（index 0 = 最旧，末尾 = 最新）。
+                      // reverse 列表在阅读态直播增长会把视口内容逐帧顶走、
+                      // 补偿慢一帧导致闪屏（导演模式 2026-08-31 已终案验证）。
+                      // 2026-09-10：底部缓冲留白（惰性跟随用）——写入行
+                      // 在缓冲内下走时视口不动，已读文字保持静止。
+                      padding: EdgeInsets.fromLTRB(
+                        SimpleSpacing.sMd,
+                        SimpleSpacing.sMd,
+                        SimpleSpacing.sMd,
+                        SimpleSpacing.sMd +
+                            streamingFollowCushionPx +
+                            _roundNavigation.tail,
+                      ),
+                      itemCount: state.messages.length +
+                          (showGeneratingPlaceholder ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        // "生成中"占位气泡放最末尾（视觉底部），即生成中
+                        // 助手回复的最终落点；复用 SimpleMessageBubble
+                        // （空助手消息 + isStreaming=true）自动渲染旋转头像
+                        // + bouncing dots 指示器
+                        if (showGeneratingPlaceholder &&
+                            index == state.messages.length) {
+                          // 查找占位气泡对应的 Fork 锚点（regenerate/editAndResend 时）
+                          final placeholderAnchor = state
+                                      .generatingAnchorUserMsgId !=
+                                  null
+                              ? forkAnchorMap[state.generatingAnchorUserMsgId]
+                              : null;
+                          final placeholderHasFork = placeholderAnchor != null;
+                          return RepaintBoundary(
+                            key: const ValueKey(
+                              '__generating_placeholder__',
+                            ),
+                            child: ChatGeneratingPlaceholderBubble(
+                              // 2026-07-22 修复：用 state.session.sessionId（物化后的真实 id），
+                              // 而非 widget.session.sessionId（可能是 draft id）。
+                              sessionId: state.session.sessionId,
+                              parentUserMsgId: state.generatingAnchorUserMsgId,
+                              displayPreferences: displayPreferences,
+                              fontScale: fontScale,
+                              forkIndex: placeholderHasFork
+                                  ? placeholderAnchor.activeIndex + 1
+                                  : null,
+                              forkCount: placeholderHasFork
+                                  ? placeholderAnchor.branchCount
+                                  : null,
+                              onForkPrev: placeholderHasFork
+                                  ? () => _handleForkSwitch(
+                                        state.generatingAnchorUserMsgId!,
+                                        ForkSwitchDirection.prev,
+                                      )
+                                  : null,
+                              onForkNext: placeholderHasFork
+                                  ? () => _handleForkSwitch(
+                                        state.generatingAnchorUserMsgId!,
+                                        ForkSwitchDirection.next,
+                                      )
+                                  : null,
+                            ),
+                          );
+                        }
+                        // 普通方向列表：index 与 state.messages 升序一一对应
+                        final message = state.messages[index];
+                        final msgIndex = index;
+                        final isLastAssistant =
+                            msgIndex == state.messages.length - 1 &&
+                                message.role == 'assistant';
+
+                        // 查找该助手消息的 Fork 锚点
+                        final anchor = message.role == 'assistant' &&
+                                message.parentUserMsgId != null
+                            ? forkAnchorMap[message.parentUserMsgId]
+                            : null;
+                        final hasFork = anchor != null;
+                        final forkIndex =
+                            hasFork ? anchor.activeIndex + 1 : null;
+                        final forkCount = hasFork ? anchor.branchCount : null;
+
+                        // 判断该消息是否正在生成中（用于头像旋转动画）
+                        final isGenerating =
+                            (state.isStreaming || state.isThinking) &&
+                                state.currentAssistantMessageId ==
+                                    message.messageId;
+
+                        // 判断该条摘要消息是否正在流式生成内容（压缩进行中）
+                        // 仅占位摘要消息且无 error 时展示流式状态
+                        final isCompactionStreaming = state.isCompressing &&
+                            message.isSummary &&
+                            message.messageId ==
+                                state.currentCompactionSummaryId &&
+                            message.error == null;
+
+                        // 搜索命中的消息短暂着色闪示。
+                        final isFlashTarget =
+                            _flashMessageId == message.messageId;
+                        // 2026-09-08：命中消息在搜索条可见期间常驻
+                        // 「命中上下文条」（片段 + 关键字高亮）——闪示
+                        // 1.2s 后消失，用户仍不知道关键字在消息哪里。
+                        final searchHitQuery = _inSessionSearchVisible &&
+                                _searchQuery.trim().isNotEmpty &&
+                                _searchMatchIds.contains(message.messageId)
+                            ? _searchQuery.trim()
+                            : null;
+
+                        final item = AnimatedContainer(
+                          duration: LmMotion.enter,
+                          color: isFlashTarget
+                              ? colors.primaryDim
+                              : Colors.transparent,
+                          child: SimpleMessageBubble(
+                            key: (message.messageId == _targetScrollMessageId ||
+                                    message.messageId == _flashMessageId ||
+                                    message.messageId ==
+                                        widget.initialFocusMessageId)
+                                ? _messageKeys.putIfAbsent(
+                                    message.messageId,
+                                    GlobalKey.new,
+                                  )
+                                : ValueKey<String>(message.messageId),
+                            message: message,
+                            searchQuery: searchHitQuery,
+                            isStreaming: state.isStreaming &&
+                                state.currentAssistantMessageId ==
+                                    message.messageId,
+                            isConsecutive: msgIndex > 0 &&
+                                state.messages[msgIndex - 1].role ==
+                                    message.role,
+                            isThinking: state.isThinking &&
+                                state.currentAssistantMessageId ==
+                                    message.messageId,
+                            isLastAssistantMessage: isLastAssistant,
                             displayPreferences: displayPreferences,
                             fontScale: fontScale,
-                            forkIndex: placeholderHasFork
-                                ? placeholderAnchor.activeIndex + 1
+                            modelName: message.role == 'assistant'
+                                ? state.currentModelName
                                 : null,
-                            forkCount: placeholderHasFork
-                                ? placeholderAnchor.branchCount
+                            isGenerating: isGenerating,
+                            isCompactionStreaming: isCompactionStreaming,
+                            onCopy: () => _handleCopy(message.content ?? ''),
+                            onEdit: message.role == 'user'
+                                ? () => _handleEdit(
+                                      message.messageId,
+                                      message.content ?? '',
+                                    )
                                 : null,
-                            onForkPrev: placeholderHasFork
+                            onDelete: () => _handleDelete(message.messageId),
+                            //  修复：接通「继续生成」——仅最后一条
+                            // 用户消息、非生成中可用（中断的回复以追加气泡续写）
+                            onContinueGenerating:
+                                message.messageId == lastUserMessageId &&
+                                        !_isBusyForUserActions(state)
+                                    ? () => ref
+                                        .read(
+                                          chatModeControllerProvider(
+                                            widget.session,
+                                          ).notifier,
+                                        )
+                                        .continueGenerating()
+                                    : null,
+                            onRegenerate: message.role == 'assistant'
+                                ? () => _handleRegenerate(message.messageId)
+                                : null,
+                            onQuote: () => _handleQuote(message.messageId),
+                            forkIndex: forkIndex,
+                            forkCount: forkCount,
+                            onForkPrev: hasFork
                                 ? () => _handleForkSwitch(
-                                      state.generatingAnchorUserMsgId!,
+                                      message.parentUserMsgId!,
                                       ForkSwitchDirection.prev,
                                     )
                                 : null,
-                            onForkNext: placeholderHasFork
+                            onForkNext: hasFork
                                 ? () => _handleForkSwitch(
-                                      state.generatingAnchorUserMsgId!,
+                                      message.parentUserMsgId!,
                                       ForkSwitchDirection.next,
                                     )
                                 : null,
+                            onEditSummary:
+                                message.isSummary && message.error == null
+                                    ? () => _handleEditSummary(
+                                          message.messageId,
+                                          message.content ?? '',
+                                        )
+                                    : null,
+                            onDeleteSummary: message.isSummary &&
+                                    message.error == null
+                                ? () => _handleDeleteSummary(message.messageId)
+                                : null,
+                            // 仅最新摘要显示「撤销压缩」
+                            isLatestSummary:
+                                message.messageId == _latestSummaryId(state),
+                            onRetryCompaction: message.isSummary &&
+                                    message.error != null &&
+                                    // 重试按钮与生成态联动禁用
+                                    //（此前常驻可点，生成中点了先删卡）
+                                    !_isBusyForUserActions(state)
+                                ? () => _handleRetryCompaction(
+                                      message.messageId,
+                                    )
+                                : null,
+                            onCloseFailedSummary:
+                                message.isSummary && message.error != null
+                                    ? () => _handleCloseFailedSummary(
+                                          message.messageId,
+                                        )
+                                    : null,
                           ),
                         );
-                      }
-                      // 普通方向列表：index 与 state.messages 升序一一对应
-                      final message = state.messages[index];
-                      final msgIndex = index;
-                      final isLastAssistant =
-                          msgIndex == state.messages.length - 1 &&
-                              message.role == 'assistant';
-
-                      // 查找该助手消息的 Fork 锚点
-                      final anchor = message.role == 'assistant' &&
-                              message.parentUserMsgId != null
-                          ? forkAnchorMap[message.parentUserMsgId]
-                          : null;
-                      final hasFork = anchor != null;
-                      final forkIndex = hasFork ? anchor.activeIndex + 1 : null;
-                      final forkCount = hasFork ? anchor.branchCount : null;
-
-                      // 判断该消息是否正在生成中（用于头像旋转动画）
-                      final isGenerating = (state.isStreaming ||
-                              state.isThinking) &&
-                          state.currentAssistantMessageId == message.messageId;
-
-                      // 判断该条摘要消息是否正在流式生成内容（压缩进行中）
-                      // 仅占位摘要消息且无 error 时展示流式状态
-                      final isCompactionStreaming = state.isCompressing &&
-                          message.isSummary &&
-                          message.messageId ==
-                              state.currentCompactionSummaryId &&
-                          message.error == null;
-
-                      // 搜索命中的消息短暂着色闪示。
-                      final isFlashTarget =
-                          _flashMessageId == message.messageId;
-                      // 2026-09-08：命中消息在搜索条可见期间常驻
-                      // 「命中上下文条」（片段 + 关键字高亮）——闪示
-                      // 1.2s 后消失，用户仍不知道关键字在消息哪里。
-                      final searchHitQuery = _inSessionSearchVisible &&
-                              _searchQuery.trim().isNotEmpty &&
-                              _searchMatchIds.contains(message.messageId)
-                          ? _searchQuery.trim()
-                          : null;
-
-                      final item = AnimatedContainer(
-                        duration: LmMotion.enter,
-                        color: isFlashTarget
-                            ? colors.primaryDim
-                            : Colors.transparent,
-                        child: SimpleMessageBubble(
-                          key: (message.messageId == _targetScrollMessageId ||
-                                  message.messageId == _flashMessageId ||
-                                  message.messageId ==
-                                      widget.initialFocusMessageId)
-                              ? _messageKeys.putIfAbsent(
-                                  message.messageId,
-                                  GlobalKey.new,
-                                )
-                              : ValueKey<String>(message.messageId),
-                          message: message,
-                          searchQuery: searchHitQuery,
-                          isStreaming: state.isStreaming &&
-                              state.currentAssistantMessageId ==
-                                  message.messageId,
-                          isConsecutive: msgIndex > 0 &&
-                              state.messages[msgIndex - 1].role == message.role,
-                          isThinking: state.isThinking &&
-                              state.currentAssistantMessageId ==
-                                  message.messageId,
-                          isLastAssistantMessage: isLastAssistant,
-                          displayPreferences: displayPreferences,
-                          fontScale: fontScale,
-                          modelName: message.role == 'assistant'
-                              ? state.currentModelName
-                              : null,
-                          isGenerating: isGenerating,
-                          isCompactionStreaming: isCompactionStreaming,
-                          onCopy: () => _handleCopy(message.content ?? ''),
-                          onEdit: message.role == 'user'
-                              ? () => _handleEdit(
-                                    message.messageId,
-                                    message.content ?? '',
-                                  )
-                              : null,
-                          onDelete: () => _handleDelete(message.messageId),
-                          //  修复：接通「继续生成」——仅最后一条
-                          // 用户消息、非生成中可用（中断的回复以追加气泡续写）
-                          onContinueGenerating:
-                              message.messageId == lastUserMessageId &&
-                                      !_isBusyForUserActions(state)
-                                  ? () => ref
-                                      .read(
-                                        chatModeControllerProvider(
-                                          widget.session,
-                                        ).notifier,
-                                      )
-                                      .continueGenerating()
-                                  : null,
-                          onRegenerate: message.role == 'assistant'
-                              ? () => _handleRegenerate(message.messageId)
-                              : null,
-                          onQuote: () => _handleQuote(message.messageId),
-                          forkIndex: forkIndex,
-                          forkCount: forkCount,
-                          onForkPrev: hasFork
-                              ? () => _handleForkSwitch(
-                                    message.parentUserMsgId!,
-                                    ForkSwitchDirection.prev,
-                                  )
-                              : null,
-                          onForkNext: hasFork
-                              ? () => _handleForkSwitch(
-                                    message.parentUserMsgId!,
-                                    ForkSwitchDirection.next,
-                                  )
-                              : null,
-                          onEditSummary:
-                              message.isSummary && message.error == null
-                                  ? () => _handleEditSummary(
-                                        message.messageId,
-                                        message.content ?? '',
-                                      )
-                                  : null,
-                          onDeleteSummary: message.isSummary &&
-                                  message.error == null
-                              ? () => _handleDeleteSummary(message.messageId)
-                              : null,
-                          // 仅最新摘要显示「撤销压缩」
-                          isLatestSummary:
-                              message.messageId == _latestSummaryId(state),
-                          onRetryCompaction: message.isSummary &&
-                                  message.error != null &&
-                                  // 重试按钮与生成态联动禁用
-                                  //（此前常驻可点，生成中点了先删卡）
-                                  !_isBusyForUserActions(state)
-                              ? () => _handleRetryCompaction(
-                                    message.messageId,
-                                  )
-                              : null,
-                          onCloseFailedSummary:
-                              message.isSummary && message.error != null
-                                  ? () => _handleCloseFailedSummary(
-                                        message.messageId,
-                                      )
-                                  : null,
-                        ),
-                      );
-                      // 流式活跃气泡单独成层：32ms 合帧期间的重绘
-                      // 只落在活跃气泡自己的 layer，已生成消息不重绘
-                      return (isGenerating || isCompactionStreaming)
-                          ? RepaintBoundary(child: item)
-                          : item;
-                    },
+                        // 流式活跃气泡单独成层：32ms 合帧期间的重绘
+                        // 只落在活跃气泡自己的 layer，已生成消息不重绘
+                        return ConversationRoundRow(
+                          navigation: _roundNavigation,
+                          index: index,
+                          child: (isGenerating || isCompactionStreaming)
+                              ? RepaintBoundary(child: item)
+                              : item,
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -330,19 +351,6 @@ extension _ChatModePageMessageList on _ChatModePageState {
                 ),
               ),
             ),
-          // 消息导航浮层（滚动终案，导演终案同款互斥）：
-          // 生成中上滚脱离底部 = 醒目「回到最新」胶囊；
-          // 收工后 = 四键导航条（滑动时出现，停止 2 秒消失）。
-          ChatMessageNavigationOverlay(
-            working: _isWorking(state),
-            pillVisible: !_atBottom,
-            pillOnTap: _jumpToBottom,
-            navigationVisible: _isScrollActive && !_atBottom,
-            onJumpToTop: _jumpToTop,
-            onJumpToBottom: _jumpToBottom,
-            onPrevUserMessage: _jumpToPrevUserMessage,
-            onNextUserMessage: _jumpToNextUserMessage,
-          ),
           // 收工态顶部完成胶囊
           //（复刻故事侧 ：5s 自动消失，点按跳底）。
           if (_roundDoneHintVisible)

@@ -50,7 +50,7 @@ List<ToolDefinition> demoRoundToolBlueprints() {
   ]);
 }
 
-/// 生产全部 13 项工具规范蓝图（直接经由 production buildAgentTools 装配求取，无版本漂移）。
+/// 生产全量工具规范蓝图（直接经由 production buildAgentTools 装配求取，无版本漂移）。
 List<ToolDefinition> demoProductionToolBlueprints() {
   final deps = AgentToolDeps(
     sessionId: 'blueprint-only',

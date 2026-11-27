@@ -35,6 +35,7 @@ class AdvancedConfig {
     this.embeddingModelId = '',
     this.embedding = const EmbeddingConfig(),
     this.memory = const MemoryConfig(),
+    this.engineeringCompaction = const AdvancedEngineeringCompactionConfig(),
     this.consolidation = const ConsolidationConfig(),
     this.retrieval = const RetrievalConfig(),
     this.suggestReply = const SuggestReplyConfig(),
@@ -88,6 +89,9 @@ class AdvancedConfig {
         memory: MemoryConfig.fromJson(
           json['memory'] as Map<String, dynamic>? ?? const {},
         ),
+        engineeringCompaction: AdvancedEngineeringCompactionConfig.fromJson(
+          json['engineering_compaction'] as Map<String, dynamic>? ?? const {},
+        ),
         consolidation: ConsolidationConfig.fromJson(
           json['consolidation'] as Map<String, dynamic>? ?? const {},
         ),
@@ -129,6 +133,12 @@ class AdvancedConfig {
   final String embeddingModelId;
   final EmbeddingConfig embedding;
   final MemoryConfig memory;
+
+  /// 工程上下文压缩参数（开启态账本压缩事务的触发/选材/降级默认——
+  /// 单一默认来源=assets/configs/default_config.json 的
+  /// advanced.engineering_compaction 段；本类默认仅为 JSON 缺失时的
+  /// 安全回落，与 JSON 值保持一致）
+  final AdvancedEngineeringCompactionConfig engineeringCompaction;
   final ConsolidationConfig consolidation;
   final RetrievalConfig retrieval;
   final SuggestReplyConfig suggestReply;
@@ -274,6 +284,12 @@ class AdvancedHarnessConfig {
     this.fullChunkEvents = false,
     this.foreshadowCheckInterval = 8,
     this.eventLogRetentionTurns = 20,
+    this.maintenanceGapInterval = 7,
+    this.maintenanceNudgeCooldown = 4,
+    this.majorReviewInterval = 50,
+    this.maintenanceExtraSteps = 6,
+    this.recentActiveEntitiesWindow = 15,
+    this.recentActiveEntitiesCap = 10,
   });
 
   factory AdvancedHarnessConfig.fromJson(Map<String, dynamic> json) =>
@@ -283,10 +299,16 @@ class AdvancedHarnessConfig {
         coreBlocksInTail: json['core_blocks_in_tail'] as bool? ?? true,
         fullChunkEvents: json['full_chunk_events'] as bool? ?? false,
         foreshadowCheckInterval: json['foreshadow_check_interval'] as int? ?? 8,
-        // 批 I 写侧四处齐全而读侧漏解析，键恒回落
-        // 默认 20、「0=不限制」不可达——守门测试已升级为三方逐叶比对
-        //（settings_config_roundtrip_test.dart harness 段），防死键复发。
         eventLogRetentionTurns: json['event_log_retention_turns'] as int? ?? 20,
+        maintenanceGapInterval: json['maintenance_gap_interval'] as int? ?? 7,
+        maintenanceNudgeCooldown:
+            json['maintenance_nudge_cooldown'] as int? ?? 4,
+        majorReviewInterval: json['major_review_interval'] as int? ?? 50,
+        maintenanceExtraSteps: json['maintenance_extra_steps'] as int? ?? 6,
+        recentActiveEntitiesWindow:
+            json['recent_active_entities_window'] as int? ?? 15,
+        recentActiveEntitiesCap:
+            json['recent_active_entities_cap'] as int? ?? 10,
       );
 
   /// 工具输出字符预算（：超长输出 head+tail 截断 + 取回自指引）
@@ -305,10 +327,80 @@ class AdvancedHarnessConfig {
   /// true 为诊断档，存储成本高。
   final bool fullChunkEvents;
 
-  /// 伏笔定期清点间隔轮数（每 N 轮：轮尾注入未兑现清单提醒 +
-  /// finish_round 伏笔对账闸门拦截一次）。0 = 停用清点与闸门。
+  /// 伏笔定期清点间隔轮数（兼容保留；0 = 停用）。
   final int foreshadowCheckInterval;
 
   /// 事件日志滚动保留轮数（批 I；0=不限制）
   final int eventLogRetentionTurns;
+
+  /// 轻量维护缺口提示触发间隔（轮数；默认 7；0 = 停用）
+  final int maintenanceGapInterval;
+
+  /// 轻量维护缺口提示冷却轮数（默认 4）
+  final int maintenanceNudgeCooldown;
+
+  /// 周期全面审查与维护大周期触发间隔（轮数；默认 50；0 = 停用）
+  final int majorReviewInterval;
+
+  /// 大周期进入维护阶段时额外追加的步数预算（默认 6）
+  final int maintenanceExtraSteps;
+
+  /// 近期活跃非核心动态实体的回看轮次窗口（默认 15；0 = 不注入）
+  final int recentActiveEntitiesWindow;
+
+  /// 近期活跃非核心动态实体在 Core Blocks 中的最多展示条数（默认 10；0 = 不注入）
+  final int recentActiveEntitiesCap;
+}
+
+/// 工程上下文压缩参数（默认值唯一来源=default_config.json
+/// `advanced.engineering_compaction` 段；测试可显式注入 tuning 覆盖）。
+class AdvancedEngineeringCompactionConfig {
+  const AdvancedEngineeringCompactionConfig({
+    this.outputReserveTokens = 16384,
+    this.headroomTokens = 8192,
+    this.retainRatio = 0.30,
+    this.retainMinTokens = 8192,
+    this.retainMaxTokens = 32768,
+    this.retainMaxWindowRatio = 0.45,
+    this.charsPerToken = 4,
+    this.oversizedResultChars = 8192,
+    this.degradeHeadChars = 500,
+  });
+
+  factory AdvancedEngineeringCompactionConfig.fromJson(
+    Map<String, dynamic> json,
+  ) =>
+      AdvancedEngineeringCompactionConfig(
+        outputReserveTokens: json['output_reserve_tokens'] as int? ?? 16384,
+        headroomTokens: json['headroom_tokens'] as int? ?? 8192,
+        retainRatio: (json['retain_ratio'] as num?)?.toDouble() ?? 0.30,
+        retainMinTokens: json['retain_min_tokens'] as int? ?? 8192,
+        retainMaxTokens: json['retain_max_tokens'] as int? ?? 32768,
+        retainMaxWindowRatio:
+            (json['retain_max_window_ratio'] as num?)?.toDouble() ?? 0.45,
+        charsPerToken: json['chars_per_token'] as int? ?? 4,
+        oversizedResultChars: json['oversized_result_chars'] as int? ?? 8192,
+        degradeHeadChars: json['degrade_head_chars'] as int? ?? 500,
+      );
+
+  /// 输出预留（默认量；实际请求面优先用会话 maxTokens）
+  final int outputReserveTokens;
+
+  /// headroom
+  final int headroomTokens;
+
+  /// 保尾比例/上下限（token）
+  final double retainRatio;
+  final int retainMinTokens;
+  final int retainMaxTokens;
+  final double retainMaxWindowRatio;
+
+  /// 估算口径（dsh：4 chars/token）
+  final int charsPerToken;
+
+  /// 超限工具结果阈值（字符；超过者进入 model-free 降级候选）
+  final int oversizedResultChars;
+
+  /// 降级保留头部字符数（头 500 字+结论行+裁剪标记）
+  final int degradeHeadChars;
 }

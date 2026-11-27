@@ -157,6 +157,17 @@ void main() {
     expect(reader.loads, 3);
   });
 
+  // MEM-06 收窄：零命中信封保留「不代表相关事件没有发生」，
+  // 并补换词重试 + read_story 按轮回读的兜底指引
+  test('MEM-06：零命中信封指引换关键词与 read_story 按轮回读', () async {
+    reader.rounds = [round(1, text: '无关内容')];
+    final result = await search('不存在的词');
+    expect(result.isError, isFalse);
+    expect(result.metadata?['total'], 0);
+    expect(result.output, contains('这不代表相关事件没有发生'));
+    expect(result.output, contains('可换关键词重试，或用 read_story 按轮回读'));
+  });
+
   test('工具取消不伪装成读取失败', () async {
     invocation.cancellation.cancel();
     await expectLater(search('词'), throwsA(isA<AgentCancelledException>()));

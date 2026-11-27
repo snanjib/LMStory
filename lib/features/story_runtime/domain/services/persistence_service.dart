@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:lmstory/core/config/intermediate_config.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
@@ -12,11 +13,47 @@ import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.d
 import 'package:lmstory/features/story_runtime/domain/services/compaction_service.dart'
     show CompactionResult;
 
+/// The process and manuscript versions for explicitly requested turns.
+typedef StoryHistoryTurnDetails = ({
+  Map<int, StoryRoundArtifacts> artifacts,
+  Map<int, List<MessageVariantRecord>> variants,
+});
+
+/// Bounded history reads. The older whole-session readers remain available on
+/// [StoryPersistenceService] for callers that need every historical detail.
+abstract interface class StoryHistoryReadStore {
+  /// Keep a history write and its readback in the same SQLite transaction.
+  Future<T> runHistoryTransaction<T>(Future<T> Function() operation);
+
+  Future<StoryHistoryTurnDetails> loadHistoryTurnDetails(
+    String sessionId,
+    Set<int> turns,
+  );
+
+  /// One entry per stored round, including rounds without a usable summary.
+  Future<Map<int, AgentWorkSummary?>> loadHistorySummaries(String sessionId);
+}
+
+/// 编辑重发或重生成时保留的旧稿及其来源信息。
+typedef RoundVariantSnapshot = ({
+  ChatMessage assistant,
+  String? sourceInput,
+  StoryRoundArtifacts? process,
+});
+
+/// 回退已提交。调用方可同步会话状态及冻结前缀备忘。
+typedef RoundRollbackResult = ({
+  StoryAnchor? storyAnchor,
+  String? narrativeTime,
+  int messageCount,
+  bool deletedFrozenPrefix,
+});
+
 /// 中级模式原子持久化服务（DOC-09C §1）
 ///
 /// 提供四个原子持久化操作，均包在**单一 drift transaction** 内执行，
-/// 保证原子性（DOC-08 §6.1）。任一步骤失败 → 事务回滚，抛异常
-/// （Controller 捕获后置 phase=failed, E018）。
+/// 保证原子性（DOC-08 §6.1）。单条事实写入失败只回滚该条并在结果中计数。
+/// 整轮事务失败时回滚并抛出异常（Controller 捕获后置 phase=failed, E018）。
 ///
 /// - [persistRound]：持久化一轮新对话（写 user + assistant + 事件摘要）
 /// - [persistRegeneratedRound]：重新生成场景持久化（只写 assistant，user 已存在）
@@ -47,7 +84,7 @@ abstract interface class StoryPersistenceService {
   /// 7. 若 [artifacts] 非空：INSERT intermediate_round_artifacts（新增）
   /// 8. 若 [factsDeltas] 非空 + Impl 注入了 FactApplier：
   ///    应用事实变更 → factual_entities / factual_attributes /
-  ///    factual_memory_history（DOC-11 §8.2 同事务，事实层失败 → 整轮回滚）
+  ///    factual_memory_history（每条事实与流水使用同一保存点）
   /// 9. 若 [compaction] 非空（新增）：
   ///    INSERT 摘要消息 + compaction_points + experiential_memories(macro)
   ///
@@ -59,7 +96,7 @@ abstract interface class StoryPersistenceService {
   /// [factualConfig] 事实层配置（仅在 [factsDeltas] 非空时使用）。
   /// [compaction] 压缩持久化数据（仅在本轮触发了 CompactionPoint 压缩时非空）。
   ///
-  /// 返回 [PersistRoundResult]（含写入的经历记忆 + 本轮事实层变更记录）。
+  /// 返回已提交的经历记忆、成功的事实变更记录和事实写入失败数。
   Future<PersistRoundResult> persistRound({
     required ChatMessage userMessage,
     required ChatMessage assistantMessage,
@@ -71,6 +108,7 @@ abstract interface class StoryPersistenceService {
     FactualConfig? factualConfig,
     CompactionPersistenceData? compaction,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   });
 
   /// 原子持久化重新生成的助手回复（简化 Fork）
@@ -84,14 +122,14 @@ abstract interface class StoryPersistenceService {
   /// 2-5. 同 [persistRound] 步骤 3-6（事件摘要 + embedding + FTS + 会话元数据）
   /// 6. 若 [artifacts] 非空：INSERT intermediate_round_artifacts（新增）
   /// 7. 若 [factsDeltas] 非空 + Impl 注入了 FactApplier：应用事实变更
-  ///    （DOC-11 §8.2 同事务，事实层失败 → 整轮回滚）
+  ///    （每条事实与流水使用同一保存点）
   /// 8. 若 [compaction] 非空（新增）：同 [persistRound] 步骤 9
   ///
   /// [assistantMessage].sessionId 用于关联事件摘要和会话元数据。
   /// [indexForRetrieval] 语义同 [persistRound]（新增）。
   /// [factsDeltas] / [factualConfig] 语义同 [persistRound]。
   /// [compaction] 语义同 [persistRound]。
-  /// 返回 [PersistRoundResult]（含写入的经历记忆 + 本轮事实层变更记录）。
+  /// 返回已提交的经历记忆、成功的事实变更记录和事实写入失败数。
   Future<PersistRoundResult> persistRegeneratedRound({
     required ChatMessage assistantMessage,
     required EventSummary eventSummary,
@@ -103,6 +141,7 @@ abstract interface class StoryPersistenceService {
     CompactionPersistenceData? compaction,
     bool recordVariant = false,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   });
 
   /// 原子持久化手动压缩结果（上下文用量指示设计 §4.3）
@@ -163,6 +202,20 @@ abstract interface class StoryPersistenceService {
     bool keepVariantsAtFromTurn = false,
   });
 
+  /// 在一个事务内保存旧稿（如有）、删除本轮及下游，并回拨叙事时间。
+  ///
+  /// [truncateEvents] 在故事数据删除后运行，必须使用同一个数据库连接。
+  /// 它收到与故事数据一致的会话、起始轮次，返回是否截断了冻结前缀。
+  /// 任一步骤失败时回滚全部写入。
+  Future<RoundRollbackResult> rollbackRoundAndDownstream({
+    required String sessionId,
+    required int fromTurnNumber,
+    required List<String> messageIdsToDelete,
+    bool keepVariantsAtFromTurn = false,
+    RoundVariantSnapshot? variantSnapshot,
+    Future<bool> Function(String sessionId, int fromTurnNumber)? truncateEvents,
+  });
+
   /// 批量加载会话的所有轮次 artifacts（新增）
   ///
   /// 供 Controller.loadHistory 调用，按 turnNumber 索引返回 Map。
@@ -200,26 +253,41 @@ abstract interface class StoryPersistenceService {
   /// 1. chat_messages 的 [assistantMessageId] 行 content/thinking_content
   ///    改写为所选变体（上下文组装读 content 即读当前变体）
   /// 2. intermediate_round_artifacts 行 current_variant_index 指向所选
-  ///    变体，agent 过程列改写为变体快照（幕后回放随变体切换）
+  ///    变体，agent 过程列/事件摘要/事实变更展示改写为变体快照
+  /// 3. 保存切走稿的活动经历，撤销本轮派生，再按所选稿自己的事实增量与
+  ///    经历快照恢复。所选稿没有派生记录时只撤销废弃的轮效果。
   ///
-  /// 变体不存在时返回 false（幂等，不抛异常）。
+  /// 调用方先确认该轮未被压缩。服务核对末轮、消息所属会话与快照身份。
+  /// 已选中该稿时返回 true。目标缺失、归属不明或缺少重放所需的
+  /// [factualConfig] 时返回 false，当前稿和派生记录保留。存储故障抛出
+  /// 异常，事务整体回滚。
   Future<bool> switchMessageVariant({
     required String sessionId,
     required int turnNumber,
     required int variantIndex,
     required String assistantMessageId,
+    FactualConfig? factualConfig,
   });
 
   /// 编辑助手消息正文：message 行与当前指针指向的变体行同事务更新。
   ///
   /// 所见=所存——只改 message 行时，切换器往返会把变体行的旧正文拷回
   /// message 行，用户编辑被静默回退。同事务同步当前变体行（artifacts
-  /// 的 current_variant_index 所指）后切换往返不再回退；该轮无变体行
-  /// （从未重生成/未物化变体）时 UPDATE 影响 0 行，等价只改 message 行。
+  /// 的 current_variant_index 所指），切换往返后继续使用编辑正文。
+  /// 正文变动时，同时撤销该轮活跃经历与当前变体快照的单轮来源标记。
   Future<bool> updateAssistantContentAndCurrentVariant({
     required String sessionId,
     required int turnNumber,
     required String assistantMessageId,
+    required String newContent,
+  });
+
+  /// 编辑用户输入并撤销受影响摘要的单轮来源标记。
+  /// 无法确定轮号时保守地撤销该会话的来源标记。
+  Future<bool> updateUserContentAndInvalidateSourceTurn({
+    required String sessionId,
+    required int? turnNumber,
+    required String userMessageId,
     required String newContent,
   });
 
@@ -230,43 +298,39 @@ abstract interface class StoryPersistenceService {
     required int variantIndex,
   });
 
-  /// 原子持久化批量记忆提炼结果（新增）
+  /// 原子持久化批量记忆提炼结果。
   ///
-  /// 在单一 drift transaction 内执行：
-  /// 1. 对每条 [records]：INSERT experiential_memories + UPDATE embedding（若有）+
-  ///    INSERT FTS5 索引（合并后记忆达存储门槛，必须建索引）
-  /// 2. 删除 [originalMemoryIds] 对应的原始未索引记忆（experiential_memories +
-  ///    memories_fts，后者为空操作兼容边界场景）
-  ///
-  /// 任一步骤失败 → 事务回滚，原始记忆不被删除（下次触发可重新合并）。
-  ///
-  /// [records] 由 Controller 从 `ConsolidatedMemory`（MemoryConsolidator 产出）构建
-  /// （补充 turnNumber + embedding）。[originalMemoryIds] 为参与本次合并的
-  /// 原始记忆 memoryId 列表（合并后被删除，避免重复处理）。
-  Future<void> persistConsolidatedMemories({
+  /// [originalMemories] 是提交给模型的源经历快照。事务内先确认它们仍
+  /// 属于本会话、未归档、未被索引，且模型所用内容没有变更。任一源失效
+  /// 或任一列表为空时，整批跳过并返回 false。
+  /// 有效时写入 [records]（含 FTS 和可选向量）、删除全部源经历并返回
+  /// true。写入异常使事务回滚并向调用方抛出。
+  Future<bool> persistConsolidatedMemories({
     required String sessionId,
     required List<ConsolidatedMemoryRecord> records,
-    required List<String> originalMemoryIds,
+    required List<ExperientialMemory> originalMemories,
   });
 }
 
-/// 单轮持久化结果（事实层变更小窗用）
+/// 单轮持久化结果。
 ///
 /// 由 [StoryPersistenceService.persistRound] /
-/// [StoryPersistenceService.persistRegeneratedRound] 返回，携带写入的经历记忆 + 本轮应用到事实层的
-/// 变更记录（含变更前/变更后），供 Controller 写入
-/// [StoryRoundArtifacts] 与 `IntermediateChatState` 供 UI 展示。
+/// [StoryPersistenceService.persistRegeneratedRound] 返回。
 class PersistRoundResult {
   const PersistRoundResult({
     required this.memory,
     this.factsChanges = const [],
-  });
+    this.factWriteFailureCount = 0,
+  }) : assert(factWriteFailureCount >= 0, 'Failure count cannot be negative');
 
   /// 写入的经历记忆（含 memoryId）
   final ExperientialMemory memory;
 
   /// 本轮应用到事实层的变更记录（无变更或事实层禁用时为空列表）
   final List<FactsChangeRecord> factsChanges;
+
+  /// 本轮写入失败并单独回滚的事实变更数，仅用于本次收稿反馈。
+  final int factWriteFailureCount;
 }
 
 /// 批量记忆提炼持久化记录（新增）

@@ -27,6 +27,7 @@ class CompactionResult {
     this.hitRetentionFloor = false,
     this.tokensBefore = 0,
     this.tokensAfter = 0,
+    this.replacedSummaryTokens = 0,
   });
 
   /// 压缩摘要文本（剧情宏观骨架，累积式）
@@ -66,6 +67,13 @@ class CompactionResult {
 
   /// 压缩后对话区 token 数（新摘要 + 保留的近期对话）
   final int tokensAfter;
+
+  /// 被新摘要替换的旧摘要 token 数（首次压缩为 0）
+  ///
+  /// [tokensBefore] 只计对话区（user/assistant），累积式压缩还会移除
+  /// 旧摘要。估算「当前预计」时必须把本字段一并扣除，否则旧摘要会
+  /// 残留在结果里。
+  final int replacedSummaryTokens;
 }
 
 /// 中级模式 CompactionPoint 压缩服务
@@ -553,6 +561,12 @@ class StoryCompactionService {
     // 压缩后历史：[summary, ...recent messages]
     final compactedHistory = [summaryMessage, ...recentMessages];
 
+    // 被替换的旧摘要 token：tokensBefore 只计对话区，必须单列返回，
+    // 供「当前预计」扣除。
+    final replacedSummaryTokens = hasExistingSummary
+        ? await _tokenCounter.countTokens(existingCompactionSummary)
+        : 0;
+
     return CompactionResult(
       summary: summary,
       boundaryMessageId: boundaryMessage.messageId,
@@ -561,6 +575,7 @@ class StoryCompactionService {
       hitRetentionFloor: hitRetentionFloor,
       tokensBefore: historyTokens,
       tokensAfter: afterTokens,
+      replacedSummaryTokens: replacedSummaryTokens,
     );
   }
 

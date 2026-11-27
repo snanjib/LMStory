@@ -7,24 +7,23 @@ import 'package:lmstory/features/demo/domain/demo_candidate.dart';
 import 'package:lmstory/features/demo/domain/demo_pack.dart';
 
 /// 多仿真候选目录回归（真实资产逐一对账，不走任何注入桩）：
-/// 目录解析合法、五候选齐备、字节 SHA-256 与磁盘文件一致、
+/// 目录解析合法、中英文资产齐备、字节 SHA-256 与磁盘文件一致、
 /// 候选元数据与包真实 manifest 一致、默认候选唯一且为 glm-5.3。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const loader = DemoPackLoader();
 
-  test('候选目录解析：五候选、默认唯一、id 唯一、命名空间合法', () async {
+  test('候选目录解析：中英文候选、默认唯一、id 唯一、命名空间合法', () async {
     final candidates = await loader.loadCatalog();
-    expect(candidates, hasLength(5));
-    expect(candidates.map((c) => c.id).toSet(), hasLength(5));
+    expect(candidates, hasLength(6));
+    expect(candidates.map((c) => c.id).toSet(), hasLength(6));
     final defaults = candidates.where((c) => c.isDefault).toList();
     expect(defaults, hasLength(1));
     expect(defaults.single.id, 'glm-5.3');
     expect(defaults.single.virtualModelId, 'demo-narrator-glm');
     for (final c in candidates) {
       expect(c.virtualModelId, startsWith('demo-narrator-'));
-      expect(c.locale, 'zh-CN', reason: '本轮候选均为中文包');
     }
     expect(
       candidates.map((c) => c.id),
@@ -34,6 +33,7 @@ void main() {
         'glm-5.3-flash',
         'kimi-k3.1-pro',
         'mimo-v2.6-flash',
+        'en-us-story-sample',
       ]),
       reason: '默认候选排首位，其余保持目录顺序',
     );
@@ -43,8 +43,9 @@ void main() {
     final available = await loader.availableCandidates('zh-CN');
     expect(available, hasLength(5));
     expect(available.first.id, 'glm-5.3');
-    // 非 zh-CN 语言无候选（英语入口按原支持边界不提供多模型）
-    expect(await loader.availableCandidates('en-US'), isEmpty);
+    final english = await loader.availableCandidates('en-US');
+    expect(english.single.id, 'en-us-story-sample');
+    expect(english.single.displayNameEn, 'English story sample');
   });
 
   test('逐候选字节 SHA-256 与磁盘文件一致', () async {
@@ -84,7 +85,13 @@ void main() {
         reason: '候选 ${c.id} 来源模型必须真实对账',
       );
       expect(pack.manifest.formatVersion, 2);
-      expect(pack.manifest.kind, 'official');
+      if (c.locale == 'en-US') {
+        expect(pack.manifest.kind, 'sample');
+        expect(pack.manifest.source?['provenance'], 'authored-sample');
+      } else {
+        expect(c.locale, 'zh-CN');
+        expect(pack.manifest.kind, 'official');
+      }
       expect(
         pack.manifest.replayProfile?.id,
         isNotEmpty,
@@ -97,7 +104,7 @@ void main() {
     final candidates = await loader.loadCatalog();
     final proseFirsts = <String>{};
     final entityNameSets = <String>{};
-    for (final c in candidates) {
+    for (final c in candidates.where((c) => c.locale == 'zh-CN')) {
       final pack = await loader.loadCandidate(c);
       expect(
         pack.expectations.proseContains,

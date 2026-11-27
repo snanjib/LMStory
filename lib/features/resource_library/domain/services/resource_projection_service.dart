@@ -11,8 +11,10 @@ import 'package:uuid/uuid.dart';
 /// 资源投影服务（DOC-15 §9.2 / §8 只读语义）
 ///
 /// 把解析后的角色卡/世界书「投影」到会话事实层，生成只读实体/属性：
-/// - 角色卡 → `character` 实体（source=card，sourceRef=cardId）+ 基线属性（source=card）
-/// - 世界书词条 → `lore` 实体（source=worldbook，sourceRef=bookId）
+/// - 角色卡 → `character` 实体（source=card，sourceRef=cardId）+ 基线属性（source=card），
+///   实体 importance 默认 3（与 AI 建档同级，不占关键实体常驻配额）
+/// - 世界书词条 → `lore` 实体（source=worldbook，sourceRef=bookId），
+///   实体 importance 固定 2（constant 由 forceInject=world 表达）
 ///
 /// 只读约束（DOC-15 §8）：
 /// - 投影实体 `createdTurn=0`（会话预置，非对话产生，避免被 deleteFactsByTurns 误删）
@@ -41,6 +43,11 @@ class ResourceProjectionService {
   }
 
   /// 应用角色卡：投影 character 实体 + 基线属性 + 内嵌世界书词条。
+  ///
+  /// 角色实体默认 importance=3：与 AI 对话建档同级，进「已知实体」
+  /// 候选而不占关键实体（>= keyEntityImportanceThreshold，默认 5）
+  /// 常驻配额；被剧情提及时经检索命中注入（focusEntityIds 全保留），
+  /// 不会重复建档。仅影响未来导入，不批量下调存量、不动手动设定值。
   ///
   /// 遇同名实体抛 [ResourceApplyException]（DOC-15 §9.4 #2：拒绝应用）。
   /// 返回投影的实体数（含内嵌世界书词条）。
@@ -71,7 +78,9 @@ class ResourceProjectionService {
         type: FactualEntityType.character,
         primaryName: primaryName,
         aliases: const [],
-        importance: 5,
+        // 默认 3 分（见方法注释）：导入即关键实体（旧值 5）会挤占
+        // 常驻配额且绕过「剧情提及才注入」的检索语义
+        importance: 3,
         createdTurn: 0,
         createdAt: DateTime.now(),
         source: FactualSource.card,

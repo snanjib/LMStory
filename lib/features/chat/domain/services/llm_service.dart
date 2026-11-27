@@ -248,6 +248,7 @@ class LlmRequest {
     this.nonStreamingTimeout,
     this.cancelToken,
     this.cacheBreakpointIndex,
+    this.stableSystemPrefixCount,
     this.purpose,
   });
 
@@ -342,6 +343,14 @@ class LlmRequest {
   /// null = 不额外标记历史端缓存断点。
   final int? cacheBreakpointIndex;
 
+  /// 稳定 system 段块数（仅 Anthropic 适配器消费）
+  ///
+  /// 语义：请求的 system 消息按适配器现有规则抽取、过滤空文本后，前多少个
+  /// 连续块属于稳定段。null = 不启用按稳定段拆分；0 = 没有稳定段；负数或
+  /// 超过实际 system 块数视为无效并整段回退旧路径。仅本地元数据，不序列化
+  /// 成供应商不认识的请求字段。
+  final int? stableSystemPrefixCount;
+
   /// 发起本次调用的业务用途标识（[LlmPurposes] 常量）
   ///
   /// 仅作元数据：供调用观测与离线回放按用途匹配响应；null = 调用方
@@ -377,6 +386,7 @@ class LlmRequest {
     List<Map<String, dynamic>>? messages,
     Map<String, dynamic>? providerOptions,
     int? maxTokens,
+    int? stableSystemPrefixCount,
   }) {
     return LlmRequest(
       baseUrl: baseUrl,
@@ -403,6 +413,8 @@ class LlmRequest {
       nonStreamingTimeout: nonStreamingTimeout,
       cancelToken: cancelToken ?? this.cancelToken,
       cacheBreakpointIndex: cacheBreakpointIndex,
+      stableSystemPrefixCount:
+          stableSystemPrefixCount ?? this.stableSystemPrefixCount,
       purpose: purpose,
     );
   }

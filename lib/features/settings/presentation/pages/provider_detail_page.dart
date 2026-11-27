@@ -460,23 +460,28 @@ class _ProtocolField extends StatelessWidget {
         color: colors.surfaceVariant,
         borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
       ),
-      child: Row(
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: SimpleSpacing.sXs,
+        runSpacing: SimpleSpacing.sXs,
         children: [
-          Icon(Icons.lock_outline, size: 14, color: colors.faint),
-          const SizedBox(width: SimpleSpacing.sXs),
-          Expanded(
-            child: Text(
-              protocolDisplayName(preset.protocol, t),
-              style: SimpleTextStyles.body.copyWith(color: colors.muted),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.lock_outline, size: 14, color: colors.faint),
+              const SizedBox(width: SimpleSpacing.sXs),
+              Flexible(
+                child: Text(
+                  protocolDisplayName(preset.protocol, t),
+                  style: SimpleTextStyles.body.copyWith(color: colors.muted),
+                ),
+              ),
+            ],
           ),
           Text(
             t.settings.provider.protocolReadOnly,
             style: SimpleTextStyles.overline.copyWith(color: colors.faint),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -869,23 +874,29 @@ class _ApiKeyFieldState extends ConsumerState<_ApiKeyField> {
             ],
           )
         else
-          Row(
+          OverflowBar(
+            alignment: MainAxisAlignment.spaceBetween,
+            spacing: SimpleSpacing.sXs,
             children: [
-              Icon(
-                Icons.circle,
-                size: 8,
-                color: widget.hasApiKey ? colors.success : colors.warning,
-              ),
-              const SizedBox(width: SimpleSpacing.sXs),
-              Expanded(
-                child: Text(
-                  widget.hasApiKey
-                      ? t.settings.provider.apiKeyStatus.set
-                      : t.settings.provider.apiKeyStatus.notSet,
-                  style: SimpleTextStyles.body.copyWith(color: colors.muted),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.circle,
+                    size: 8,
+                    color: widget.hasApiKey ? colors.success : colors.warning,
+                  ),
+                  const SizedBox(width: SimpleSpacing.sXs),
+                  Flexible(
+                    child: Text(
+                      widget.hasApiKey
+                          ? t.settings.provider.apiKeyStatus.set
+                          : t.settings.provider.apiKeyStatus.notSet,
+                      style:
+                          SimpleTextStyles.body.copyWith(color: colors.muted),
+                    ),
+                  ),
+                ],
               ),
               TextButton.icon(
                 onPressed: () => setState(() {
@@ -899,7 +910,6 @@ class _ApiKeyFieldState extends ConsumerState<_ApiKeyField> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const SizedBox(width: SimpleSpacing.sXs),
               Tooltip(
                 message: t.settings.provider.testHint,
                 child: Consumer(
@@ -1556,25 +1566,15 @@ class _ModelsSectionState extends ConsumerState<_ModelsSection> {
 
   Future<void> _fetchModels(BuildContext context) async {
     final t = Translations.of(context);
-    final colors = context.lm.palette;
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final notifier = ref.read(settingsNotifierProvider.notifier);
     final fetched = await notifier.fetchModels(widget.preset.presetId);
-    if (!mounted) return;
+    if (!mounted || !context.mounted) return;
 
-    final error = ref.read(settingsNotifierProvider).fetchModelsError;
+    final state = ref.read(settingsNotifierProvider);
+    final error = state.fetchModelsError;
     if (error != null) {
-      scaffoldMessenger.showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text(
-            t.settings.provider.fetchError(error: error),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-          backgroundColor: colors.error,
-        ),
-      );
+      await _showFetchFailure(context, error, state.fetchModelsHttpStatus);
       return;
     }
 
@@ -1628,6 +1628,53 @@ class _ModelsSectionState extends ConsumerState<_ModelsSection> {
           widget.preset.presetId,
           newModels,
         );
+  }
+
+  Future<void> _showFetchFailure(
+    BuildContext context,
+    String error,
+    int? status,
+  ) async {
+    final t = Translations.of(context);
+    final labels = t.settings.provider;
+    final authRejected = status == 401 || status == 403;
+    final detail = status == null
+        ? error
+        : '${labels.fetchHttpStatus(status: status)}\n$error';
+
+    await showLmDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        scrollable: true,
+        title: Text(labels.fetchFailedTitle),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (authRejected) ...[
+              Text(t.chat.failure.messages.auth),
+              const SizedBox(height: SimpleSpacing.sXs),
+            ],
+            Text(
+              authRejected ? labels.fetchAuthSuggestion : labels.fetchRetry,
+            ),
+            ExpansionTile(
+              title: Text(t.chat.failure.detailLabel),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: SimpleSpacing.sSm),
+              expandedCrossAxisAlignment: CrossAxisAlignment.start,
+              children: [SelectableText(detail)],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(t.common.close),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showAddModelDialog(BuildContext context) async {
@@ -2022,13 +2069,15 @@ class _IconAction extends StatelessWidget {
               child: icon,
             ),
             const SizedBox(width: SimpleSpacing.s2xs),
-            Text(
-              label,
-              style: SimpleTextStyles.overline.copyWith(
-                color: enabled ? colors.muted : colors.faint,
+            Flexible(
+              child: Text(
+                label,
+                style: SimpleTextStyles.overline.copyWith(
+                  color: enabled ? colors.muted : colors.faint,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),

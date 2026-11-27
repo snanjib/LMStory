@@ -160,6 +160,217 @@ void main() {
     expect(sourceMacro['parent_event_ids'], '["mem_1","mem_2","mem_ghost"]');
   });
 
+  test('经历快照和活动行共用副本 ID，经历文本和来源字段保留', () async {
+    const parentIds = '["mem_old","mem_1","mem_ghost"]';
+    const archivedIds = '["mem_2","mem_old","mem_ghost"]';
+    await (db.update(db.experientialMemoriesTable)
+          ..where((t) => t.memoryId.equals('mem_macro')))
+        .write(
+      const ExperientialMemoriesTableCompanion(
+        parentEventIds: Value(parentIds),
+        archivedEventIds: Value(archivedIds),
+      ),
+    );
+    const oldOnly = {
+      'memory_id': 'mem_old',
+      'summary': 'mem_1',
+      'what_text': 'mem_old',
+      'embedding': 'AACAPw==',
+      'has_embedding': 1,
+      'fts_present': 0,
+      'has_verified_source_turn': 0,
+    };
+    const macro = {
+      'memory_id': 'mem_macro',
+      'snapshot_session_id': 's1',
+      'parent_event_ids': parentIds,
+      'archived_event_ids': archivedIds,
+      'macro_trigger_reason': 'mem_old',
+      'fts_present': 1,
+      'has_verified_source_turn': 1,
+    };
+    final snapshot = jsonEncode([oldOnly, macro]);
+    await db.into(db.messageVariantsTable).insert(
+          MessageVariantsTableCompanion.insert(
+            sessionId: 's1',
+            turnNumber: 2,
+            variantIndex: 0,
+            content: const Value('mem_old'),
+            experientialSnapshot: Value(snapshot),
+            createdAt: 0,
+          ),
+        );
+
+    final copy = await repo.copySession('s1');
+    final active = await memoriesOf(db, copy.sessionId);
+    final microOneId =
+        active.singleWhere((row) => row['summary'] == '主角拜入青云门')['memory_id'];
+    final microTwoId =
+        active.singleWhere((row) => row['summary'] == '低重要性事件')['memory_id'];
+    final activeMacro =
+        active.singleWhere((row) => row['memory_level'] == 'macro');
+    final variant =
+        (await rowsOf(db, 'message_variants', copy.sessionId)).single;
+    final copiedSnapshot =
+        (jsonDecode(variant['experiential_snapshot'] as String)
+                as List<Object?>)
+            .cast<Map<String, Object?>>();
+    final oldOnlyId = copiedSnapshot.first['memory_id'];
+
+    expect(oldOnlyId, isA<String>());
+    expect(oldOnlyId, isNot(anyOf('mem_old', 'mem_1', 'mem_2', 'mem_macro')));
+    expect(active.map((row) => row['memory_id']), isNot(contains(oldOnlyId)));
+    expect(variant['content'], 'mem_old');
+    final expectedParents = jsonEncode([oldOnlyId, microOneId]);
+    final expectedArchived = jsonEncode([microTwoId, oldOnlyId]);
+    expect(activeMacro['parent_event_ids'], expectedParents);
+    expect(activeMacro['archived_event_ids'], expectedArchived);
+    expect(copiedSnapshot, [
+      {
+        ...oldOnly,
+        'memory_id': oldOnlyId,
+        'snapshot_session_id': copy.sessionId,
+      },
+      {
+        ...macro,
+        'memory_id': activeMacro['memory_id'],
+        'snapshot_session_id': copy.sessionId,
+        'parent_event_ids': expectedParents,
+        'archived_event_ids': expectedArchived,
+      },
+    ]);
+    final sourceVariant = (await rowsOf(db, 'message_variants', 's1')).single;
+    expect(sourceVariant['experiential_snapshot'], snapshot);
+  });
+
+  test('两个稿件表重写事实引用，保留未知引用和历史展示', () async {
+    const liveCreate = {
+      'action': 'create_entity',
+      'entityType': 'character',
+      'primaryName': '旺财',
+      'replayCreatedId': 'ent_b',
+      'confidence': 5,
+    };
+    const liveUpdate = {
+      'action': 'update_attr',
+      'entityId': 'ent_b',
+      'attrKey': 'species',
+      'value': 'ent_b',
+      'reason': 'ent_old',
+      'confidence': 5,
+    };
+    const oldCreate = {
+      'action': 'create_entity',
+      'entityType': 'character',
+      'primaryName': 'ent_b',
+      'replayCreatedId': 'ent_old',
+      'confidence': 5,
+    };
+    const oldAlias = {
+      'action': 'add_alias',
+      'entityId': 'ent_old',
+      'value': 'ent_old',
+      'confidence': 5,
+    };
+    const unprovenAlias = {
+      'action': 'add_alias',
+      'entityId': 'ent_unproven',
+      'value': 'ent_b',
+      'confidence': 5,
+    };
+    final display = jsonEncode([
+      {
+        'action': 'create_entity',
+        'entityId': 'ent_unproven',
+        'entityName': '旺财',
+      },
+    ]);
+    final artifactsDeltas = jsonEncode([liveCreate, liveUpdate, oldAlias]);
+    final variantDeltas = jsonEncode([
+      liveUpdate,
+      oldCreate,
+      oldAlias,
+      unprovenAlias,
+    ]);
+    await db.into(db.intermediateRoundArtifactsTable).insert(
+          IntermediateRoundArtifactsTableCompanion.insert(
+            sessionId: 's1',
+            turnNumber: 2,
+            generatedText: const Value('ent_b'),
+            factsChanges: Value(display),
+            factsDeltas: Value(artifactsDeltas),
+            createdAt: 0,
+          ),
+        );
+    await db.into(db.messageVariantsTable).insert(
+          MessageVariantsTableCompanion.insert(
+            sessionId: 's1',
+            turnNumber: 2,
+            variantIndex: 0,
+            factsChanges: Value(display),
+            factsDeltas: Value(variantDeltas),
+            createdAt: 0,
+          ),
+        );
+
+    final copy = await repo.copySession('s1');
+    final liveId = (await entitiesOf(db, copy.sessionId))
+        .singleWhere((row) => row['primary_name'] == '旺财')['entity_id'];
+    final artifacts =
+        (await rowsOf(db, 'intermediate_round_artifacts', copy.sessionId))
+            .single;
+    final variant =
+        (await rowsOf(db, 'message_variants', copy.sessionId)).single;
+    final copiedDeltas =
+        (jsonDecode(variant['facts_deltas'] as String) as List<Object?>)
+            .cast<Map<String, Object?>>();
+    final oldId = copiedDeltas[1]['replayCreatedId'];
+    expect(oldId, isA<String>());
+    expect(oldId, isNot(anyOf('ent_old', liveId)));
+    expect(copiedDeltas, [
+      {...liveUpdate, 'entityId': liveId},
+      {...oldCreate, 'replayCreatedId': oldId},
+      {...oldAlias, 'entityId': oldId},
+      unprovenAlias,
+    ]);
+    expect(jsonDecode(artifacts['facts_deltas'] as String), [
+      {...liveCreate, 'replayCreatedId': liveId},
+      {...liveUpdate, 'entityId': liveId},
+      {...oldAlias, 'entityId': oldId},
+    ]);
+    expect(artifacts['generated_text'], 'ent_b');
+    expect(artifacts['facts_changes'], display);
+    expect(variant['facts_changes'], display);
+    final sourceVariant = (await rowsOf(db, 'message_variants', 's1')).single;
+    expect(sourceVariant['facts_deltas'], variantDeltas);
+  });
+
+  test('不复制指向外部实体或悬空实体的旧属性', () async {
+    await db.customStatement(
+      "INSERT INTO chat_sessions (session_id, title) VALUES ('s2', '外部')",
+    );
+    await db.customStatement(
+      'INSERT INTO factual_entities (entity_id, session_id, type, '
+      "primary_name, created_turn) VALUES ('ent_foreign', 's2', 'character', "
+      "'旺财', 1)",
+    );
+    await db.customStatement(
+      'INSERT INTO factual_attributes '
+      '(attribute_id, entity_id, session_id, attr_key, value) VALUES '
+      "('attr_foreign', 'ent_foreign', 's1', 'species', '边牧'), "
+      "('attr_dangling', 'ent_missing', 's1', 'species', '狸花')",
+    );
+    final sourceAttributes = await attributesOf(db, 's1');
+
+    final copy = await repo.copySession('s1');
+
+    expect(
+      (await attributesOf(db, copy.sessionId)).map((row) => row['value']),
+      unorderedEquals(['修仙门派', '金毛']),
+    );
+    expect(await attributesOf(db, 's1'), sourceAttributes);
+  });
+
   test('FTS 索引以副本主表重建：factual_fts 仅世界书词条且指向新 id', () async {
     final copy = await repo.copySession('s1');
     final copyEntities = await entitiesOf(db, copy.sessionId);

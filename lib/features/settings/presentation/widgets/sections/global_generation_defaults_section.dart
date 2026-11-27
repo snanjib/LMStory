@@ -7,6 +7,7 @@ import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/widgets/commit_slider.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 全局新对话默认生成参数区块（对标 ChatBox Default Settings for New Conversation）。
@@ -92,6 +93,15 @@ class _GlobalGenerationDefaultsSectionState
     final colors = context.lm.palette;
     final t = Translations.of(context);
     final tt = t.settings.chatSettings.generationDefaults;
+    final showSampling = ref.watch(
+      settingsNotifierProvider.select(
+        (s) => samplingControlsForModel(
+          s.presets,
+          (s.defaultPresetId, s.defaultModelId),
+          reasoningEffort: s.defaultReasoningEffort,
+        ).showsTemperatureAndTopP,
+      ),
+    );
 
     final temperature = ref.watch(
       settingsNotifierProvider.select((s) => s.globalTemperature),
@@ -146,34 +156,33 @@ class _GlobalGenerationDefaultsSectionState
           Divider(height: 1, color: colors.divider),
           const SizedBox(height: SimpleSpacing.sMd),
 
-          // 温度滑块
-          _buildSliderRow(
-            colors: colors,
-            label: tt.temperature,
-            desc: tt.temperatureDesc,
-            value: temperature,
-            max: 2,
-            divisions: 200,
-            valueFormatter: (v) => v.toStringAsFixed(2),
-            onChanged: ref
-                .read(settingsNotifierProvider.notifier)
-                .setGlobalTemperature,
-          ),
-          const SizedBox(height: SimpleSpacing.sMd),
-
-          // Top P 滑块
-          _buildSliderRow(
-            colors: colors,
-            label: tt.topP,
-            desc: tt.topPDesc,
-            value: topP,
-            max: 1,
-            divisions: 100,
-            valueFormatter: (v) => v.toStringAsFixed(2),
-            onChanged:
-                ref.read(settingsNotifierProvider.notifier).setGlobalTopP,
-          ),
-          const SizedBox(height: SimpleSpacing.sMd),
+          if (showSampling) ...[
+            _buildSliderRow(
+              colors: colors,
+              label: tt.temperature,
+              desc: tt.temperatureDesc,
+              value: temperature,
+              max: 2,
+              divisions: 200,
+              valueFormatter: (v) => v.toStringAsFixed(2),
+              onChanged: ref
+                  .read(settingsNotifierProvider.notifier)
+                  .setGlobalTemperature,
+            ),
+            const SizedBox(height: SimpleSpacing.sMd),
+            _buildSliderRow(
+              colors: colors,
+              label: tt.topP,
+              desc: tt.topPDesc,
+              value: topP,
+              max: 1,
+              divisions: 100,
+              valueFormatter: (v) => v.toStringAsFixed(2),
+              onChanged:
+                  ref.read(settingsNotifierProvider.notifier).setGlobalTopP,
+            ),
+            const SizedBox(height: SimpleSpacing.sMd),
+          ],
 
           // 最大 Token 数输入框
           _buildMaxTokensRow(

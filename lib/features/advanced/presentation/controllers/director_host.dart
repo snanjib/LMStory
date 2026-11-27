@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/features/advanced/data/engineering_compaction_service.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_log_recovery.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/director_round_runner.dart'
@@ -81,6 +82,9 @@ abstract interface class DirectorHost {
 
   /// agent 事件日志仓库（durable 日志 + 崩溃恢复；null = 未启用）。
   AgentEventLogStore? get agentEventLogRepository;
+
+  /// 工程压缩事务服务（开启态轮前/溢出压缩；null = 不可用）
+  EngineeringCompactionService? get engineeringCompactionService;
 
   /// CompactionPoint 压缩服务（导演轮轮前压缩；null = 未启用）。
   StoryCompactionService? get compactionService;

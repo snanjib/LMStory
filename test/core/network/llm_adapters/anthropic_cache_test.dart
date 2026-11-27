@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/llm/tool_calling/tool_choice.dart';
 import 'package:lmstory/core/llm/tool_calling/tool_definition.dart';
 import 'package:lmstory/core/network/llm_adapters/anthropic_adapter.dart';
+import 'package:lmstory/core/network/llm_adapters/anthropic_compat_options.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 
 /// v0.3 ：Anthropic 显式缓存断点 + 缓存命中计量测试
@@ -390,6 +391,255 @@ void main() {
       final content =
           (messages[2]['content'] as List).cast<Map<String, dynamic>>();
       expect(content.where((b) => b['cache_control'] != null), hasLength(1));
+    });
+  });
+
+  group('稳定 system 前缀缓存标记（无工具故事请求）', () {
+    List<Map<String, dynamic>> storyMessages() => [
+          {'role': 'system', 'content': 'SYSTEM-ROLE'},
+          {'role': 'system', 'content': 'SUMMARY'},
+          {'role': 'user', 'content': '第一轮输入'},
+          {'role': 'assistant', 'content': '第一轮回复'},
+          {'role': 'system', 'content': 'FACT-BLOCK'},
+          {'role': 'system', 'content': 'MEMORIES-BLOCK'},
+          {'role': 'user', 'content': '当前输入'},
+        ];
+
+    LlmRequest storyRequest({
+      List<Map<String, dynamic>>? messages,
+      int? stableCount,
+      String baseUrl = 'https://api.anthropic.com',
+      Map<String, dynamic>? providerOptions,
+      List<ToolDefinition>? tools,
+      int? cacheBreakpointIndex,
+    }) {
+      return LlmRequest(
+        baseUrl: baseUrl,
+        apiKey: 'k',
+        modelId: 'claude-sonnet-4-6',
+        messages: messages ?? storyMessages(),
+        providerOptions: providerOptions,
+        tools: tools,
+        toolChoice: tools == null ? null : ToolChoice.auto,
+        stableSystemPrefixCount: stableCount,
+        cacheBreakpointIndex: cacheBreakpointIndex,
+      );
+    }
+
+    List<Map<String, dynamic>> systemBlocks(Map<String, dynamic> body) =>
+        (body['system'] as List).cast<Map<String, dynamic>>();
+
+    int markerCount(Map<String, dynamic> body) =>
+        jsonEncode(body).split('cache_control').length - 1;
+
+    // 线上相邻 text 块直接首尾相接，不额外补分隔符。
+    String joinedSystem(Map<String, dynamic> body) =>
+        systemBlocks(body).map((block) => block['text'] as String).join();
+
+    test('null 前缀保持旧字符串 system', () {
+      final body = AnthropicAdapter().buildRequestBody(
+        storyRequest(),
+        stream: true,
+      );
+      expect(
+        body['system'],
+        'SYSTEM-ROLE\n\nSUMMARY\n\nFACT-BLOCK\n\nMEMORIES-BLOCK',
+      );
+    });
+
+    test('0、负数、越界前缀均回退旧字符串，不钳制', () {
+      for (final invalid in [0, -1, 5]) {
+        final body = AnthropicAdapter().buildRequestBody(
+          storyRequest(stableCount: invalid),
+          stream: true,
+        );
+        expect(
+          body['system'],
+          'SYSTEM-ROLE\n\nSUMMARY\n\nFACT-BLOCK\n\nMEMORIES-BLOCK',
+          reason: 'stableSystemPrefixCount=$invalid 应整段回退',
+        );
+      }
+    });
+
+    test('单稳定块只标一次，动态尾块不标，文本直接拼接还原旧串', () {
+      final body = AnthropicAdapter().buildRequestBody(
+        storyRequest(stableCount: 1),
+        stream: true,
+      );
+
+      final blocks = systemBlocks(body);
+      expect(blocks, hasLength(4));
+      expect(blocks[0]['text'], 'SYSTEM-ROLE');
+      expect(blocks[0]['cache_control'], {'type': 'ephemeral'});
+      expect(blocks[1]['text'], '\n\nSUMMARY');
+      expect(blocks[1].containsKey('cache_control'), isFalse);
+      expect(blocks[2]['text'], '\n\nFACT-BLOCK');
+      expect(blocks[2].containsKey('cache_control'), isFalse);
+      expect(blocks[3]['text'], '\n\nMEMORIES-BLOCK');
+      expect(blocks[3].containsKey('cache_control'), isFalse);
+      expect(
+        joinedSystem(body),
+        'SYSTEM-ROLE\n\nSUMMARY\n\nFACT-BLOCK\n\nMEMORIES-BLOCK',
+      );
+    });
+
+    test('两个稳定块标首末，动态 system 块保持无标记', () {
+      final body = AnthropicAdapter().buildRequestBody(
+        storyRequest(stableCount: 2),
+        stream: true,
+      );
+
+      final blocks = systemBlocks(body);
+      expect(blocks, hasLength(4));
+      expect(blocks[0]['cache_control'], {'type': 'ephemeral'});
+      expect(blocks[1]['cache_control'], {'type': 'ephemeral'});
+      expect(blocks[2].containsKey('cache_control'), isFalse);
+      expect(blocks[3].containsKey('cache_control'), isFalse);
+      expect(
+        joinedSystem(body),
+        'SYSTEM-ROLE\n\nSUMMARY\n\nFACT-BLOCK\n\nMEMORIES-BLOCK',
+      );
+      // 消息区旧断点仍保留：倒数第二条
+      final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+      expect(jsonEncode(messages[1]), contains('cache_control'));
+      expect(jsonEncode(messages.last), isNot(contains('cache_control')));
+    });
+
+    test('官方显式 false 回到旧字符串；第三方缺省关闭、显式 true 开启', () {
+      final disabledOfficial = AnthropicAdapter().buildRequestBody(
+        storyRequest(
+          stableCount: 2,
+          providerOptions: const {
+            kAnthropicCapabilitiesOption: {'stable_system_cache': false},
+          },
+        ),
+        stream: true,
+      );
+      expect(
+        disabledOfficial['system'],
+        'SYSTEM-ROLE\n\nSUMMARY\n\nFACT-BLOCK\n\nMEMORIES-BLOCK',
+      );
+
+      final thirdPartyDefault = AnthropicAdapter().buildRequestBody(
+        storyRequest(
+          stableCount: 2,
+          baseUrl: 'https://relay.example.com/v1',
+        ),
+        stream: true,
+      );
+      expect(
+        thirdPartyDefault['system'],
+        'SYSTEM-ROLE\n\nSUMMARY\n\nFACT-BLOCK\n\nMEMORIES-BLOCK',
+      );
+
+      final thirdPartyEnabled = AnthropicAdapter().buildRequestBody(
+        storyRequest(
+          stableCount: 2,
+          baseUrl: 'https://relay.example.com/v1',
+          providerOptions: const {
+            kAnthropicCapabilitiesOption: {'stable_system_cache': true},
+          },
+        ),
+        stream: true,
+      );
+      expect(systemBlocks(thirdPartyEnabled), hasLength(4));
+      expect(
+        systemBlocks(thirdPartyEnabled)[1]['cache_control'],
+        {'type': 'ephemeral'},
+      );
+    });
+
+    test('空白文本按适配器过滤口径对齐：空 system 不占稳定位', () {
+      final body = AnthropicAdapter().buildRequestBody(
+        storyRequest(
+          stableCount: 2,
+          messages: [
+            {'role': 'system', 'content': ''},
+            {'role': 'system', 'content': 'SYSTEM-ROLE'},
+            {'role': 'system', 'content': 'SUMMARY'},
+            {'role': 'user', 'content': '第一轮输入'},
+            {'role': 'system', 'content': 'FACT-BLOCK'},
+            {'role': 'user', 'content': '当前输入'},
+          ],
+        ),
+        stream: true,
+      );
+
+      final blocks = systemBlocks(body);
+      expect(blocks, hasLength(3));
+      expect(blocks[0]['text'], 'SYSTEM-ROLE');
+      expect(blocks[0]['cache_control'], {'type': 'ephemeral'});
+      expect(blocks[1]['text'], '\n\nSUMMARY');
+      expect(blocks[1]['cache_control'], {'type': 'ephemeral'});
+      expect(blocks[2]['text'], '\n\nFACT-BLOCK');
+      expect(blocks[2].containsKey('cache_control'), isFalse);
+    });
+
+    test('稳定标记 + 历史断点总数恰为 4（上限内）', () {
+      final request = storyRequest(
+        stableCount: 2,
+        cacheBreakpointIndex: 3,
+        messages: [
+          {'role': 'system', 'content': 'SYSTEM-ROLE'},
+          {'role': 'system', 'content': 'SUMMARY'},
+          {'role': 'user', 'content': '第一轮输入'},
+          {'role': 'assistant', 'content': '第一轮回复'},
+          {'role': 'user', 'content': '第二轮输入'},
+          {'role': 'system', 'content': 'FACT-BLOCK'},
+          {'role': 'system', 'content': 'MEMORIES-BLOCK'},
+          {'role': 'user', 'content': '当前输入'},
+        ],
+      );
+      final body = AnthropicAdapter().buildRequestBody(request, stream: true);
+      expect(markerCount(body), 4);
+      final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+      final historyTarget =
+          (messages[1]['content'] as List).cast<Map<String, dynamic>>();
+      expect(historyTarget.last['cache_control'], {'type': 'ephemeral'});
+      expect(jsonEncode(messages.last), isNot(contains('cache_control')));
+    });
+
+    test('带工具请求忽略稳定前缀元数据，保持既有断点路径', () {
+      final withoutMetadata = AnthropicAdapter().buildRequestBody(
+        storyRequest(tools: tools),
+        stream: true,
+      );
+      final withMetadata = AnthropicAdapter().buildRequestBody(
+        storyRequest(tools: tools, stableCount: 2),
+        stream: true,
+      );
+      expect(jsonEncode(withMetadata), jsonEncode(withoutMetadata));
+    });
+
+    test('copyWith 保留字段', () {
+      final request = storyRequest(stableCount: 2);
+      final copy = request.copyWith(
+        messages: const [
+          {'role': 'user', 'content': 'changed'},
+        ],
+      );
+      expect(copy.stableSystemPrefixCount, 2);
+    });
+
+    test('不修改输入 messages/providerOptions，两次构造结果一致', () {
+      final messages = storyMessages();
+      final options = <String, dynamic>{
+        kAnthropicCapabilitiesOption: {'stable_system_cache': true},
+      };
+      final beforeMessages = jsonEncode(messages);
+      final request = storyRequest(
+        messages: messages,
+        stableCount: 2,
+        providerOptions: options,
+      );
+      final first = AnthropicAdapter().buildRequestBody(request, stream: true);
+      final second = AnthropicAdapter().buildRequestBody(request, stream: true);
+
+      expect(jsonEncode(messages), beforeMessages);
+      expect(options.keys, [kAnthropicCapabilitiesOption]);
+      expect(jsonEncode(second), jsonEncode(first));
+      expect(jsonEncode(first), isNot(contains('stable_system_cache')));
+      expect(jsonEncode(first), isNot(contains('anthropic_capabilities')));
     });
   });
 

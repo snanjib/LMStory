@@ -11,7 +11,8 @@ import 'package:meta/meta.dart';
 ///
 /// 使用 [Preferences] 存储用户覆盖配置，[ConfigLoader] 加载默认配置，
 /// [ApiKeyDatasource] 安全存储 API Key。
-class SettingsRepositoryImpl implements SettingsRepository {
+class SettingsRepositoryImpl
+    implements SettingsRepository, SettingsImportStorage {
   SettingsRepositoryImpl({
     required Preferences preferences,
     required ConfigLoader configLoader,
@@ -52,6 +53,18 @@ class SettingsRepositoryImpl implements SettingsRepository {
   Future<void> deleteApiKey(String presetId) =>
       _apiKeyDatasource.delete(presetId);
 
+  @override
+  Future<String?> readApiKeyForImport(String presetId) =>
+      _apiKeyDatasource.readForImport(presetId);
+
+  @override
+  Future<void> writeApiKeyForImport(String presetId, String key) =>
+      _apiKeyDatasource.saveForImport(presetId, key);
+
+  @override
+  Future<void> deleteApiKeyForImport(String presetId) =>
+      _apiKeyDatasource.deleteForImport(presetId);
+
   // -- 用户覆盖配置 --
 
   /// user_overrides 解析失败时的原串备份键。
@@ -60,7 +73,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   /// removeUserOverride 会以「{}+新键」整体覆写——静默灭失全部用户配置。
   /// 覆写前把损坏原串挪到备份键留档（可人工恢复），违反数据保护铁律的
   /// 静默丢失路径不再存在。
-  static const String _corruptOverridesBackupKey =
+  static const String corruptOverridesBackupPrefKey =
       'user_overrides_corrupt_backup';
 
   String? _lastCorruptOverridesRaw;
@@ -90,10 +103,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final raw = _lastCorruptOverridesRaw;
     if (raw == null) return;
     _lastCorruptOverridesRaw = null;
-    await _preferences.setString(_corruptOverridesBackupKey, raw);
+    await _preferences.setString(corruptOverridesBackupPrefKey, raw);
     _logger.warn(
       'Corrupt user_overrides backed up before overwrite',
-      detail: '${raw.length} chars → $_corruptOverridesBackupKey',
+      detail: '${raw.length} chars → $corruptOverridesBackupPrefKey',
     );
   }
 
@@ -102,7 +115,14 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final overrides = await getUserOverrides();
     await _backupCorruptOverridesIfAny();
     overrides[key] = value;
-    await _preferences.setString(_overridesKey, jsonEncode(overrides));
+    try {
+      if (!await _preferences.setString(_overridesKey, jsonEncode(overrides))) {
+        throw StateError('Could not persist user override');
+      }
+    } catch (_) {
+      await _preferences.reload();
+      rethrow;
+    }
   }
 
   @override
@@ -133,6 +153,56 @@ class SettingsRepositoryImpl implements SettingsRepository {
   @override
   Future<void> clearAllUserOverrides() async {
     await _preferences.remove(_overridesKey);
+  }
+
+  Future<String?> _readStoredOverrides() async {
+    await _preferences.reload();
+    return _preferences.getString(_overridesKey);
+  }
+
+  @override
+  Future<
+      ({
+        Map<String, dynamic> values,
+        Future<bool> Function() restore,
+      })> captureUserOverridesForImport() async {
+    final raw = await _readStoredOverrides();
+    final Object? values;
+    try {
+      values =
+          raw == null || raw.isEmpty ? <String, dynamic>{} : jsonDecode(raw);
+    } on FormatException {
+      throw const FormatException('Stored preferences cannot be backed up');
+    }
+    if (values is! Map<String, dynamic>) {
+      throw const FormatException('Stored preferences cannot be backed up');
+    }
+    return (
+      values: values,
+      restore: () async {
+        try {
+          if (raw == null) {
+            await _preferences.remove(_overridesKey);
+          } else {
+            await _preferences.setString(_overridesKey, raw);
+          }
+        } catch (_) {
+          // 某些平台会在完成写入后报告异常，以下面的持久读回为准。
+        }
+        return await _readStoredOverrides() == raw;
+      },
+    );
+  }
+
+  @override
+  Future<void> replaceUserOverridesForImport(
+    Map<String, dynamic> values,
+  ) async {
+    final raw = jsonEncode(values);
+    final written = await _preferences.setString(_overridesKey, raw);
+    if (!written || await _readStoredOverrides() != raw) {
+      throw StateError('Could not persist imported preferences');
+    }
   }
 
   @override
@@ -306,6 +376,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
             'enabled': config.intermediate.memory.factual.enabled,
             'key_entity_importance_threshold':
                 config.intermediate.memory.factual.keyEntityImportanceThreshold,
+            'key_entity_auto_cap':
+                config.intermediate.memory.factual.keyEntityAutoCap,
             'injection_max_entities':
                 config.intermediate.memory.factual.injectionMaxEntities,
             'force_inject_safety_cap':
@@ -435,6 +507,17 @@ class SettingsRepositoryImpl implements SettingsRepository {
           // 批 I：事件日志滚动保留轮数（0=不限制）
           'event_log_retention_turns':
               config.advanced.harness.eventLogRetentionTurns,
+          'maintenance_gap_interval':
+              config.advanced.harness.maintenanceGapInterval,
+          'maintenance_nudge_cooldown':
+              config.advanced.harness.maintenanceNudgeCooldown,
+          'major_review_interval': config.advanced.harness.majorReviewInterval,
+          'maintenance_extra_steps':
+              config.advanced.harness.maintenanceExtraSteps,
+          'recent_active_entities_window':
+              config.advanced.harness.recentActiveEntitiesWindow,
+          'recent_active_entities_cap':
+              config.advanced.harness.recentActiveEntitiesCap,
         },
         'context': <String, dynamic>{
           'effective_context_limit':
@@ -466,6 +549,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
             'enabled': config.advanced.memory.factual.enabled,
             'key_entity_importance_threshold':
                 config.advanced.memory.factual.keyEntityImportanceThreshold,
+            'key_entity_auto_cap':
+                config.advanced.memory.factual.keyEntityAutoCap,
             'injection_max_entities':
                 config.advanced.memory.factual.injectionMaxEntities,
             'force_inject_safety_cap':
@@ -506,6 +591,27 @@ class SettingsRepositoryImpl implements SettingsRepository {
           'max_reply_length': config.advanced.suggestReply.maxReplyLength,
         },
         'review_enabled': config.advanced.reviewEnabled,
+        // 工程上下文压缩参数（合并基底——全部叶子进基底，
+        // 否则任意用户覆盖会把其余字段静默丢回 Dart 默认）
+        'engineering_compaction': <String, dynamic>{
+          'output_reserve_tokens':
+              config.advanced.engineeringCompaction.outputReserveTokens,
+          'headroom_tokens':
+              config.advanced.engineeringCompaction.headroomTokens,
+          'retain_ratio': config.advanced.engineeringCompaction.retainRatio,
+          'retain_min_tokens':
+              config.advanced.engineeringCompaction.retainMinTokens,
+          'retain_max_tokens':
+              config.advanced.engineeringCompaction.retainMaxTokens,
+          'retain_max_window_ratio':
+              config.advanced.engineeringCompaction.retainMaxWindowRatio,
+          'chars_per_token':
+              config.advanced.engineeringCompaction.charsPerToken,
+          'oversized_result_chars':
+              config.advanced.engineeringCompaction.oversizedResultChars,
+          'degrade_head_chars':
+              config.advanced.engineeringCompaction.degradeHeadChars,
+        },
         // prompts 子节点：同 intermediate 约定，仅持久化用户显式覆盖
         'prompts': <String, dynamic>{},
       },

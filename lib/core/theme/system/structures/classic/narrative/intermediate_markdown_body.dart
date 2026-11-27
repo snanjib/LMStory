@@ -28,6 +28,7 @@ class IntermediateMarkdownBody extends StatefulWidget {
     required this.data,
     required this.isUser,
     this.fontScale = 1.0,
+    this.softLineBreak = false,
     this.onTapText,
     super.key,
   });
@@ -43,6 +44,8 @@ class IntermediateMarkdownBody extends StatefulWidget {
   /// 字体缩放比例（与宿主气泡共享）
   /// 应用到正文 narrativeBody（16px）/ bodyUi（15px）与引用的字号
   final double fontScale;
+
+  final bool softLineBreak;
 
   /// Called when the user taps non-link message text. Markdown's selectable
   /// text owns the gesture arena, so the outer bubble cannot observe this tap.
@@ -80,6 +83,7 @@ class _IntermediateMarkdownBodyState extends State<IntermediateMarkdownBody> {
   MarkdownBody? _cachedBody;
   String? _cachedData;
   bool? _cachedIsUser;
+  bool? _cachedSoftLineBreak;
   double? _cachedScale;
   Brightness? _cachedBrightness;
   String? _cachedStructureId;
@@ -94,12 +98,14 @@ class _IntermediateMarkdownBodyState extends State<IntermediateMarkdownBody> {
     if (_cachedBody == null ||
         widget.data != _cachedData ||
         widget.isUser != _cachedIsUser ||
+        widget.softLineBreak != _cachedSoftLineBreak ||
         widget.fontScale != _cachedScale ||
         brightness != _cachedBrightness ||
         tokens.structureId != _cachedStructureId ||
         tokens.paletteId != _cachedPaletteId) {
       _cachedData = widget.data;
       _cachedIsUser = widget.isUser;
+      _cachedSoftLineBreak = widget.softLineBreak;
       _cachedScale = widget.fontScale;
       _cachedBrightness = brightness;
       _cachedStructureId = tokens.structureId;
@@ -113,6 +119,7 @@ class _IntermediateMarkdownBodyState extends State<IntermediateMarkdownBody> {
     return MarkdownBody(
       data: widget.data,
       selectable: true,
+      softLineBreak: widget.softLineBreak,
       onTapLink: (text, href, title) => _onTapLink(context, text, href, title),
       onTapText: widget.onTapText,
       // 不传 extensionSet → 使用 ExtensionSet.none（CommonMark 基础语法）

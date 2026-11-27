@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/network/llm_adapters/sampling_params.dart';
 import 'package:lmstory/core/theme/simple/simple_theme.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
@@ -32,10 +33,11 @@ void main() {
     WidgetTester tester, {
     Map<String, dynamic>? providerOptions,
     LlmProtocol protocol = LlmProtocol.openaiCompatible,
+    Size viewSize = const Size(1200, 3000),
   }) async {
     // 页面分区较多，默认 600 高视口下 ListView 懒加载不会构建底部的
     // 高级参数与采样参数区；放大视口让整页进入构建范围。
-    tester.view.physicalSize = const Size(1200, 3000);
+    tester.view.physicalSize = viewSize;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -70,6 +72,93 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     return (container, repo);
   }
+
+  testWidgets('model IDs with look-alike dashes require confirmation',
+      (tester) async {
+    final (_, repo) = await pumpPage(tester);
+    final addModel = find.text('添加模型');
+    await tester.ensureVisible(addModel);
+    await tester.tap(addModel);
+    await tester.pumpAndSettle();
+
+    final id = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField && widget.decoration?.hintText == '输入模型 ID',
+    );
+    final save = find.widgetWithText(ElevatedButton, '保存');
+    await tester.enterText(id, 'deepsee－kchat');
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(repo.preset.cachedModels, isEmpty);
+    expect(find.textContaining('U+FF0D'), findsOneWidget);
+    await tester.tap(find.text('返回修改'));
+    await tester.pumpAndSettle();
+    expect(find.text('deepsee－kchat'), findsOneWidget);
+
+    await tester.enterText(id, 'test-provider/reader-v2:free');
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(
+      repo.preset.cachedModels.single.modelId,
+      'test-provider/reader-v2:free',
+    );
+
+    await tester.tap(addModel);
+    await tester.pumpAndSettle();
+    await tester.enterText(id, '测试模型−本地');
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('U+2212'), findsOneWidget);
+    await tester.tap(find.text('按原样保存'));
+    await tester.pumpAndSettle();
+    expect(repo.preset.cachedModels.last.modelId, '测试模型−本地');
+  });
+
+  testWidgets('model list credentials failure shows a lasting next step',
+      (tester) async {
+    final (_, repo) = await pumpPage(tester);
+    repo.listFailure = const AppHttpException(
+      'Model list request failed',
+      statusCode: 401,
+      responseBody:
+          '{"error":{"message":"loopback details","api_key":"synthetic-secret"}}',
+    );
+    final fetch = find.text('获取模型列表');
+    await tester.ensureVisible(fetch);
+    await tester.tap(fetch);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
+
+    expect(find.text('API Key 无效或无权限'), findsOneWidget);
+    expect(find.textContaining('检查或更正 API Key'), findsOneWidget);
+    expect(find.textContaining('loopback details'), findsNothing);
+    await tester.tap(find.text('详细信息'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('401'), findsOneWidget);
+    expect(find.textContaining('loopback details'), findsOneWidget);
+    expect(find.textContaining('synthetic-secret'), findsNothing);
+  });
+
+  testWidgets('API Key actions fit on a narrow screen with large English text',
+      (tester) async {
+    await tester.runAsync(() => LocaleSettings.setLocale(AppLocale.enUs));
+    addTearDown(() => LocaleSettings.setLocaleSync(AppLocale.zhCn));
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await pumpPage(tester, viewSize: const Size(320, 3000));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Test connection'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    final editKey = find.widgetWithText(TextButton, 'Edit').last;
+    await tester.ensureVisible(editKey);
+    await tester.tap(editKey);
+    await tester.pumpAndSettle();
+    expect(find.text('Enter API Key'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('已配置时折叠摘要显示条数，展开回填格式化 JSON', (tester) async {
     await pumpPage(
@@ -490,6 +579,7 @@ class _StubPresetRepo implements ApiPresetRepository {
   _StubPresetRepo(this.preset);
 
   ApiPreset preset;
+  AppHttpException? listFailure;
 
   /// 置 true 时 updatePreset 抛异常（模拟 DB 写入失败）
   bool throwOnUpdate = false;
@@ -499,6 +589,18 @@ class _StubPresetRepo implements ApiPresetRepository {
 
   @override
   Future<ApiPreset> getPreset(String presetId) async => preset;
+
+  @override
+  Future<List<ModelInfo>> fetchModels(String presetId) async {
+    final failure = listFailure;
+    if (failure != null) throw failure;
+    return const [];
+  }
+
+  @override
+  Future<void> updateModelList(String presetId, List<ModelInfo> models) async {
+    preset = preset.copyWith(cachedModels: models);
+  }
 
   @override
   Future<ApiPreset> updatePreset(

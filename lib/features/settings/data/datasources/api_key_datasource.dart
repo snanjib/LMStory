@@ -18,4 +18,13 @@ class ApiKeyDatasource {
 
   Future<void> delete(String presetId) =>
       _secureStorage.delete('$_keyPrefix$presetId');
+
+  Future<String?> readForImport(String presetId) =>
+      _secureStorage.readStrict('$_keyPrefix$presetId');
+
+  Future<void> saveForImport(String presetId, String value) =>
+      _secureStorage.writeStrict('$_keyPrefix$presetId', value);
+
+  Future<void> deleteForImport(String presetId) =>
+      _secureStorage.deleteStrict('$_keyPrefix$presetId');
 }

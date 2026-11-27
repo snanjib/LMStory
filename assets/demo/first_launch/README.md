@@ -6,7 +6,7 @@
 assets/demo/first_launch/zh-CN.json                       （默认候选 glm-5.3）
 assets/demo/first_launch/zh-CN/<model>.json               （多仿真候选包）
 assets/demo/first_launch/catalog.json                     （候选目录）
-assets/demo/first_launch/en-US.json                       （待采集工作包 C 交付）
+assets/demo/first_launch/en-US-sample.json                （英文离线故事样例）
 ```
 
 ## 多仿真候选（2026-11-07 起）
@@ -23,8 +23,9 @@ assets/demo/first_launch/en-US.json                       （待采集工作包 
 | `glm-5.3-flash` | glm-5.3-flash | `demo-narrator-glm-5.3-flash` | zhipu | `zh-CN/glm-5.3-flash.json` |
 | `kimi-k3.1-pro` | kimi-k3.1-pro | `demo-narrator-kimi-k3.1-pro` | conservativeRelay | `zh-CN/kimi-k3.1-pro.json` |
 | `mimo-v2.6-flash` | mimo-v2.6-flash | `demo-narrator-mimo-v2.6-flash` | conservativeRelay | `zh-CN/mimo-v2.6-flash.json` |
+| `en-us-story-sample` | 本地创作样例 | `demo-narrator-en-sample` | conservativeRelay | `en-US-sample.json` |
 
-- 全部候选 zh-CN、`formatVersion=2`、`kind=official`；五包共享同一固定
+- 五个简中候选使用 `formatVersion=2`、`kind=official` 并共享同一固定
   首问（promptHash `070bde0187451cff`）。
 - 候选包字节 SHA-256 登记在 `catalog.json` 的 `packSha256`，加载器逐字节
   对账，资产漂移按候选局部不可用处理。
@@ -32,8 +33,7 @@ assets/demo/first_launch/en-US.json                       （待采集工作包 
   embed 行合法），记忆库引导按真实沉淀定向，不为零实体候选造实体。
 - 虚拟模型 id 全部在 `demo-narrator-*` 命名空间内，仅存在于演示库虚拟
   供应商缓存清单；交接时按列全量清理，不代表真实供应商配置。
-- 英文入口（`en-US`）不提供多候选——候选按当前 locale 真正可用资产生成，
-  不把中文包冒充英文录制。
+- 英文入口有一个 `kind=sample` 包。向导显示 English story sample。目录按语言筛选，英文选择该语言下唯一的样例。
 
 ## 加入一个新候选（流程）
 
@@ -62,7 +62,7 @@ flutter test test/features/demo/replay/five_pack_full_round_test.dart
 `requiresToolStreamFlag=true`）。
 **`zh-CN/` 四份多模型候选包**来自 2026-11-06/07 多模型补充采集批次
 （已验收 candidate-1），回放画像与来源模型真实对账。
-`en-US.json` 待后续英文轮次采集交付。
+`en-US-sample.json` 是本地创作的英文开场及合成回放。它记录一条经历并提交一轮完整英文正文，使用与简中相同的模板指纹和工具集校验。数据包没有向量素材。
 
 ## 格式与校验
 

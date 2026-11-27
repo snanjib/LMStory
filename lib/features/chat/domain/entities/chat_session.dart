@@ -68,6 +68,8 @@ class ChatSession {
     // 与所选角色卡 id（物化时应用、列值留档）。
     this.characterInitPrompt,
     this.characterInitCardId,
+    // 工程上下文模式（导演实验）：null/false = 关闭态，true = 开启态。
+    this.engineeringContextEnabled,
   });
 
   /// 会话唯一标识
@@ -324,6 +326,17 @@ class ChatSession {
   /// 持久化：`chat_sessions.character_init_card_id`（repairSchema 开库补列）。
   final String? characterInitCardId;
 
+  /// 工程上下文模式开关（导演模式实验，会话级默认关闭）。
+  ///
+  /// null/false = 关闭态（旧装配与日志保留策略，与基线行为一致）；
+  /// true = 开启态（模型可见表面切换为事件账本纪元投影，事件日志不再
+  /// 滚动裁剪）。true 必须与账本内有效 `mode/epoch` 纪元共存——开关切换
+  /// 由控制器专用原子路径完成（纪元事件+捕获+本列同库单事务），不经
+  /// 通用 updateSession。
+  /// 持久化：`chat_sessions.engineering_context_enabled`（repairSchema
+  /// 开库补列）。
+  final bool? engineeringContextEnabled;
+
   /// Sentinel value used by [copyWith] to distinguish "not provided" from
   /// "explicitly null" for nullable fields.
   static const _sentinel = Object();
@@ -377,6 +390,7 @@ class ChatSession {
     Object? retrievalOverrides = _sentinel,
     Object? characterInitPrompt = _sentinel,
     Object? characterInitCardId = _sentinel,
+    Object? engineeringContextEnabled = _sentinel,
   }) {
     return ChatSession(
       sessionId:
@@ -488,6 +502,9 @@ class ChatSession {
       characterInitCardId: characterInitCardId == _sentinel
           ? this.characterInitCardId
           : characterInitCardId as String?,
+      engineeringContextEnabled: engineeringContextEnabled == _sentinel
+          ? this.engineeringContextEnabled
+          : engineeringContextEnabled as bool?,
     );
   }
 

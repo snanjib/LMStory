@@ -32,6 +32,31 @@ class OpenAiAdapter implements LlmProtocolAdapter {
   OpenAiAdapter({SseParser Function()? sseParserFactory})
       : _sseParserFactory = sseParserFactory ?? SseParser.new;
 
+  /// 最终 wire 输出上限（单源）：基础钳制（clampToModel；0/null=不设置
+  /// 应用层上限）+ providerOptions.extra_body 末位覆盖——extra_body 在
+  /// [buildRequestBody] 里于基础字段之后展开，能覆盖 max_tokens（o 系
+  /// 为 max_completion_tokens），预算面必须看到同一结果。返回 null=
+  /// 本次请求不携带输出上限（API 未指定）。
+  static int? effectiveOutputTokens({
+    required String modelId,
+    required int? configured,
+    required int? modelMaxOutputTokens,
+    Map<String, dynamic>? providerOptions,
+  }) {
+    final base =
+        OutputTokenPolicy.clampToModel(configured, modelMaxOutputTokens);
+    final effective = base != null && base > 0 ? base : null;
+    final extra = providerOptions?['extra_body'];
+    if (extra is Map<String, dynamic>) {
+      final key = isOpenAIOSeriesModel(modelId)
+          ? 'max_completion_tokens'
+          : 'max_tokens';
+      final override = extra[key];
+      if (override is int && override > 0) return override;
+    }
+    return effective;
+  }
+
   final SseParser Function() _sseParserFactory;
 
   @override
@@ -70,9 +95,13 @@ class OpenAiAdapter implements LlmProtocolAdapter {
   }) {
     final format = request.responseFormat;
     final modelId = request.modelId;
-    final maxTokens = OutputTokenPolicy.clampToModel(
-      request.maxTokens,
-      request.modelMaxOutputTokens,
+    // 输出上限单源解析（基础钳制 + extra_body 末位覆盖，与下方展开
+    // 顺序一致）；effectiveOutputTokens 与预算面共用
+    final maxTokens = effectiveOutputTokens(
+      modelId: modelId,
+      configured: request.maxTokens,
+      modelMaxOutputTokens: request.modelMaxOutputTokens,
+      providerOptions: request.providerOptions,
     );
 
     // o-series 模型参数过滤（DOC-12 §5.4.1 + §11 风险表）
@@ -251,25 +280,22 @@ class OpenAiAdapter implements LlmProtocolAdapter {
 
   LlmUsage? _toLlmUsage(Object? raw) {
     if (raw == null) return null;
-    if (raw is SseUsage) {
-      return LlmUsage(
-        promptTokens: raw.promptTokens,
-        completionTokens: raw.completionTokens,
-        totalTokens: raw.totalTokens,
-        cacheReadTokens: raw.cacheReadTokens,
-      );
-    }
-    if (raw is Map<String, dynamic>) {
-      final promptDetails = raw['prompt_tokens_details'];
-      return LlmUsage(
-        promptTokens: raw['prompt_tokens'] as int?,
-        completionTokens: raw['completion_tokens'] as int?,
-        totalTokens: raw['total_tokens'] as int?,
-        cacheReadTokens: promptDetails is Map<String, dynamic>
-            ? promptDetails['cached_tokens'] as int?
-            : null,
-      );
-    }
-    return null;
+    final usage = raw is SseUsage
+        ? raw
+        : raw is Map<String, dynamic>
+            ? SseUsage.fromJson(raw)
+            : null;
+    if (usage == null) return null;
+    // OpenAI 兼容协议的 prompt_tokens 已是完整输入（含缓存命中部分），
+    // totalInputTokens 直接取 prompt；命中率分母不得再加 cacheRead。
+    return LlmUsage(
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+      totalInputTokens: usage.promptTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      reasoningTokens: usage.reasoningTokens,
+      warnings: usage.warnings,
+    );
   }
 }

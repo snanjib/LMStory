@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/advanced_config.dart';
+import 'package:lmstory/core/config/network_config.dart';
 import 'package:lmstory/features/advanced/domain/entities/director_round_tuning.dart';
 import 'package:lmstory/features/advanced/domain/entities/narrative_pacing.dart';
 
@@ -16,6 +17,13 @@ void main() {
     expect(t.subagentMaxSteps, 6);
     expect(t.subagentMaxDuration, const Duration(minutes: 2));
     expect(t.globalTools, isEmpty);
+    expect(t.foreshadowCheckInterval, 8);
+    expect(t.maintenanceGapInterval, 7);
+    expect(t.maintenanceNudgeCooldown, 4);
+    expect(t.majorReviewInterval, 50);
+    expect(t.maintenanceExtraSteps, 6);
+    expect(t.recentActiveEntitiesWindow, 15);
+    expect(t.recentActiveEntitiesCap, 10);
   });
 
   test('fromConfig 读取自定义值', () {
@@ -33,6 +41,15 @@ void main() {
           approvalTimeoutMinutes: 4,
         ),
         subagent: AdvancedSubagentConfig(maxSteps: 3, maxDurationMinutes: 6),
+        harness: AdvancedHarnessConfig(
+          foreshadowCheckInterval: 4,
+          maintenanceGapInterval: 9,
+          maintenanceNudgeCooldown: 5,
+          majorReviewInterval: 40,
+          maintenanceExtraSteps: 8,
+          recentActiveEntitiesWindow: 20,
+          recentActiveEntitiesCap: 12,
+        ),
         tools: {'spawn': 'deny'},
       ),
     );
@@ -46,6 +63,24 @@ void main() {
     expect(t.subagentMaxSteps, 3);
     expect(t.subagentMaxDuration, const Duration(minutes: 6));
     expect(t.globalTools, {'spawn': 'deny'});
+    expect(t.foreshadowCheckInterval, 4);
+    expect(t.maintenanceGapInterval, 9);
+    expect(t.maintenanceNudgeCooldown, 5);
+    expect(t.majorReviewInterval, 40);
+    expect(t.maintenanceExtraSteps, 8);
+    expect(t.recentActiveEntitiesWindow, 20);
+    expect(t.recentActiveEntitiesCap, 12);
+
+    final withNet = t.withNetwork(
+      const NetworkConfig(directorResponseStartTimeoutMs: 12000),
+    );
+    expect(withNet.responseStartTimeout, const Duration(milliseconds: 12000));
+    expect(withNet.maintenanceGapInterval, 9);
+    expect(withNet.maintenanceNudgeCooldown, 5);
+    expect(withNet.majorReviewInterval, 40);
+    expect(withNet.maintenanceExtraSteps, 8);
+    expect(withNet.recentActiveEntitiesWindow, 20);
+    expect(withNet.recentActiveEntitiesCap, 12);
   });
 
   test('fromConfig 携带全局节奏档（缺省 balanced，会话列覆盖的前置）', () {

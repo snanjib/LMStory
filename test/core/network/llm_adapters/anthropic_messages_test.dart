@@ -205,6 +205,56 @@ void main() {
     });
   });
 
+  // HAR-02：空 assistant（无正文无 tool_use）出站保形——Anthropic 契约
+  // 要求 assistant content 为非空数组，空数组会被 400 拒绝或消息被吞；
+  // 置占位空文本 block 保形状不丢消息。
+  group('HAR-02 空 assistant 出站保形', () {
+    test('空 assistant → content 为非空占位 text block（消息不丢）', () {
+      final body = AnthropicAdapter().buildRequestBody(
+        buildRequest([
+          {'role': 'user', 'content': '输入'},
+          {'role': 'assistant', 'content': ''},
+          {'role': 'user', 'content': '继续'},
+        ]),
+        stream: true,
+      );
+
+      final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+      expect(messages, hasLength(3), reason: '空 assistant 消息不得被丢弃');
+      expect(messages[1]['role'], 'assistant');
+      final content = messages[1]['content'] as List;
+      expect(content, isNotEmpty, reason: 'content 数组必须非空（Anthropic 契约）');
+      // 占位 text block（可能被适配器附加 cache_control 断点标记）
+      final block = content.single as Map<String, dynamic>;
+      expect(block['type'], 'text');
+      expect(block['text'], '');
+    });
+
+    test('有 tool_use 的 assistant 不受影响（无占位注入）', () {
+      final body = AnthropicAdapter().buildRequestBody(
+        buildRequest([
+          {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [
+              {
+                'id': 'c1',
+                'type': 'function',
+                'function': {'name': 'search', 'arguments': '{}'},
+              },
+            ],
+          },
+        ]),
+        stream: true,
+      );
+
+      final content = ((body['messages'] as List).first
+          as Map<String, dynamic>)['content'] as List;
+      expect(content, hasLength(1));
+      expect((content.single as Map<String, dynamic>)['type'], 'tool_use');
+    });
+  });
+
   group('非流式 parseResponse 上抛 finishReason', () {
     Map<String, dynamic> response(String? stopReason) => {
           'id': 'msg_1',
@@ -601,6 +651,54 @@ void main() {
         (jpgContent.single as Map<String, dynamic>)['source'],
         containsPair('media_type', 'image/jpeg'),
       );
+    });
+  });
+
+  group('tool_result 错误状态映射', () {
+    test('is_error=true 时在 tool_result block 中输出 is_error: true', () {
+      final body = AnthropicAdapter().buildRequestBody(
+        buildRequest([
+          {'role': 'user', 'content': '更新设定'},
+          {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [
+              {
+                'id': 'toolu_1',
+                'type': 'function',
+                'function': {'name': 'update_facts', 'arguments': '{}'},
+              },
+            ],
+          },
+          {
+            'role': 'tool',
+            'tool_call_id': 'toolu_1',
+            'content': '缺少必填字段 confidence',
+            'is_error': true,
+          },
+          {
+            'role': 'tool',
+            'tool_call_id': 'toolu_2',
+            'content': '已查询',
+          },
+        ]),
+        stream: false,
+      );
+
+      final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+      final errorBlock =
+          (messages[2]['content'] as List).single as Map<String, dynamic>;
+      expect(errorBlock['type'], 'tool_result');
+      expect(errorBlock['tool_use_id'], 'toolu_1');
+      expect(errorBlock['content'], '缺少必填字段 confidence');
+      expect(errorBlock['is_error'], isTrue);
+
+      final okBlock =
+          (messages[3]['content'] as List).single as Map<String, dynamic>;
+      expect(okBlock['type'], 'tool_result');
+      expect(okBlock['tool_use_id'], 'toolu_2');
+      expect(okBlock['content'], '已查询');
+      expect(okBlock.containsKey('is_error'), isFalse);
     });
   });
 }

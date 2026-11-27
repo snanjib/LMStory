@@ -1,5 +1,7 @@
+import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_memory_changes_snapshot.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_memory_history.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/memory/domain/entities/force_inject_target.dart';
@@ -37,6 +39,7 @@ class FakeFactualRepository implements FactualRepository {
   final List<FactualMemoryHistory> histories = [];
   final List<({String sessionId, int fromTurn})> deletedFactsByTurnsCalls = [];
   final Map<String, ForceInjectTarget> forceInjectUpdates = {};
+  final Map<String, int> updatedImportances = {};
 
   /// searchEntitiesByText 调用记录（可达性兜底测试断言用）
   final List<({List<String> terms, bool includeArchived})> searchTextCalls = [];
@@ -53,6 +56,29 @@ class FakeFactualRepository implements FactualRepository {
     required int fromTurn,
   }) async =>
       recentUpdateCounts[entityId] ?? 0;
+
+  @override
+  Future<FactualMemoryChangesSnapshot> readMemoryChangesSnapshot(
+    String sessionId,
+  ) async {
+    final entities = entitiesById.values
+        .where((entity) => entity.sessionId == sessionId)
+        .toList();
+    final attributes = [
+      for (final rows in attributesByKey.values)
+        for (final attribute in rows)
+          if (attribute.sessionId == sessionId) attribute,
+    ];
+    return FactualMemoryChangesSnapshot(
+      entities: entities,
+      attributes: attributes,
+      history: histories,
+      currentFactsChangesByTurn: const {},
+      currentVariantByTurn: const {},
+      storyRoundsByTurn: const {},
+      storyRevision: '',
+    );
+  }
 
   @override
   Future<FactualEntity> createEntity(FactualEntity entity) async {
@@ -248,8 +274,183 @@ class FakeFactualRepository implements FactualRepository {
           : entitiesById.values.where((e) => !e.isArchived).toList();
 
   @override
+  Future<FactualEntityType?> getEntityTypeInSession(
+    String sessionId,
+    String entityId,
+  ) async {
+    final entity = entitiesById[entityId];
+    return entity?.sessionId == sessionId ? entity?.type : null;
+  }
+
+  @override
   Future<FactualEntity?> getEntityById(String entityId) async =>
       entitiesById[entityId];
+
+  @override
+  Future<List<FactualEntity>> getEntitiesByIds(
+    String sessionId,
+    List<String> entityIds,
+  ) async {
+    final seen = <String>{};
+    final result = <FactualEntity>[];
+    for (final id in entityIds) {
+      if (id.isEmpty || !seen.add(id)) continue;
+      final entity = entitiesById[id];
+      if (entity != null && entity.sessionId == sessionId) {
+        result.add(entity);
+      }
+    }
+    return result;
+  }
+
+  @override
+  Future<FactualEntityCatalogPage> listEntityCatalog(
+    String sessionId, {
+    FactualEntityType? entityType,
+    String sourceFilter = 'dynamic',
+    String sort = 'stale_first',
+    int? updatedBeforeTurn,
+    int? updatedAfterTurn,
+    bool includeArchived = false,
+    int limit = 25,
+    int offset = 0,
+  }) async {
+    final effectiveLimit = limit.clamp(1, 50);
+    final effectiveOffset = offset < 0 ? 0 : offset;
+    final sessionEntities =
+        entitiesById.values.where((e) => e.sessionId == sessionId).toList();
+
+    var activeCount = 0;
+    var archivedCount = 0;
+    var dynamicCount = 0;
+    var staticWorldbookCount = 0;
+    var staticCardCount = 0;
+    final typeCounts = <FactualEntityType, int>{
+      for (final type in FactualEntityType.values) type: 0,
+    };
+    for (final e in sessionEntities) {
+      if (e.isArchived) {
+        archivedCount++;
+        continue;
+      }
+      activeCount++;
+      typeCounts[e.type] = (typeCounts[e.type] ?? 0) + 1;
+      if (e.source == FactualSource.auto || e.updatedTurn != null) {
+        dynamicCount++;
+      } else if (e.source == FactualSource.worldbook) {
+        staticWorldbookCount++;
+      } else if (e.source == FactualSource.card) {
+        staticCardCount++;
+      }
+    }
+
+    final filtered = sessionEntities.where((e) {
+      if (!includeArchived && e.isArchived) return false;
+      if (entityType != null && e.type != entityType) return false;
+      switch (sourceFilter) {
+        case 'dynamic':
+          if (e.source != FactualSource.auto && e.updatedTurn == null) {
+            return false;
+          }
+        case 'auto':
+          if (e.source != FactualSource.auto) return false;
+        case 'worldbook':
+          if (e.source != FactualSource.worldbook) return false;
+        case 'card':
+          if (e.source != FactualSource.card) return false;
+        case 'all':
+          break;
+        default:
+          throw ArgumentError.value(sourceFilter, 'sourceFilter');
+      }
+      final effectiveTurn = e.updatedTurn ?? e.createdTurn;
+      if (updatedBeforeTurn != null && effectiveTurn >= updatedBeforeTurn) {
+        return false;
+      }
+      if (updatedAfterTurn != null && effectiveTurn <= updatedAfterTurn) {
+        return false;
+      }
+      return true;
+    }).toList()
+      ..sort((a, b) {
+        final turnA = a.updatedTurn ?? a.createdTurn;
+        final turnB = b.updatedTurn ?? b.createdTurn;
+        switch (sort) {
+          case 'stale_first':
+            final byImp = b.importance.compareTo(a.importance);
+            if (byImp != 0) return byImp;
+            final byTurn = turnA.compareTo(turnB);
+            if (byTurn != 0) return byTurn;
+            final byCreated = a.createdAt.compareTo(b.createdAt);
+            return byCreated != 0
+                ? byCreated
+                : a.entityId.compareTo(b.entityId);
+          case 'recently_updated':
+            final byTurn = turnB.compareTo(turnA);
+            if (byTurn != 0) return byTurn;
+            final byUpdated =
+                (b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+                    .compareTo(
+              a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+            );
+            if (byUpdated != 0) return byUpdated;
+            final byCreated = b.createdAt.compareTo(a.createdAt);
+            return byCreated != 0
+                ? byCreated
+                : a.entityId.compareTo(b.entityId);
+          case 'importance_desc':
+            final byImp = b.importance.compareTo(a.importance);
+            if (byImp != 0) return byImp;
+            final byTurn = turnB.compareTo(turnA);
+            if (byTurn != 0) return byTurn;
+            final byCreated = a.createdAt.compareTo(b.createdAt);
+            return byCreated != 0
+                ? byCreated
+                : a.entityId.compareTo(b.entityId);
+          case 'created_desc':
+            final byCreatedTurn = b.createdTurn.compareTo(a.createdTurn);
+            if (byCreatedTurn != 0) return byCreatedTurn;
+            final byCreated = b.createdAt.compareTo(a.createdAt);
+            return byCreated != 0
+                ? byCreated
+                : a.entityId.compareTo(b.entityId);
+          default:
+            throw ArgumentError.value(sort, 'sort');
+        }
+      });
+
+    final paged = filtered.skip(effectiveOffset).take(effectiveLimit).toList();
+    int attrCountFor(String entityId) {
+      var count = 0;
+      for (final entry in attributesByKey.entries) {
+        if (entry.key.$1 == entityId) {
+          count += entry.value.where((a) => a.sessionId == sessionId).length;
+        }
+      }
+      return count;
+    }
+
+    return FactualEntityCatalogPage(
+      items: [
+        for (final e in paged)
+          FactualEntityCatalogItem(
+            entity: e,
+            attributeCount: attrCountFor(e.entityId),
+          ),
+      ],
+      totalMatched: filtered.length,
+      limit: effectiveLimit,
+      offset: effectiveOffset,
+      summary: FactualEntityCatalogSummary(
+        activeCount: activeCount,
+        archivedCount: archivedCount,
+        dynamicCount: dynamicCount,
+        staticWorldbookCount: staticWorldbookCount,
+        staticCardCount: staticCardCount,
+        typeCounts: typeCounts,
+      ),
+    );
+  }
 
   @override
   Future<List<FactualEntity>> getKeyEntities(
@@ -323,6 +524,38 @@ class FakeFactualRepository implements FactualRepository {
     int updatedTurn,
   ) async {
     updatedAliases[entityId] = aliases;
+  }
+
+  @override
+  Future<void> updateEntityImportance(
+    String entityId,
+    int importance,
+    int updatedTurn,
+  ) async {
+    RangeError.checkValueInInterval(importance, 1, 5, 'importance');
+    final entity = entitiesById[entityId];
+    if (entity == null) {
+      throw ModelNotFoundException(entityId);
+    }
+    entitiesById[entityId] = FactualEntity(
+      entityId: entity.entityId,
+      sessionId: entity.sessionId,
+      type: entity.type,
+      primaryName: entity.primaryName,
+      aliases: entity.aliases,
+      importance: importance,
+      createdTurn: entity.createdTurn,
+      createdAt: entity.createdAt,
+      category: entity.category,
+      isArchived: entity.isArchived,
+      source: entity.source,
+      sourceRef: entity.sourceRef,
+      forceInject: entity.forceInject,
+      injectionDisabled: entity.injectionDisabled,
+      updatedAt: DateTime.now(),
+      updatedTurn: updatedTurn,
+    );
+    updatedImportances[entityId] = importance;
   }
 
   @override

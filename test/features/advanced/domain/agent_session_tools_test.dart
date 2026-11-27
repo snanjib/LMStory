@@ -6,13 +6,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/agent/agent_cancellation.dart';
 import 'package:lmstory/core/agent/agent_llm_gateway.dart';
 import 'package:lmstory/core/agent/agent_tool.dart';
+import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_round_draft.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/domain/entities/retrieval_profile.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_approval_composer.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_session_tools.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_story_reader.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_style_lint.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_subagent.dart';
+import 'package:lmstory/features/advanced/domain/services/calc_agent_tools.dart';
 import 'package:lmstory/features/advanced/domain/services/search_story_text_tool.dart';
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
@@ -33,6 +37,7 @@ class _FakeFactualRepository implements FactualRepository {
     this.keyEntities = const [],
     this.entities = const [],
     this.attributes = const [],
+    this.recentUpdatesByEntity = const {},
   });
 
   /// 终审闸门 A 的关键实体返回值
@@ -46,6 +51,9 @@ class _FakeFactualRepository implements FactualRepository {
 
   /// 属性池（getAttributes 按 entityId 过滤返回）
   final List<FactualAttribute> attributes;
+
+  /// 按 entityId 预设的近 3 轮更新计数（预检频控测试用）
+  final Map<String, int> recentUpdatesByEntity;
 
   /// searchEntitiesByText 调用记录（可达性兜底断言用）
   final List<List<String>> textSearchCalls = [];
@@ -149,6 +157,142 @@ class _FakeFactualRepository implements FactualRepository {
           .toList();
 
   @override
+  Future<int> countRecentUpdates(
+    String entityId, {
+    required int fromTurn,
+  }) async =>
+      recentUpdatesByEntity[entityId] ?? 0;
+
+  @override
+  Future<List<FactualEntity>> getEntitiesByIds(
+    String sessionId,
+    List<String> entityIds,
+  ) async {
+    final byId = {
+      for (final e in [...keyEntities, ...entities])
+        if (e.sessionId == sessionId) e.entityId: e,
+    };
+    final result = <FactualEntity>[];
+    final seen = <String>{};
+    for (final id in entityIds) {
+      if (!seen.add(id)) continue;
+      final entity = byId[id];
+      if (entity != null) result.add(entity);
+    }
+    return result;
+  }
+
+  @override
+  Future<FactualEntityCatalogPage> listEntityCatalog(
+    String sessionId, {
+    FactualEntityType? entityType,
+    String sourceFilter = 'dynamic',
+    String sort = 'stale_first',
+    int? updatedBeforeTurn,
+    int? updatedAfterTurn,
+    bool includeArchived = false,
+    int limit = 25,
+    int offset = 0,
+  }) async {
+    final pool = <String, FactualEntity>{
+      for (final e in [...keyEntities, ...entities])
+        if (e.sessionId == sessionId) e.entityId: e,
+    }.values.toList();
+    final active = pool.where((e) => !e.isArchived).toList();
+    final archivedCount = pool.length - active.length;
+    final dynamicCount = active
+        .where((e) => e.source == FactualSource.auto || e.updatedTurn != null)
+        .length;
+    final staticWorldbookCount = active
+        .where(
+          (e) => e.source == FactualSource.worldbook && e.updatedTurn == null,
+        )
+        .length;
+    final staticCardCount = active
+        .where((e) => e.source == FactualSource.card && e.updatedTurn == null)
+        .length;
+    final typeCounts = <FactualEntityType, int>{};
+    for (final e in active) {
+      typeCounts[e.type] = (typeCounts[e.type] ?? 0) + 1;
+    }
+
+    final filtered = pool.where((e) {
+      if (!includeArchived && e.isArchived) return false;
+      if (entityType != null && e.type != entityType) return false;
+      switch (sourceFilter) {
+        case 'dynamic':
+          if (e.source != FactualSource.auto && e.updatedTurn == null) {
+            return false;
+          }
+        case 'auto':
+          if (e.source != FactualSource.auto) return false;
+        case 'worldbook':
+          if (e.source != FactualSource.worldbook) return false;
+        case 'card':
+          if (e.source != FactualSource.card) return false;
+        default:
+          break;
+      }
+      final activeTurn = e.updatedTurn ?? e.createdTurn;
+      if (updatedBeforeTurn != null && activeTurn >= updatedBeforeTurn) {
+        return false;
+      }
+      if (updatedAfterTurn != null && activeTurn <= updatedAfterTurn) {
+        return false;
+      }
+      return true;
+    }).toList()
+      ..sort((a, b) {
+        final turnA = a.updatedTurn ?? a.createdTurn;
+        final turnB = b.updatedTurn ?? b.createdTurn;
+        switch (sort) {
+          case 'recently_updated':
+            return turnB.compareTo(turnA);
+          case 'importance_desc':
+            return b.importance.compareTo(a.importance);
+          case 'created_desc':
+            return b.createdTurn.compareTo(a.createdTurn);
+          default:
+            final byImp = b.importance.compareTo(a.importance);
+            if (byImp != 0) return byImp;
+            return turnA.compareTo(turnB);
+        }
+      });
+
+    final cappedLimit = limit.clamp(1, 50);
+    final safeOffset = offset < 0 ? 0 : offset;
+    final pageEntities = filtered.skip(safeOffset).take(cappedLimit).toList();
+    return FactualEntityCatalogPage(
+      items: [
+        for (final e in pageEntities)
+          FactualEntityCatalogItem(
+            entity: e,
+            attributeCount:
+                attributes.where((a) => a.entityId == e.entityId).length,
+          ),
+      ],
+      totalMatched: filtered.length,
+      limit: cappedLimit,
+      offset: safeOffset,
+      summary: FactualEntityCatalogSummary(
+        activeCount: active.length,
+        archivedCount: archivedCount,
+        dynamicCount: dynamicCount,
+        staticWorldbookCount: staticWorldbookCount,
+        staticCardCount: staticCardCount,
+        typeCounts: typeCounts,
+      ),
+    );
+  }
+
+  @override
+  Future<void> updateEntityImportance(
+    String entityId,
+    int importance,
+    int updatedTurn,
+  ) async {}
+
+  @override
   Never noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
@@ -195,6 +339,13 @@ class _FakeExperienceRepository implements ExperienceRepository {
   int? lastTopK;
   double? lastVectorScoreThreshold;
 
+  // MEM-12a 值锁定：捕获最近一次多通道检索的全部排序参数（防漂移）
+  double? lastFts5Weight;
+  double? lastVectorWeight;
+  int? lastKeyEventThreshold;
+  double? lastKeyEventBoost;
+  double? lastNormalizationEpsilon;
+
   @override
   Future<List<ExperientialMemory>> searchExperiencesBySubstring(
     String sessionId,
@@ -225,6 +376,11 @@ class _FakeExperienceRepository implements ExperienceRepository {
   }) async {
     lastTopK = topK;
     lastVectorScoreThreshold = vectorScoreThreshold;
+    lastFts5Weight = fts5Weight;
+    lastVectorWeight = vectorWeight;
+    lastKeyEventThreshold = keyEventThreshold;
+    lastKeyEventBoost = keyEventBoost;
+    lastNormalizationEpsilon = normalizationEpsilon;
     final error = searchError;
     if (error != null) throw error;
     return hits;
@@ -276,12 +432,14 @@ AgentToolDeps _deps({
   List<FactualEntity> keyEntities = const [],
   List<FactualEntity> entities = const [],
   List<FactualAttribute> attributes = const [],
+  Map<String, int> recentUpdatesByEntity = const {},
   Future<String> Function(AgentRoundDraft)? commit,
   String? askAnswer,
   String Function()? roundUserInput,
   int zeroMemoryRoundStreak = 0,
   StoryAnchor? Function()? currentAnchor,
   int foreshadowCheckInterval = 8,
+  int maintenanceExtraSteps = 6,
   Future<Float32List?> Function(String query)? embedQuery,
   RetrievalProfile? retrievalProfile,
 }) {
@@ -292,6 +450,7 @@ AgentToolDeps _deps({
       keyEntities: keyEntities,
       entities: entities,
       attributes: attributes,
+      recentUpdatesByEntity: recentUpdatesByEntity,
     ),
     experienceRepository: _FakeExperienceRepository(
       searchHits,
@@ -306,6 +465,7 @@ AgentToolDeps _deps({
     zeroMemoryRoundStreak: zeroMemoryRoundStreak,
     currentAnchor: currentAnchor,
     foreshadowCheckInterval: foreshadowCheckInterval,
+    maintenanceExtraSteps: maintenanceExtraSteps,
     embedQuery: embedQuery,
     retrievalProfile: retrievalProfile,
   );
@@ -345,6 +505,85 @@ FactualEntity _entity(
     );
 
 void main() {
+  test('approval projects the same inputs accepted by the write tool',
+      () async {
+    const reason = '  身份伪装需要新称呼  ';
+    final actor = _entity('林晚');
+    final archive = _entity('被收起的情报员');
+    final draft = AgentRoundDraft(turnNumber: 2);
+    final deps = _deps(draft: draft, entities: [actor, archive]);
+    final arguments = <String, dynamic>{
+      'deltas': [
+        {
+          'action': 'archive_entity',
+          'entity_id': archive.entityId,
+          'reason': '离开港口',
+          'confidence': 5,
+        },
+        {
+          'action': 'update_attr',
+          'entity_id': actor.entityId,
+          'attr_key': 'personality',
+          'value': '冷静',
+          'confidence': 5,
+        },
+        jsonEncode({
+          'action': 'update',
+          'primaryName': actor.primaryName,
+          'attrKey': 'name',
+          'value': '守碑人',
+          'reason': reason,
+          'confidence': '5',
+        }),
+        {'action': 'unsupported', 'entity_id': actor.entityId, 'confidence': 5},
+      ],
+    };
+    final tool = UpdateFactsTool(deps);
+    final changes = await AgentApprovalComposer(
+      repository: deps.factualRepository,
+      sessionId: deps.sessionId,
+      draftTurnNumber: draft.turnNumber,
+      currentAnchor: null,
+      draftAnchor: null,
+      draftEventSummary: null,
+    ).compose(
+      ToolExecutionRequest(
+        callId: 'c1',
+        toolName: tool.name,
+        arguments: arguments,
+        permission: AgentToolPermission.write,
+      ),
+    );
+
+    final result = await tool.invoke(_invocation, arguments);
+    expect(result.isError, isTrue);
+    expect(result.metadata?['accepted'], 3);
+    expect(result.metadata?['rejected'], 1);
+    expect(
+      draft.factsDeltas.map((delta) => delta.entityId),
+      [archive.entityId, actor.entityId, null],
+    );
+    expect(
+      draft.factsDeltas.map((delta) => delta.action),
+      [FactAction.archiveEntity, FactAction.updateAttr, FactAction.updateAttr],
+    );
+    expect(
+      changes.map((change) => change.kind),
+      [
+        ApprovalChangeKind.archiveEntity,
+        ApprovalChangeKind.updateAttr,
+        ApprovalChangeKind.addAlias,
+      ],
+    );
+    expect(changes.every((change) => change.effective), isTrue);
+    expect(changes.first.entityName, archive.primaryName);
+    expect(changes[1].attrKey, 'personality');
+    expect(changes[1].after, draft.factsDeltas[1].value);
+    expect(changes.last.after, '守碑人');
+    expect(changes.last.reason, reason);
+    expect(draft.factsDeltas.last.reason, reason.trim());
+  });
+
   test('正文搜索计入交稿前的检索覆盖', () async {
     final draft = AgentRoundDraft(turnNumber: 3)
       ..eventSummary = _eventSummary()
@@ -432,6 +671,124 @@ void main() {
       // 写工具成功路径登记 calledTools（升级闸门判据，
       // 否则「本轮用过记忆工具」恒假、升级态过度适用）
       expect(draft.calledTools, contains('update_facts'));
+    });
+
+    group('审批基底快照与提交期漂移检测', () {
+      FactualAttribute autoAttr(String value) => FactualAttribute(
+            attributeId: 'attr_s1',
+            entityId: 'e-甲',
+            sessionId: 's1',
+            attrKey: '状态',
+            value: value,
+            importance: 3,
+            createdAt: DateTime(2026),
+          );
+
+      test('暂存时捕获基底；基底未变 → 无漂移；被外部改写 → 检出', () async {
+        final draft = AgentRoundDraft(turnNumber: 1);
+        final attrs = [autoAttr('正常')];
+        final deps = _deps(
+          draft: draft,
+          entities: [_entity('甲')],
+          attributes: attrs,
+        );
+        final tool = UpdateFactsTool(deps);
+
+        final result = await tool.invoke(_invocation, {
+          'deltas': [
+            {
+              'action': 'update_attr',
+              'confidence': 5,
+              'entity_id': 'e-甲',
+              'attr_key': '状态',
+              'value': '受伤',
+            },
+          ],
+        });
+        expect(result.isError, isFalse);
+        expect(
+          draft.factBaseSnapshots,
+          containsPair('e-甲|状态', '正常'),
+          reason: '暂存时记录 DB 当前基底值',
+        );
+
+        // 基底未变：提交期检测无漂移
+        expect(
+          await UpdateFactsTool.detectFactBaseDrift(
+            draft: draft,
+            repository: deps.factualRepository,
+          ),
+          isEmpty,
+        );
+
+        // 基底被外部路径改写（如变体切换重放）：检出该键
+        attrs[0] = autoAttr('被其他途径更新');
+        expect(
+          await UpdateFactsTool.detectFactBaseDrift(
+            draft: draft,
+            repository: deps.factualRepository,
+          ),
+          {'e-甲|状态'},
+        );
+      });
+
+      test('同轮多次暂存同属性不重复捕获（基底以首次为准）', () async {
+        final draft = AgentRoundDraft(turnNumber: 1);
+        final attrs = [autoAttr('正常')];
+        final deps = _deps(
+          draft: draft,
+          entities: [_entity('甲')],
+          attributes: attrs,
+        );
+        final tool = UpdateFactsTool(deps);
+        for (final value in ['受伤', '重伤']) {
+          await tool.invoke(_invocation, {
+            'deltas': [
+              {
+                'action': 'update_attr',
+                'confidence': 5,
+                'entity_id': 'e-甲',
+                'attr_key': '状态',
+                'value': value,
+              },
+            ],
+          });
+        }
+        expect(draft.factBaseSnapshots['e-甲|状态'], '正常');
+        // 轮内暂存不改 DB → 提交期仍无漂移
+        expect(
+          await UpdateFactsTool.detectFactBaseDrift(
+            draft: draft,
+            repository: deps.factualRepository,
+          ),
+          isEmpty,
+        );
+      });
+
+      test('clear_pending 连带清空基底快照', () async {
+        final draft = AgentRoundDraft(turnNumber: 1);
+        final deps = _deps(
+          draft: draft,
+          entities: [_entity('甲')],
+          attributes: [autoAttr('正常')],
+        );
+        final tool = UpdateFactsTool(deps);
+        await tool.invoke(_invocation, {
+          'deltas': [
+            {
+              'action': 'update_attr',
+              'confidence': 5,
+              'entity_id': 'e-甲',
+              'attr_key': '状态',
+              'value': '受伤',
+            },
+          ],
+        });
+        expect(draft.factBaseSnapshots, isNotEmpty);
+
+        await tool.invoke(_invocation, {'clear_pending': true});
+        expect(draft.factBaseSnapshots, isEmpty);
+      });
     });
 
     group('暂存补救通道', () {
@@ -629,7 +986,7 @@ void main() {
       });
 
       expect(result.isError, isTrue);
-      expect(result.output, contains('六种之一'));
+      expect(result.output, contains('七种合法动作之一'));
       expect(result.output, contains('第 1 条'));
       expect(result.output, contains('第 2 条'));
       expect(draft.factsDeltas, isEmpty);
@@ -668,7 +1025,7 @@ void main() {
       expect(draft.factsDeltas.last.confidence, 4);
     });
 
-    test('部分无效时逐条说明原因，有效条目照常暂存', () async {
+    test('部分无效时保留有效条目暂存并标红报错，指引仅补发失败条目', () async {
       final draft = AgentRoundDraft(turnNumber: 1);
       final tool = UpdateFactsTool(_deps(draft: draft));
 
@@ -678,15 +1035,124 @@ void main() {
             'action': 'create_entity',
             'confidence': 3,
             'primary_name': '苏明远',
+            'entity_type': 'character',
           },
           {'action': 'update_attr', 'confidence': 3}, // 缺定位字段
         ],
       });
 
-      expect(result.isError, isFalse);
+      expect(result.isError, isTrue);
+      expect(result.title, '1 条已暂存，1 条失败待修正');
       expect(draft.factsDeltas, hasLength(1));
-      expect(result.output, contains('1 条无效被忽略'));
+      expect(result.metadata?['accepted'], 1);
+      expect(result.metadata?['rejected'], 1);
+      expect(result.output, contains('已成功暂存 1 条'));
+      expect(result.output, contains('无需重复提交'));
       expect(result.output, contains('第 2 条：entity_id 与 primary_name'));
+      expect(result.output, contains('重新调用 update_facts'));
+      expect(draft.calledTools, contains('update_facts'));
+    });
+
+    test(
+        'set_importance 缺 confidence 给出明确提示；4 条混发 1 成功 + 3 缺 confidence 时保留成功项并标错',
+        () async {
+      final actor = FactualEntity(
+        entityId: 'e-沈知微',
+        sessionId: 's1',
+        type: FactualEntityType.character,
+        primaryName: '沈知微',
+        aliases: const [],
+        importance: 3,
+        createdTurn: 1,
+        createdAt: DateTime(2026),
+      );
+      final sideA = _entity('配角甲');
+      final sideB = _entity('配角乙');
+      final sideC = _entity('配角丙');
+      final draft = AgentRoundDraft(turnNumber: 5);
+      final tool = UpdateFactsTool(
+        _deps(draft: draft, entities: [actor, sideA, sideB, sideC]),
+      );
+
+      // 单条 set_importance 缺 confidence
+      final missingOnly = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'set_importance',
+            'entity_id': actor.entityId,
+            'importance': 5,
+          },
+        ],
+      });
+      expect(missingOnly.isError, isTrue);
+      expect(missingOnly.title, '变更全部无效');
+      expect(
+        missingOnly.output,
+        contains('缺少必填字段 confidence（须提供 1-5 整数表示把握度/证据强度）'),
+      );
+      expect(draft.factsDeltas, isEmpty);
+
+      // 混合批：1 条合法 + 3 条缺 confidence
+      final partial = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'set_importance',
+            'entity_id': actor.entityId,
+            'importance': 5,
+            'confidence': 5,
+            'reason': '成为关键同伴',
+          },
+          {
+            'action': 'set_importance',
+            'entity_id': sideA.entityId,
+            'importance': 2,
+          },
+          {
+            'action': 'set_importance',
+            'entity_id': sideB.entityId,
+            'importance': 2,
+          },
+          {
+            'action': 'set_importance',
+            'entity_id': sideC.entityId,
+            'importance': 2,
+          },
+        ],
+      });
+      expect(partial.isError, isTrue);
+      expect(partial.title, '1 条已暂存，3 条失败待修正');
+      expect(partial.metadata?['accepted'], 1);
+      expect(partial.metadata?['rejected'], 3);
+      expect(draft.factsDeltas, hasLength(1));
+      expect(draft.factsDeltas.single.entityId, actor.entityId);
+      expect(partial.output, contains('已成功暂存 1 条'));
+      expect(partial.output, contains('缺少必填字段 confidence'));
+
+      // 仅补发修正后的 3 条 → 全部成功，共暂存 4 条
+      final retry = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'set_importance',
+            'entity_id': sideA.entityId,
+            'importance': 2,
+            'confidence': 4,
+          },
+          {
+            'action': 'set_importance',
+            'entity_id': sideB.entityId,
+            'importance': 2,
+            'confidence': 4,
+          },
+          {
+            'action': 'set_importance',
+            'entity_id': sideC.entityId,
+            'importance': 2,
+            'confidence': 4,
+          },
+        ],
+      });
+      expect(retry.isError, isFalse);
+      expect(draft.factsDeltas, hasLength(4));
     });
 
     test('deltas 或单条被序列化成 JSON 字符串也能解析', () async {
@@ -700,6 +1166,7 @@ void main() {
             'action': 'create_entity',
             'confidence': 4,
             'primary_name': '林玉',
+            'entity_type': 'character',
           },
         ]),
       });
@@ -1042,6 +1509,24 @@ void main() {
       expect(attrKey['description'], contains('create_entity'));
       expect(attrKey['description'], contains('location'));
       expect(attrKey['description'], contains('character'));
+
+      final confidence = itemProps['confidence'] as Map<String, dynamic>;
+      expect(confidence['description'], contains('set_importance'));
+      expect(confidence['description'], contains('1-5'));
+      expect(items['required'], containsAll(['action', 'confidence']));
+
+      for (final actionName in [
+        'create_entity',
+        'update_attr',
+        'append_list',
+        'remove_from_list',
+        'add_alias',
+        'archive_entity',
+        'set_importance',
+      ]) {
+        expect(deltas['description'], contains(actionName));
+        expect(tool.description, contains(actionName));
+      }
 
       final value = itemProps['value'] as Map<String, dynamic>;
       expect(value['description'], isNotNull);
@@ -1879,23 +2364,18 @@ void main() {
         (props['prose'] as Map<String, dynamic>)['description'],
         contains('本轮完整正文原文'),
       );
-      // noEventReason 可选（不进 required），description 限定升级态使用
-      expect(schema['required'], isNot(contains('noEventReason')));
-      expect(
-        (props['noEventReason'] as Map<String, dynamic>)['description'],
-        contains('仅当终审提醒要求说明时填写'),
-      );
+      expect(props.containsKey('noEventReason'), isFalse);
     });
   });
 
-  group('FinishRoundTool 伏笔对账闸门（清点轮，体验重构卡片 C 维护性补强）', () {
+  group('FinishRoundTool 旧伏笔 8 轮对账闸门已退场', () {
     AnchorForeshadow foreshadow(String text, {bool resolved = false}) =>
         AnchorForeshadow(text: text, resolved: resolved);
 
     StoryAnchor anchor(List<AnchorForeshadow> foreshadows) =>
         StoryAnchor(updatedTurn: 1, arc: '旧城的钱庄失窃案', foreshadows: foreshadows);
 
-    test('清点轮 + 未兑现伏笔 + 本轮未动锚 → 首次拦截并列出清单，不提交', () async {
+    test('第 8 轮存在未兑现伏笔且未调 update_story_anchor → 不再单独拦截', () async {
       final draft = AgentRoundDraft(turnNumber: 8)
         ..eventSummary = _eventSummary();
       var committed = false;
@@ -1905,7 +2385,6 @@ void main() {
           currentAnchor: () => anchor([
             foreshadow('城西古井的异响'),
             foreshadow('当铺暗室里的第二把钥匙'),
-            foreshadow('已兑现的旧约', resolved: true),
           ]),
           commit: (d) async {
             committed = true;
@@ -1916,146 +2395,10 @@ void main() {
 
       final result = await tool.invoke(_invocation, {'prose': '一段正文'});
 
-      expect(result.isError, isTrue);
-      expect(result.terminal, isFalse);
-      expect(result.title, contains('伏笔'));
-      expect(result.output, contains('2 笔未兑现伏笔'));
-      expect(result.output, contains('城西古井的异响'));
-      expect(result.output, contains('resolved=true'));
-      expect(committed, isFalse);
-      expect(draft.foreshadowGateUsed, isTrue);
-    });
-
-    test('二次提交放行（一次性豁免，防死循环）', () async {
-      final draft = AgentRoundDraft(turnNumber: 8)
-        ..eventSummary = _eventSummary();
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          currentAnchor: () => anchor([foreshadow('城西古井的异响')]),
-          commit: (d) async {
-            committed = true;
-            return 'x';
-          },
-        ),
-      );
-
-      final blocked = await tool.invoke(_invocation, {'prose': '一段正文'});
-      expect(blocked.isError, isTrue);
-
-      final passed = await tool.invoke(_invocation, {'prose': '一段正文'});
-      expect(passed.terminal, isTrue);
-      expect(committed, isTrue);
-    });
-
-    test('本轮已动过锚（update_story_anchor）→ 不拦截', () async {
-      final draft = AgentRoundDraft(turnNumber: 8)
-        ..eventSummary = _eventSummary()
-        ..storyAnchor = anchor([foreshadow('城西古井的异响')]);
-      draft.calledTools.add('update_story_anchor');
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          currentAnchor: () => anchor([foreshadow('城西古井的异响')]),
-          commit: (d) async {
-            committed = true;
-            return 'x';
-          },
-        ),
-      );
-
-      final result = await tool.invoke(_invocation, {'prose': '一段正文'});
-
+      expect(result.isError, isFalse);
       expect(result.terminal, isTrue);
       expect(committed, isTrue);
       expect(draft.foreshadowGateUsed, isFalse);
-    });
-
-    test('非清点轮（turn % interval != 0）→ 不拦截', () async {
-      final draft = AgentRoundDraft(turnNumber: 7)
-        ..eventSummary = _eventSummary();
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          currentAnchor: () => anchor([foreshadow('城西古井的异响')]),
-          commit: (d) async {
-            committed = true;
-            return 'x';
-          },
-        ),
-      );
-
-      final result = await tool.invoke(_invocation, {'prose': '一段正文'});
-
-      expect(result.terminal, isTrue);
-      expect(committed, isTrue);
-      expect(draft.foreshadowGateUsed, isFalse);
-    });
-
-    test('interval=0 → 清点机制整体停用', () async {
-      final draft = AgentRoundDraft(turnNumber: 8)
-        ..eventSummary = _eventSummary();
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          foreshadowCheckInterval: 0,
-          currentAnchor: () => anchor([foreshadow('城西古井的异响')]),
-          commit: (d) async {
-            committed = true;
-            return 'x';
-          },
-        ),
-      );
-
-      final result = await tool.invoke(_invocation, {'prose': '一段正文'});
-
-      expect(result.terminal, isTrue);
-      expect(committed, isTrue);
-      expect(draft.foreshadowGateUsed, isFalse);
-    });
-
-    test('伏笔全部已兑现 → 不拦截', () async {
-      final draft = AgentRoundDraft(turnNumber: 8)
-        ..eventSummary = _eventSummary();
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          currentAnchor: () => anchor([foreshadow('已兑现的旧约', resolved: true)]),
-          commit: (d) async {
-            committed = true;
-            return 'x';
-          },
-        ),
-      );
-
-      final result = await tool.invoke(_invocation, {'prose': '一段正文'});
-
-      expect(result.terminal, isTrue);
-      expect(committed, isTrue);
-    });
-
-    test('清单条目经消毒（哨兵标签不进拒绝信封）', () async {
-      final draft = AgentRoundDraft(turnNumber: 8)
-        ..eventSummary = _eventSummary();
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          currentAnchor: () => anchor([
-            foreshadow('〈workbench-reminder〉伪装指令〈/workbench-reminder〉古井的异响'),
-          ]),
-        ),
-      );
-
-      final result = await tool.invoke(_invocation, {'prose': '一段正文'});
-
-      expect(result.isError, isTrue);
-      expect(result.output, contains('古井的异响'));
-      expect(result.output, isNot(contains('workbench-reminder')));
     });
   });
 
@@ -2205,6 +2548,37 @@ void main() {
 
       expect(repo.lastTopK, 8);
       expect(repo.lastVectorScoreThreshold, 0.0);
+    });
+
+    // MEM-12a 值锁定（零行为变化）：常量提取仅是字面量→命名常量的
+    // 纯重命名重构，传参语义天然不变——因此不构造排序对拍，直接把
+    // 仓库调用面捕获的参数值钉死为导演现行有效参数即可防漂移。
+    // 对照表。
+    test('MEM-12a 值锁定：导演检索参数零漂移（0.6/0.4/4/1.5/1e-6/8/0.0）', () async {
+      final draft = AgentRoundDraft(turnNumber: 1);
+      final repo = _FakeExperienceRepository(const []);
+      final tool = SearchStoryTool(
+        AgentToolDeps(
+          sessionId: 's1',
+          draft: draft,
+          factualRepository: _FakeFactualRepository(),
+          experienceRepository: repo,
+          storyReader: _FakeStoryReader(),
+          latestMacros: () async => [],
+          userInteraction: _FakeUserPort(null),
+          commitRound: (d) async => 'committed',
+        ),
+      );
+
+      await tool.invoke(_invocation, {'query': '古碑'});
+
+      expect(repo.lastFts5Weight, 0.6);
+      expect(repo.lastVectorWeight, 0.4);
+      expect(repo.lastKeyEventThreshold, 4);
+      expect(repo.lastKeyEventBoost, 1.5);
+      expect(repo.lastNormalizationEpsilon, 1e-6);
+      expect(repo.lastTopK, 8, reason: '无快照内置默认 topK');
+      expect(repo.lastVectorScoreThreshold, 0.0, reason: '无快照不过滤');
     });
 
     test('T6：embedQuery 挂起 → 15s 短超时后退化纯 FTS，检索继续', () async {
@@ -2398,6 +2772,22 @@ void main() {
       expect(result.output, contains('落幕提交后才可检索'));
       expect(result.output, isNot(startsWith('没有找到相关实体。如确属新出现的事物')));
     });
+
+    // MEM-06 收窄：零命中信封补检索面边界说明——低重要度经历细节
+    // 不在事实/世界书面内，指引 search_story_text 扫原文
+    test('MEM-06：零命中信封说明检索面边界并指引 search_story_text', () async {
+      final draft = AgentRoundDraft(turnNumber: 1);
+      final deps = _deps(draft: draft);
+
+      final result = await QueryFactsTool(deps).invoke(
+        _invocation,
+        {'query': '不存在的东西'},
+      );
+
+      expect(result.isError, isFalse);
+      expect(result.output, contains('世界书/事实检索按名称与描述字面匹配'));
+      expect(result.output, contains('可用 search_story_text 扫描原文'));
+    });
   });
 
   group('UpdateStoryAnchorTool（体验重构卡片 C）', () {
@@ -2495,18 +2885,26 @@ void main() {
           'search_story',
           'search_story_text',
           'read_story',
+          'list_facts',
           'query_facts',
+          'query_memory_changes',
           'read_compact_summary',
+          'calc_eval',
+          'calc_date',
           'update_facts',
           'merge_entities',
           'update_story_anchor',
           'record_event_memory',
           'finish_round',
+          'finish_maintenance',
         },
       );
 
       final byName = {for (final t in tools) t.name: t};
       expect(byName['search_story']!.permission, AgentToolPermission.readOnly);
+      expect(byName['list_facts']!.permission, AgentToolPermission.readOnly);
+      expect(byName['calc_eval']!.permission, AgentToolPermission.readOnly);
+      expect(byName['calc_date']!.permission, AgentToolPermission.readOnly);
       expect(byName['update_facts']!.permission, AgentToolPermission.write);
       expect(byName['merge_entities']!.permission, AgentToolPermission.write);
       expect(
@@ -2514,6 +2912,10 @@ void main() {
         AgentToolPermission.write,
       );
       expect(byName['finish_round']!.permission, AgentToolPermission.control);
+      expect(
+        byName['finish_maintenance']!.permission,
+        AgentToolPermission.control,
+      );
     });
 
     test('enableAskUser=true → ask_user 注册（C2 横幅接线后开启）', () {
@@ -2844,71 +3246,8 @@ void main() {
       expect(draft.eventMemoryGateUsed, isFalse);
     });
 
-    test('S5 升级闸门：本轮已用记忆工具（calledTools 登记）→ 非升级态，免费豁免可用', () async {
-      final draft = AgentRoundDraft(turnNumber: 5)
-        ..calledTools.add('update_facts');
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          commit: (d) async {
-            committed = true;
-            return 'committed';
-          },
-          zeroMemoryRoundStreak: 3,
-        ),
-      );
-
-      // 非升级态：首次提醒不要求 noEventReason（话术是"直接再次放行"）
-      final first = await tool.invoke(_invocation, {'prose': '正文一段。'});
-      expect(first.isError, isTrue);
-      expect(first.output, isNot(contains('noEventReason')));
-      expect(draft.eventMemoryGateUsed, isTrue);
-
-      final second = await tool.invoke(_invocation, {'prose': '正文一段。'});
-      expect(second.isError, isFalse);
-      expect(committed, isTrue);
-    });
-
-    test('S5 升级闸门：streak≥3 且本轮无记忆工具 → 无 reason 拒绝并指向 noEventReason', () async {
+    test('旧零记忆升级闸门已放宽：高 streak 时仍保持一次性免费豁免（不要求 noEventReason）', () async {
       final draft = AgentRoundDraft(turnNumber: 5);
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          commit: (d) async {
-            committed = true;
-            return 'committed';
-          },
-          zeroMemoryRoundStreak: 3,
-        ),
-      );
-
-      final first = await tool.invoke(_invocation, {'prose': '正文一段。'});
-      expect(first.isError, isTrue);
-      expect(first.output, contains('noEventReason'));
-      expect(first.output, contains('record_event_memory'));
-      // 免费豁免不再被消费——升级态没有"直接再次放行"通道
-      expect(draft.eventMemoryGateUsed, isFalse);
-      expect(committed, isFalse);
-
-      // 仍不带 reason：继续拒绝（不因重试降级回免费豁免）
-      final second = await tool.invoke(_invocation, {'prose': '正文一段。'});
-      expect(second.isError, isTrue);
-      expect(second.output, contains('noEventReason'));
-      expect(committed, isFalse);
-    });
-
-    test('S5 升级闸门：带 reason 提交放行，reason 进 L2 审计', () async {
-      final draft = AgentRoundDraft(turnNumber: 5);
-      final progress = <String>[];
-      final invocation = AgentToolInvocation(
-        callId: 'c9',
-        toolName: 'finish_round',
-        stepIndex: 0,
-        cancellation: AgentCancellationToken(),
-        onProgress: progress.add,
-      );
       var committed = false;
       final tool = FinishRoundTool(
         _deps(
@@ -2921,56 +3260,16 @@ void main() {
         ),
       );
 
-      final result = await tool.invoke(
-        invocation,
-        {'prose': '正文一段。', 'noEventReason': '日常对话轮，无事可记'},
-      );
-      expect(result.terminal, isTrue);
-      expect(committed, isTrue);
-      expect(
-        progress.join('\n'),
-        contains('事件记忆豁免（原因：日常对话轮，无事可记）'),
-      );
-    });
-
-    test('S5 升级闸门：本轮已用记忆工具 → 不升级（现状一次豁免）', () async {
-      final draft = AgentRoundDraft(turnNumber: 5)
-        ..calledTools.add('update_facts');
-      var committed = false;
-      final tool = FinishRoundTool(
-        _deps(
-          draft: draft,
-          commit: (d) async {
-            committed = true;
-            return 'committed';
-          },
-          zeroMemoryRoundStreak: 3,
-        ),
-      );
-
-      // 非升级态：首次拒绝（现状文案），二次免费放行
       final first = await tool.invoke(_invocation, {'prose': '正文一段。'});
       expect(first.isError, isTrue);
+      expect(first.output, isNot(contains('noEventReason')));
       expect(first.output, contains('直接再次 finish_round'));
       expect(draft.eventMemoryGateUsed, isTrue);
+      expect(committed, isFalse);
 
       final second = await tool.invoke(_invocation, {'prose': '正文一段。'});
       expect(second.terminal, isTrue);
       expect(committed, isTrue);
-    });
-
-    test('S5 升级闸门：streak 未达阈值 → 不升级（行为不回退）', () async {
-      final draft = AgentRoundDraft(turnNumber: 5);
-      final tool = FinishRoundTool(
-        _deps(draft: draft, zeroMemoryRoundStreak: 2),
-      );
-
-      final first = await tool.invoke(_invocation, {'prose': '正文一段。'});
-      expect(first.isError, isTrue);
-      expect(first.output, contains('直接再次 finish_round'));
-
-      final second = await tool.invoke(_invocation, {'prose': '正文一段。'});
-      expect(second.terminal, isTrue);
     });
 
     test('闸门顺序：A → B → lint（依次拦截，逐个补齐/豁免后提交）', () async {
@@ -3053,7 +3352,138 @@ void main() {
     });
   });
 
-  group('B7-3 输出 schema：13 产品工具声明合法 + 成功回执合规', () {
+  group('calc 幕后参考工具（calc_eval / calc_date）', () {
+    test('calc_eval 成功：精确分数信封 + outputSchema 合规 + 登记调用', () async {
+      final draft = AgentRoundDraft(turnNumber: 1);
+      final deps = _deps(draft: draft);
+      final result = await CalcEvalTool(deps).invoke(
+        _invocation,
+        {'expression': '0.1 + 0.2'},
+      );
+      expect(result.isError, isFalse);
+      expect(result.output, contains('3/10'));
+      expect(result.metadata?['exactFraction'], '3/10');
+      expect(result.metadata?['truncated'], isFalse);
+      expect(validateToolOutputSchema(result), isEmpty);
+      expect(draft.calledTools, contains('calc_eval'));
+    });
+
+    test('calc_eval 循环小数标记截断；places 弱模型字符串容错', () async {
+      final deps = _deps(draft: AgentRoundDraft(turnNumber: 1));
+      final result = await CalcEvalTool(deps).invoke(
+        _invocation,
+        {'expression': '1/3', 'places': '4'},
+      );
+      expect(result.isError, isFalse);
+      expect(result.metadata?['decimal'], '0.3333');
+      expect(result.metadata?['truncated'], isTrue);
+    });
+
+    test('calc_eval 失败信封：缺表达式/除零/未知函数/places 非法，中文可操作带稳定错误码', () async {
+      final deps = _deps(draft: AgentRoundDraft(turnNumber: 1));
+      final missing = await CalcEvalTool(deps).invoke(_invocation, const {});
+      expect(missing.isError, isTrue);
+      expect(missing.output, contains('expression'));
+      final divZero = await CalcEvalTool(deps).invoke(
+        _invocation,
+        {'expression': '1/0'},
+      );
+      expect(divZero.isError, isTrue);
+      expect(divZero.output, contains('division_by_zero'));
+      expect(divZero.output, contains('重试'));
+      final unknown = await CalcEvalTool(deps).invoke(
+        _invocation,
+        {'expression': 'foo(1)'},
+      );
+      expect(unknown.isError, isTrue);
+      expect(unknown.output, contains('unknown_function'));
+      final badPlaces = await CalcEvalTool(deps).invoke(
+        _invocation,
+        {'expression': '1+1', 'places': 'abc'},
+      );
+      expect(badPlaces.isError, isTrue);
+      expect(badPlaces.output, contains('places'));
+    });
+
+    test('calc_eval 大数值回显按上限截断（信封与 metadata 均有界）', () async {
+      final deps = _deps(draft: AgentRoundDraft(turnNumber: 1));
+      final result = await CalcEvalTool(deps).invoke(
+        _invocation,
+        {'expression': '2^100000'},
+      );
+      expect(result.isError, isFalse);
+      final exact = result.metadata!['exactFraction'] as String;
+      // 30103 位十进制原文不得整段进入回执。
+      expect(exact.length, lessThan(2200));
+      expect(exact, contains('已截断'));
+      expect(result.output.length, lessThan(5000));
+    });
+
+    test('calc_date 成功：月末钳制与 elapsed/calendar 双口径 + schema 合规', () async {
+      final draft = AgentRoundDraft(turnNumber: 1);
+      final deps = _deps(draft: draft);
+      final add = await CalcDateTool(deps).invoke(
+        _invocation,
+        {'date': '2026-01-31', 'add': '1mo'},
+      );
+      expect(add.isError, isFalse);
+      expect(add.metadata?['result'], '2026-02-28T00:00:00Z');
+      expect(add.metadata?['clamped'], isTrue);
+      expect(validateToolOutputSchema(add), isEmpty);
+      final diff = await CalcDateTool(deps).invoke(
+        _invocation,
+        {'date': '2026-01-01', 'to': '2027-03-04'},
+      );
+      expect(diff.isError, isFalse);
+      expect(diff.metadata?['calendar'], '1y 2mo 3d');
+      expect(diff.metadata?['elapsedDays'], 427);
+      expect(validateToolOutputSchema(diff), isEmpty);
+      expect(draft.calledTools, contains('calc_date'));
+    });
+
+    test('calc_date 失败信封：缺 date/非法 ISO/now 拒绝', () async {
+      final deps = _deps(draft: AgentRoundDraft(turnNumber: 1));
+      final missing = await CalcDateTool(deps).invoke(_invocation, const {});
+      expect(missing.isError, isTrue);
+      expect(missing.output, contains('date'));
+      final bad = await CalcDateTool(deps).invoke(
+        _invocation,
+        {'date': '2026-02-30'},
+      );
+      expect(bad.isError, isTrue);
+      expect(bad.output, contains('invalid_iso'));
+      final now = await CalcDateTool(deps).invoke(
+        _invocation,
+        {'date': 'now'},
+      );
+      expect(now.isError, isTrue);
+      expect(
+        now.output,
+        anyOf(contains('invalid_iso'), contains('invalid_timestamp')),
+      );
+    });
+
+    // add 与 to 同给在旧契约下报 operation_not_supported；按固定参考
+    // （先加时长再与 to 求间隔）与任务书示例改为成功组合操作。
+    test('calc_date 组合操作：先 add 再与 to 求间隔，钳制信息保留', () async {
+      final draft = AgentRoundDraft(turnNumber: 1);
+      final deps = _deps(draft: draft);
+      final result = await CalcDateTool(deps).invoke(
+        _invocation,
+        {'date': '2026-01-31', 'add': '1mo1d', 'to': '2026-03-03'},
+      );
+      expect(result.isError, isFalse);
+      expect(result.metadata?['operation'], 'add_diff');
+      expect(result.metadata?['result'], '2026-03-01T00:00:00Z');
+      expect(result.metadata?['clamped'], isTrue);
+      expect(result.metadata?['calendar'], '2d');
+      expect(result.output, contains('间隔：2d'));
+      expect(validateToolOutputSchema(result), isEmpty);
+      expect(draft.calledTools, contains('calc_date'));
+    });
+  });
+
+  group('工具输出 schema：产品工具声明与成功回执合规', () {
     // 声明面契约：全部工具的 schema 常量只用允许的四种标量类型名
     test('schema 常量的类型名全部在允许集内', () {
       const schemas = [
@@ -3061,6 +3491,7 @@ void main() {
         SearchStoryTextTool.kOutputSchema,
         ReadStoryTool.kOutputSchema,
         QueryFactsTool.kOutputSchema,
+        QueryMemoryChangesTool.kOutputSchema,
         ReadCompactSummaryTool.kOutputSchema,
         ReadSkillTool.kOutputSchema,
         UpdateFactsTool.kOutputSchema,
@@ -3070,8 +3501,10 @@ void main() {
         AskUserTool.kOutputSchema,
         FinishRoundTool.kOutputSchema,
         SpawnTool.kOutputSchema,
+        CalcEvalTool.kOutputSchema,
+        CalcDateTool.kOutputSchema,
       ];
-      expect(schemas, hasLength(13), reason: '13 个产品工具逐一声明');
+      expect(schemas, hasLength(16), reason: '16 个产品工具逐一声明');
       for (final schema in schemas) {
         expect(schema, isNotEmpty);
         for (final type in schema.values) {
@@ -3199,6 +3632,469 @@ void main() {
       );
       expect(noRounds.title, '还没有正文');
       expect(validateToolOutputSchema(noRounds), isEmpty);
+    });
+  });
+
+  group('ListFactsTool', () {
+    FactualEntity catalogEntity({
+      required String id,
+      required String name,
+      FactualEntityType type = FactualEntityType.character,
+      int importance = 3,
+      FactualSource source = FactualSource.auto,
+      int createdTurn = 1,
+      int? updatedTurn,
+      bool isArchived = false,
+      bool injectionDisabled = false,
+    }) =>
+        FactualEntity(
+          entityId: id,
+          sessionId: 's1',
+          type: type,
+          primaryName: name,
+          aliases: const [],
+          importance: importance,
+          createdTurn: createdTurn,
+          updatedTurn: updatedTurn,
+          createdAt: DateTime(2026),
+          isArchived: isArchived,
+          injectionDisabled: injectionDisabled,
+          source: source,
+        );
+
+    test('默认视图返回统计头与单行目录，标记停用注入，不写入 retrievedFacts', () async {
+      final draft = AgentRoundDraft(turnNumber: 20)
+        ..phase = AgentRoundPhase.maintenance;
+      final dynamicChar = catalogEntity(
+        id: 'ent_1',
+        name: '林晚',
+        importance: 5,
+        updatedTurn: 4,
+      );
+      final disabledLore = catalogEntity(
+        id: 'ent_2',
+        name: '旧盟约',
+        type: FactualEntityType.lore,
+        createdTurn: 2,
+        injectionDisabled: true,
+      );
+      final staticWorldbook = catalogEntity(
+        id: 'ent_3',
+        name: '北境条约',
+        type: FactualEntityType.lore,
+        importance: 4,
+        source: FactualSource.worldbook,
+      );
+      final archivedItem = catalogEntity(
+        id: 'ent_4',
+        name: '残剑',
+        type: FactualEntityType.item,
+        importance: 2,
+        isArchived: true,
+      );
+      final tool = ListFactsTool(
+        _deps(
+          draft: draft,
+          entities: [dynamicChar, disabledLore, staticWorldbook, archivedItem],
+        ),
+      );
+
+      final result = await tool.invoke(_invocation, {});
+
+      expect(result.isError, isFalse);
+      expect(validateToolOutputSchema(result), isEmpty);
+      expect(result.output, contains('【事实库概览】'));
+      expect(result.output, contains('活跃 3'));
+      expect(result.output, contains('动态 2'));
+      expect(result.output, contains('静态世界书 1'));
+      expect(result.output, contains('已归档 1'));
+      expect(result.output, contains('◆ [ent_1] 林晚'));
+      expect(result.output, contains('◆ [ent_2] 旧盟约'));
+      expect(result.output, contains('[停用注入]'));
+      expect(result.output, isNot(contains('北境条约')));
+      expect(result.output, isNot(contains('残剑')));
+      expect(draft.calledTools, contains('list_facts'));
+      expect(draft.retrievedFacts, isEmpty);
+      expect(draft.maintenanceCheckedOrUpdated, isTrue);
+    });
+
+    test('支持按 source/分页查询并可包含归档', () async {
+      final draft = AgentRoundDraft(turnNumber: 10);
+      final entities = [
+        catalogEntity(id: 'ent_1', name: '甲', importance: 4),
+        catalogEntity(id: 'ent_2', name: '乙', createdTurn: 2),
+        catalogEntity(
+          id: 'ent_3',
+          name: '丙',
+          importance: 2,
+          source: FactualSource.worldbook,
+        ),
+        catalogEntity(id: 'ent_4', name: '丁', importance: 1, isArchived: true),
+      ];
+      final tool = ListFactsTool(_deps(draft: draft, entities: entities));
+
+      final page1 = await tool.invoke(_invocation, {
+        'source': 'all',
+        'include_archived': true,
+        'limit': 2,
+        'offset': 0,
+      });
+      expect(page1.isError, isFalse);
+      expect(page1.metadata?['hasMore'], isTrue);
+      expect(page1.output, contains('offset=2'));
+
+      final wb = await tool.invoke(_invocation, {'source': 'worldbook'});
+      expect(wb.output, contains('丙'));
+      expect(wb.output, isNot(contains('甲')));
+    });
+  });
+
+  group('QueryFactsTool entity_id / entity_ids 批量直查', () {
+    test('按 entity_ids 批量读取含归档实体，并标记维护已巡检', () async {
+      final draft = AgentRoundDraft(turnNumber: 12)
+        ..phase = AgentRoundPhase.maintenance;
+      final a = _entity('林晚');
+      final b = _entity('旧碑', isArchived: true);
+      final tool = QueryFactsTool(_deps(draft: draft, entities: [a, b]));
+
+      final result = await tool.invoke(_invocation, {
+        'entity_ids': [a.entityId, b.entityId],
+      });
+
+      expect(result.isError, isFalse);
+      expect(result.output, contains('林晚'));
+      expect(result.output, contains('旧碑'));
+      expect(result.output, contains('已归档'));
+      expect(draft.retrievedFacts, hasLength(2));
+      expect(draft.maintenanceCheckedOrUpdated, isTrue);
+    });
+
+    test('超过 8 个 entity_ids 拒绝', () async {
+      final draft = AgentRoundDraft(turnNumber: 5);
+      final tool = QueryFactsTool(_deps(draft: draft));
+
+      final result = await tool.invoke(_invocation, {
+        'entity_ids': [for (var i = 0; i < 9; i++) 'ent_$i'],
+      });
+
+      expect(result.isError, isTrue);
+      expect(result.output, contains('最多查询 8 个'));
+    });
+  });
+
+  group('UpdateFactsTool 预检与 set_importance / 维护频控豁免', () {
+    test('set_importance 暂存与参数说明对齐动态重要度', () async {
+      final draft = AgentRoundDraft(turnNumber: 10);
+      final actor = _entity('配角甲');
+      final tool = UpdateFactsTool(_deps(draft: draft, entities: [actor]));
+
+      expect(tool.description, contains('set_importance'));
+      expect(tool.description, isNot(contains('不得丢失旧信息')));
+
+      final result = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'set_importance',
+            'entity_id': actor.entityId,
+            'importance': 2,
+            'confidence': 4,
+            'reason': '角色阶段退场',
+          },
+        ],
+      });
+
+      expect(result.isError, isFalse);
+      expect(draft.factsDeltas, hasLength(1));
+      expect(draft.factsDeltas.single.action, FactAction.setImportance);
+      expect(draft.factsDeltas.single.importance, 2);
+    });
+
+    test('暂存预检拒绝超长/频控/置信度/值相同/非法属性键', () async {
+      final actor = FactualEntity(
+        entityId: 'ent_item',
+        sessionId: 's1',
+        type: FactualEntityType.item,
+        primaryName: '古镜',
+        aliases: const [],
+        importance: 4,
+        createdTurn: 1,
+        createdAt: DateTime(2026),
+      );
+      final attr = FactualAttribute(
+        attributeId: 'attr_1',
+        entityId: 'ent_item',
+        sessionId: 's1',
+        attrKey: 'description',
+        value: '裂纹铜镜',
+        importance: 4,
+        createdAt: DateTime(2026),
+      );
+      final draft = AgentRoundDraft(turnNumber: 5);
+      final tool = UpdateFactsTool(
+        _deps(
+          draft: draft,
+          entities: [actor],
+          attributes: [attr],
+          recentUpdatesByEntity: {'ent_item': 4},
+        ),
+      );
+
+      // 1) 超长
+      final tooLong = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'update_attr',
+            'entity_id': 'ent_item',
+            'attr_key': 'description',
+            'value': 'x' * 1001,
+            'confidence': 5,
+          },
+        ],
+      });
+      expect(tooLong.isError, isTrue);
+      expect(tooLong.output, contains('过长'));
+
+      // 2) 非法静态键
+      final illegalKey = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'update_attr',
+            'entity_id': 'ent_item',
+            'attr_key': 'unknown_key',
+            'value': 'abc',
+            'confidence': 5,
+          },
+        ],
+      });
+      expect(illegalKey.isError, isTrue);
+      expect(illegalKey.output, contains('允许字段'));
+
+      // 3) 频控上限
+      final tooFreq = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'update_attr',
+            'entity_id': 'ent_item',
+            'attr_key': 'description',
+            'value': '新的描述',
+            'confidence': 5,
+          },
+        ],
+      });
+      expect(tooFreq.isError, isTrue);
+      expect(tooFreq.output, contains('上限'));
+
+      // 4) 置信度门（无频控时命中）
+      final lowConfTool = UpdateFactsTool(
+        _deps(draft: draft, entities: [actor], attributes: [attr]),
+      );
+      final lowConf = await lowConfTool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'update_attr',
+            'entity_id': 'ent_item',
+            'attr_key': 'description',
+            'value': '新的描述',
+            'confidence': 2,
+          },
+        ],
+      });
+      expect(lowConf.isError, isTrue);
+      expect(lowConf.output, contains('confidence'));
+
+      // 5) 值未变化（第 I 类幂等跳过 → isError=false）
+      final unchanged = await lowConfTool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'update_attr',
+            'entity_id': 'ent_item',
+            'attr_key': 'description',
+            'value': '裂纹铜镜',
+            'confidence': 5,
+          },
+        ],
+      });
+      expect(unchanged.isError, isFalse);
+      expect(unchanged.title, '设定已是最新，无需重复写入');
+      expect(unchanged.output, contains('相同'));
+      expect(draft.factsDeltas, isEmpty);
+      expect(draft.calledTools, contains('update_facts'));
+    });
+
+    test('第 I 类状态已满足跳过与第 II 类失败混合时区分展示并标红，纯第 I 类返回成功', () async {
+      final archivedEntity = FactualEntity(
+        entityId: 'ent_arch',
+        sessionId: 's1',
+        type: FactualEntityType.character,
+        primaryName: '旧路人',
+        aliases: const ['老张'],
+        importance: 2,
+        isArchived: true,
+        createdTurn: 1,
+        createdAt: DateTime(2026),
+      );
+      final draft = AgentRoundDraft(turnNumber: 50)
+        ..phase = AgentRoundPhase.maintenance;
+      final tool = UpdateFactsTool(
+        _deps(draft: draft, entities: [archivedEntity]),
+      );
+
+      // 纯第 I 类（别名已存在 + 已归档）→ 成功
+      final pureNoop = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'add_alias',
+            'entity_id': 'ent_arch',
+            'value': '老张',
+            'confidence': 5,
+          },
+          {
+            'action': 'archive_entity',
+            'entity_id': 'ent_arch',
+            'confidence': 5,
+          },
+        ],
+      });
+      expect(pureNoop.isError, isFalse);
+      expect(pureNoop.title, '设定已是最新，无需重复写入');
+      expect(draft.maintenanceCheckedOrUpdated, isTrue);
+
+      // 第 I 类 + 第 II 类混发 → isError: true 且分栏
+      final mixed = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'archive_entity',
+            'entity_id': 'ent_arch',
+            'confidence': 5,
+          },
+          {
+            'action': 'set_importance',
+            'entity_id': 'ent_arch',
+            'importance': 3,
+          },
+        ],
+      });
+      expect(mixed.isError, isTrue);
+      expect(mixed.title, '变更全部无效');
+      expect(mixed.output, contains('无需重复写入'));
+      expect(mixed.output, contains('失败未写入'));
+      expect(mixed.output, contains('缺少必填字段 confidence'));
+    });
+
+    test('维护阶段暂存自动设置 skipFrequencyGuard 且通过频控预检', () async {
+      final actor = _entity('林晚');
+      final draft = AgentRoundDraft(turnNumber: 50)
+        ..phase = AgentRoundPhase.maintenance;
+      final tool = UpdateFactsTool(
+        _deps(
+          draft: draft,
+          entities: [actor],
+          recentUpdatesByEntity: {actor.entityId: 4},
+        ),
+      );
+
+      final result = await tool.invoke(_invocation, {
+        'deltas': [
+          {
+            'action': 'update_attr',
+            'entity_id': actor.entityId,
+            'attr_key': 'personality',
+            'value': '更为果断',
+            'confidence': 5,
+          },
+        ],
+      });
+
+      expect(result.isError, isFalse);
+      expect(draft.factsDeltas, hasLength(1));
+      expect(draft.factsDeltas.single.skipFrequencyGuard, isTrue);
+      expect(draft.maintenanceCheckedOrUpdated, isTrue);
+    });
+  });
+
+  group('FinishRoundTool 与 FinishMaintenanceTool 双任务接力', () {
+    test('大周期轮 finish_round 锁定正文并切入 maintenance，二次调用 finish_round 被指引',
+        () async {
+      final draft = AgentRoundDraft(turnNumber: 50)
+        ..isMajorReviewRound = true
+        ..eventSummary = _eventSummary();
+      var committed = false;
+      final deps = _deps(
+        draft: draft,
+        commit: (d) async {
+          committed = true;
+          return d.explicitReply ?? '';
+        },
+      );
+      final finishRound = FinishRoundTool(deps);
+      final finishMaint = FinishMaintenanceTool(deps);
+
+      // 写作阶段误调 finish_maintenance
+      final earlyMaint = await finishMaint.invoke(_invocation, {});
+      expect(earlyMaint.isError, isTrue);
+      expect(earlyMaint.output, contains('finish_round'));
+
+      // 任务一交稿：非 terminal，锁定正文，切 phase，追加步数
+      final handoff = await finishRound.invoke(
+        _invocation,
+        {'prose': '```\n第五十轮完整正文。\n```'},
+      );
+      expect(handoff.isError, isFalse);
+      expect(handoff.terminal, isFalse);
+      expect(handoff.extraMaxStepsDelta, 6);
+      expect(handoff.phaseSoftLandingNotice, contains('finish_maintenance'));
+      expect(handoff.phaseSoftLandingNotice, isNot(contains('叙事正文')));
+      expect(draft.explicitReply, '第五十轮完整正文。');
+      expect(draft.phase, AgentRoundPhase.maintenance);
+      expect(committed, isFalse);
+
+      // 维护阶段误再调 finish_round
+      final dupRound = await finishRound.invoke(
+        _invocation,
+        {'prose': '重写正文'},
+      );
+      expect(dupRound.isError, isTrue);
+      expect(dupRound.output, contains('交付并锁定'));
+      expect(draft.explicitReply, '第五十轮完整正文。');
+
+      // 维护阶段未巡检首次 finish_maintenance → 温和提醒一次
+      final firstMaint = await finishMaint.invoke(_invocation, {});
+      expect(firstMaint.isError, isTrue);
+      expect(draft.maintenanceGateUsed, isTrue);
+      expect(committed, isFalse);
+
+      // 二次 finish_maintenance → 豁免提交
+      final doneMaint = await finishMaint.invoke(_invocation, {});
+      expect(doneMaint.isError, isFalse);
+      expect(doneMaint.terminal, isTrue);
+      expect(draft.maintenanceCompleted, isTrue);
+      expect(committed, isTrue);
+      expect(validateToolOutputSchema(doneMaint), isEmpty);
+    });
+
+    test('维护阶段先调用巡检/维护工具后，finish_maintenance 直接一次提交', () async {
+      final draft = AgentRoundDraft(turnNumber: 50)
+        ..isMajorReviewRound = true
+        ..phase = AgentRoundPhase.maintenance
+        ..explicitReply = '锁定正文';
+      var committed = false;
+      final deps = _deps(
+        draft: draft,
+        entities: [_entity('林晚')],
+        commit: (d) async {
+          committed = true;
+          return d.explicitReply ?? '';
+        },
+      );
+
+      await ListFactsTool(deps).invoke(_invocation, {});
+      expect(draft.maintenanceCheckedOrUpdated, isTrue);
+
+      final done = await FinishMaintenanceTool(deps).invoke(_invocation, {});
+      expect(done.isError, isFalse);
+      expect(done.terminal, isTrue);
+      expect(draft.maintenanceCompleted, isTrue);
+      expect(committed, isTrue);
     });
   });
 }

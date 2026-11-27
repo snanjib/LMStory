@@ -102,6 +102,7 @@ class AgentStepRequest {
     required this.messages,
     required this.tools,
     required this.config,
+    this.toolChoice,
     this.stablePrefixEndIndex,
   });
 
@@ -112,6 +113,11 @@ class AgentStepRequest {
   final List<ToolDefinition> tools;
 
   final AgentCallConfig config;
+
+  /// step 级工具选择覆盖（HAR-05 软着陆保形：tools 定义保留、
+  /// toolChoice=none 停用工具——空 tools 会经网关省略 tools 键，
+  /// 该步全前缀缓存 miss）。null = 沿用 [AgentCallConfig.toolChoice]。
+  final ToolChoice? toolChoice;
 
   /// 稳定前缀结束位置（messages 下标；null = 不适用）
   final int? stablePrefixEndIndex;

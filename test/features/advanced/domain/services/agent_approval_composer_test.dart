@@ -3,6 +3,7 @@ import 'package:lmstory/core/agent/agent_tool.dart';
 import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_approval_composer.dart';
+import 'package:lmstory/features/advanced/presentation/utils/agent_approval_labels.dart';
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
@@ -20,6 +21,9 @@ void main() {
   });
 
   final t = DateTime(2026, 10, 15, 12);
+  ApprovalRowText display(AgentApprovalChange change) =>
+      formatApprovalChange(change, LocaleSettings.instance.currentTranslations);
+
   late FakeFactualRepository repo;
 
   setUp(() {
@@ -63,7 +67,6 @@ void main() {
         currentAnchor: anchor,
         draftAnchor: null,
         draftEventSummary: null,
-        t: LocaleSettings.instance.currentTranslations,
       );
 
   ToolExecutionRequest req(String name, Map<String, dynamic> args) =>
@@ -103,7 +106,7 @@ void main() {
       expect(c.after, '热情冲动');
       expect(c.reason, '本轮她为掩护同伴故意夸张表演');
       expect(c.confidence, 4);
-      expect(c.note, isNull);
+      expect(display(c).note, isNull);
     });
 
     test('值相同 → skipped 带 note 人话', () async {
@@ -125,7 +128,7 @@ void main() {
       );
 
       final c = changes.single;
-      expect(c.note, contains('值相同'));
+      expect(display(c).note, contains('值相同'));
     });
 
     test('转写链投影到终态：create 撞名+value → update_attr 明细', () async {
@@ -154,7 +157,7 @@ void main() {
       // 终态是 update_attr（转写链走到底），实体定位到既有实体，
       // 且转写说明保留（用户应知道请求的是 create、实际会转 update）
       expect(c.kind, ApprovalChangeKind.updateAttr);
-      expect(c.note, contains('同名'));
+      expect(display(c).note, contains('同名'));
     });
 
     test('deltas 为 JSON 字符串也可解析；坏条目跳过不猜', () async {
@@ -166,7 +169,7 @@ void main() {
       );
       // 实体不存在 → skipped(entityMissing) 仍生成一条（灰显）
       expect(changes, hasLength(1));
-      expect(changes.single.note, contains('不存在'));
+      expect(display(changes.single).note, contains('不存在'));
 
       final broken = await composer().compose(
         req('update_facts', {
@@ -199,12 +202,12 @@ void main() {
 
       // arc 一条 + foreshadows 一条（one_liner/narrative_time 未提供不出现）
       expect(changes, hasLength(2));
-      final arc = changes.firstWhere((c) => c.attrKey == '弧线');
+      final arc = changes.firstWhere((c) => display(c).attributeLabel == '弧线');
       expect(arc.before, '第一幕');
       expect(arc.after, '第二幕');
-      final fs = changes.firstWhere((c) => c.attrKey == '伏笔');
-      expect(fs.note, contains('新增 1 项'));
-      expect(fs.note, contains('移除 0 项'));
+      final fs = changes.firstWhere((c) => display(c).attributeLabel == '伏笔');
+      expect(display(fs).note, contains('新增 1 项'));
+      expect(display(fs).note, contains('移除 0 项'));
     });
   });
 
@@ -222,9 +225,9 @@ void main() {
       final c = changes.single;
       expect(c.kind, ApprovalChangeKind.eventMemory);
       expect(c.after, '林晚救下陈叔');
-      expect(c.note, contains('人物'));
+      expect(display(c).note, contains('人物'));
       // 无草稿事件时无替换提示
-      expect(c.note, isNot(contains('替换')));
+      expect(display(c).note, isNot(contains('替换')));
     });
   });
 
@@ -257,10 +260,10 @@ void main() {
 
       // 意图行 + 快照行
       expect(changes.first.kind, ApprovalChangeKind.mergeNote);
-      expect(changes.first.entityName, contains('庄园'));
-      expect(changes.first.entityName, contains('→'));
-      expect(changes.first.after, contains('合并'));
-      expect(changes.first.after, contains('归档'));
+      expect(display(changes.first).entityName, contains('庄园'));
+      expect(display(changes.first).entityName, contains('→'));
+      expect(display(changes.first).after, contains('合并'));
+      expect(display(changes.first).after, contains('归档'));
       expect(changes.first.reason, '同一地点两个名字');
       expect(changes.first.confidence, 4);
 

@@ -218,6 +218,8 @@ class AgentLoopDiagnosticsController
     final tl = t.settings.diagnostics.agentLoop.timeline;
     final entry = switch (event) {
       AgentResponseCompleted() => null,
+      // 表面守卫留痕（log-only）：时间线不展示（诊断页事件清单可查）
+      AgentSurfaceGuardTripped() => null,
       AgentTurnStarted() => AgentDiagnosticEntry(
           kind: 'turn',
           text: tl.turnStarted(maxSteps: event.maxSteps),

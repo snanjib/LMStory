@@ -16,3 +16,10 @@ Future<void> clearLogFiles() async {}
 
 /// 合并日志写入目标路径 - Web 平台 no-op（无文件日志）
 Future<void> saveLogFilesTo({required String targetPath}) async {}
+
+/// File logs are unavailable on Web.
+Future<void> withTemporaryLogExport(
+  Future<void> Function(String path) share,
+) async {
+  throw UnsupportedError('File logs are unavailable on Web');
+}

@@ -8,6 +8,7 @@ import 'package:lmstory/core/model_registry/model_capability_inferrer.dart';
 import 'package:lmstory/core/model_registry/model_registry.dart';
 import 'package:lmstory/core/network/dio_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
+import 'package:lmstory/core/network/llm_adapters/sampling_params.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
@@ -52,6 +53,9 @@ class ApiPresetRepositoryImpl implements ApiPresetRepository {
   final LlmAdapterFactory _adapterFactory;
   final Logger _logger;
   final _uuid = const Uuid();
+  static const _newProviderOptions = <String, dynamic>{
+    kOmitSamplingParamsOption: true,
+  };
 
   // -- 查询 --
 
@@ -80,9 +84,11 @@ class ApiPresetRepositoryImpl implements ApiPresetRepository {
     required String name,
     String baseUrl = '',
     LlmProtocol protocol = LlmProtocol.openaiCompatible,
+    bool omitSamplingParams = true,
   }) async {
     final presetId = _uuid.v4();
     final now = DateTime.now();
+    final providerOptions = omitSamplingParams ? _newProviderOptions : null;
     await _database.into(_database.apiPresetsTable).insert(
           ApiPresetsTableCompanion.insert(
             presetId: presetId,
@@ -91,6 +97,7 @@ class ApiPresetRepositoryImpl implements ApiPresetRepository {
             isBuiltIn: const Value(false),
             protocol: Value(protocol.toJson()),
             cachedModels: const Value('[]'),
+            providerOptions: Value(_encodeProviderOptions(providerOptions)),
             createdAt: Value(now),
             updatedAt: Value(now),
           ),
@@ -102,6 +109,7 @@ class ApiPresetRepositoryImpl implements ApiPresetRepository {
       createdAt: now,
       updatedAt: now,
       protocol: protocol,
+      providerOptions: providerOptions,
     );
   }
 
@@ -118,6 +126,10 @@ class ApiPresetRepositoryImpl implements ApiPresetRepository {
     }
     final presetId = _uuid.v4();
     final now = DateTime.now();
+    final providerOptions = {
+      ...?template.providerOptions,
+      ..._newProviderOptions,
+    };
     await _database.into(_database.apiPresetsTable).insert(
           ApiPresetsTableCompanion.insert(
             presetId: presetId,
@@ -127,6 +139,7 @@ class ApiPresetRepositoryImpl implements ApiPresetRepository {
             protocol: Value(template.protocol.toJson()),
             templateId: Value(templateId),
             cachedModels: const Value('[]'),
+            providerOptions: Value(_encodeProviderOptions(providerOptions)),
             createdAt: Value(now),
             updatedAt: Value(now),
           ),
@@ -137,6 +150,7 @@ class ApiPresetRepositoryImpl implements ApiPresetRepository {
       baseUrl: template.defaultBaseUrl,
       protocol: template.protocol,
       templateId: templateId,
+      providerOptions: providerOptions,
       createdAt: now,
       updatedAt: now,
     );

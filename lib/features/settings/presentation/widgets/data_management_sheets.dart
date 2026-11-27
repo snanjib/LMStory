@@ -315,27 +315,27 @@ class _ImportModeSheetState extends State<ImportModeSheet> {
               // 红色危险警示区分，这是兜底而非鼓励）。
               // web 无本地备份目录，页面侧不注入
               // preImportSnapshot——承诺「会自动快照」的提示不得在无快照
-              // 兜底的平台上渲染
-              if (!kIsWeb)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.history_outlined,
-                      size: 16,
-                      color: colors.muted,
-                    ),
-                    const SizedBox(width: SimpleSpacing.sSm),
-                    Expanded(
-                      child: Text(
-                        t.settings.data.importMode.snapshotHint,
-                        style: SimpleTextStyles.caption.copyWith(
-                          color: colors.muted,
-                        ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.history_outlined,
+                    size: 16,
+                    color: colors.muted,
+                  ),
+                  const SizedBox(width: SimpleSpacing.sSm),
+                  Expanded(
+                    child: Text(
+                      kIsWeb
+                          ? t.settings.data.importMode.browserSnapshotHint
+                          : t.settings.data.importMode.snapshotHint,
+                      style: SimpleTextStyles.caption.copyWith(
+                        color: colors.muted,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
+              ),
             ],
             const SizedBox(height: SimpleSpacing.sXl),
             // 含 Key 备份——风险提示 + 默认关闭

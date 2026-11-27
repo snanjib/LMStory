@@ -1,130 +1,76 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lmstory/features/chat/domain/entities/message_attachment.dart';
 import 'package:lmstory/features/chat/presentation/widgets/chat_mode_input_area.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
-/// ChatModeInputArea 发送前预检测试
-///
-/// 草稿会话无预设/模型/Key 时控制器拒绝发送——此前输入区先清空再回调，
-/// 已打文本与附件原地蒸发不可恢复。预检钩子（onBeforeSend）失败时输入
-/// 必须原地保留、onSend 不得触发；通过时清空并正常发送。
 void main() {
-  setUpAll(() {
-    LocaleSettings.setLocale(AppLocale.zhCn);
-  });
-
-  Widget wrap(Widget child) => ProviderScope(
+  Widget input(Future<bool> Function(String text) onSend) => ProviderScope(
         child: TranslationProvider(
-          child: MaterialApp(home: Scaffold(body: child)),
+          child: MaterialApp(
+            home: Scaffold(
+              body: ChatModeInputArea(
+                onSend: (text, attachments) => onSend(text),
+                onCancel: () {},
+                isSending: false,
+                isStreaming: false,
+              ),
+            ),
+          ),
         ),
       );
 
-  ChatModeInputArea input({
-    required bool Function(String text) precheck,
-    required void Function(String text) onSend,
-  }) =>
-      ChatModeInputArea(
-        onSend: (text, attachments) => onSend(text),
-        onCancel: () {},
-        isSending: false,
-        isStreaming: false,
-        onBeforeSend: (text, attachments) async => precheck(text),
-      );
-
-  testWidgets('预检失败：输入原地保留、onSend 不触发', (tester) async {
-    var sent = 0;
+  testWidgets('发送被拒时原地保留输入，之后可重新发送', (tester) async {
+    final attempted = <String>[];
+    var accept = false;
     await tester.pumpWidget(
-      wrap(input(precheck: (_) => false, onSend: (_) => sent++)),
+      input((text) async {
+        attempted.add(text);
+        return accept;
+      }),
     );
-    await tester.enterText(find.byType(TextField), '很长的草稿内容，不能丢');
+    final field = find.byType(TextField);
+    const draft = '  保留原输入  ';
+    await tester.enterText(field, draft);
     await tester.pump();
 
-    await tester.tap(find.byIcon(Icons.send_rounded));
+    final send = find.byIcon(Icons.send_rounded);
+    await tester.tap(send);
     await tester.pumpAndSettle();
+    expect(attempted, [draft.trim()]);
+    expect(tester.widget<TextField>(field).controller?.text, draft);
 
-    expect(sent, 0, reason: '预检失败不得发送');
-    expect(
-      tester.widget<TextField>(find.byType(TextField)).controller?.text,
-      '很长的草稿内容，不能丢',
-      reason: '预检失败输入必须原地保留（此前先清空再拒绝）',
-    );
+    accept = true;
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+    expect(attempted, [draft.trim(), draft.trim()]);
+    expect(tester.widget<TextField>(field).controller?.text, isEmpty);
   });
 
-  testWidgets('预检通过：清空输入并正常发送', (tester) async {
-    var sent = 0;
-    var sentText = '';
+  testWidgets('等待发送回执期间连点只发一次，新编辑仍保留', (tester) async {
+    final response = Completer<bool>();
+    final attempted = <String>[];
     await tester.pumpWidget(
-      wrap(
-        input(
-          precheck: (_) => true,
-          onSend: (t) {
-            sent++;
-            sentText = t;
-          },
-        ),
-      ),
+      input((text) {
+        attempted.add(text);
+        return response.future;
+      }),
     );
-    await tester.enterText(find.byType(TextField), '正常消息');
+    final field = find.byType(TextField);
+    await tester.enterText(field, '原输入');
     await tester.pump();
 
-    await tester.tap(find.byIcon(Icons.send_rounded));
+    final send = find.byIcon(Icons.send_rounded);
+    await tester.tap(send);
+    await tester.tap(send);
+    expect(attempted, ['原输入']);
+    expect(tester.widget<TextField>(field).controller?.text, '原输入');
+
+    await tester.enterText(field, '等待期间编辑的输入');
+    response.complete(true);
     await tester.pumpAndSettle();
-
-    expect(sent, 1);
-    expect(sentText, '正常消息');
-    expect(
-      tester.widget<TextField>(find.byType(TextField)).controller?.text,
-      '',
-      reason: '通过后照常清空',
-    );
-  });
-
-  testWidgets('无预检钩子：行为与旧版一致（清空即发送）', (tester) async {
-    var sent = 0;
-    await tester.pumpWidget(
-      wrap(
-        ChatModeInputArea(
-          onSend: (text, List<MessageAttachment> attachments) => sent++,
-          onCancel: () {},
-          isSending: false,
-          isStreaming: false,
-        ),
-      ),
-    );
-    await tester.enterText(find.byType(TextField), '直接发送');
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.send_rounded));
-    await tester.pumpAndSettle();
-
-    expect(sent, 1);
-  });
-
-  testWidgets('预检在途：第二次点击被去抖', (tester) async {
-    var sent = 0;
-    var precheckCalls = 0;
-    await tester.pumpWidget(
-      wrap(
-        input(
-          precheck: (_) {
-            precheckCalls++;
-            return true;
-          },
-          onSend: (_) => sent++,
-        ),
-      ),
-    );
-    await tester.enterText(find.byType(TextField), '去抖');
-    await tester.pump();
-
-    // 连点两次：第二击落在预检在途窗口内，不得重复进入
-    await tester.tap(find.byIcon(Icons.send_rounded));
-    await tester.tap(find.byIcon(Icons.send_rounded), warnIfMissed: false);
-    await tester.pumpAndSettle();
-
-    expect(sent, 1);
-    expect(precheckCalls, 1, reason: '在途窗口内去抖，预检只跑一次');
+    expect(tester.widget<TextField>(field).controller?.text, '等待期间编辑的输入');
   });
 }

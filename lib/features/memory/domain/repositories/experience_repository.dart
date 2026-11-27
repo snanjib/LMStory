@@ -139,6 +139,7 @@ abstract class ExperienceRepository {
     String? extra,
     bool indexForRetrieval = true,
     String source = 'auto',
+    bool hasVerifiedSourceTurn = false,
   });
 
   /// 获取最近的经历类记忆（按 turn_number 降序，取 limit 条）

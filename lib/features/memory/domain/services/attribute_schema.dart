@@ -78,50 +78,6 @@ class AttributeSchema {
     'members': 3,
   };
 
-  /// 各 attrKey 的中文友好标签（UI 展示用，DOC-11 §6.1）
-  ///
-  /// 与 [_schema] 结构一致，按 entityType -> {attrKey -> 中文标签}。
-  /// 用于实体编辑界面下拉选择，让用户看到中文名称而非英文 attrKey。
-  /// name 在不同实体类型下翻译不同（角色=姓名，物品=物品名，地点=地点名）。
-  ///
-  /// 2026-07-25 新增：配合实体编辑界面优化，属性键改为下拉选择。
-  static const Map<FactualEntityType, Map<String, String>> _labels = {
-    FactualEntityType.character: {
-      'name': '姓名',
-      'personality': '性格',
-      'background': '背景',
-      'relationships': '关系',
-      'skills': '技能',
-    },
-    FactualEntityType.location: {
-      'name': '地点名',
-      'description': '描述',
-      'features': '特征',
-    },
-    FactualEntityType.item: {
-      'name': '物品名',
-      'description': '描述',
-      'owner': '所有者',
-    },
-    FactualEntityType.lore: {
-      'name': '设定名',
-      'description': '设定描述',
-      'category': '分类',
-    },
-    FactualEntityType.organization: {
-      'name': '组织名',
-      'description': '组织描述',
-      'leader': '首领',
-      'members': '成员',
-      'background': '背景',
-    },
-    FactualEntityType.misc: {
-      'name': '名称',
-      'description': '描述',
-      'category': '分类',
-    },
-  };
-
   /// 属性键别名映射（用于兼容 LLM 产出的非标准字段）
   ///
   /// 某些模型（如 agnes-2.0-flash）不严格遵守 schema 白名单，会使用
@@ -204,6 +160,25 @@ class AttributeSchema {
   static String fallbackDescriptionKey(FactualEntityType entityType) =>
       normalizeAttrKey(entityType, 'description');
 
+  /// 按对象关系属性键前缀：`relationship:<对象名>`
+  ///
+  /// 与具体角色的关系各占一条 single 属性（update 维护完整当前描述，
+  /// 历史可回溯）；群体/笼统关系（如「与师门众人交恶」）仍走通用
+  /// relationships dict 属性。关系有方向（属性挂在陈述方实体上），
+  /// 不自动推断对方对称。
+  static const String relationshipKeyPrefix = 'relationship:';
+
+  /// 解析按对象关系键中的对象名；非该前缀键返回 null
+  static String? relationshipObjectOf(String attrKey) {
+    if (!attrKey.startsWith(relationshipKeyPrefix)) return null;
+    final object = attrKey.substring(relationshipKeyPrefix.length).trim();
+    return object.isEmpty ? null : object;
+  }
+
+  /// 构造按对象关系键
+  static String buildRelationshipAttrKey(String objectName) =>
+      '$relationshipKeyPrefix$objectName';
+
   /// 获取 attrKey 的默认重要性
   static int defaultImportance(
     FactualEntityType entityType,
@@ -212,18 +187,12 @@ class AttributeSchema {
     return _defaultImportance[attrKey] ?? 3;
   }
 
-  /// 获取 attrKey 的中文友好标签
-  ///
-  /// 用于 UI 展示。若 attrKey 不在预定义白名单内（自定义属性），
-  /// 返回 null，调用方可显示 attrKey 原文并标注"自定义"。
-  ///
-  /// 2026-07-25 新增：配合实体编辑界面优化。
-  static String? labelFor(
+  /// 该键是否是此类实体的预定义属性。
+  static bool isBuiltInAttrKey(
     FactualEntityType entityType,
     String attrKey,
-  ) {
-    return _labels[entityType]?[attrKey];
-  }
+  ) =>
+      _schema[entityType]?.containsKey(attrKey) ?? false;
 
   /// 获取某实体类型的所有预定义 attrKey 列表
   ///

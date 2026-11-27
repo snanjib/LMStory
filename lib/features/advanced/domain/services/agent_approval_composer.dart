@@ -1,8 +1,8 @@
-import 'dart:convert';
-
 import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_session_tools.dart'
+    show AgentFactsDeltaInput;
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
@@ -11,7 +11,7 @@ import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/repositories/factual_repository.dart';
 import 'package:lmstory/features/memory/domain/services/attribute_schema.dart';
 import 'package:lmstory/features/memory/domain/services/facts_delta_projection.dart';
-import 'package:lmstory/i18n/strings.g.dart';
+import 'package:lmstory/features/memory/domain/services/facts_delta_target.dart';
 
 /// 审批变更明细组装器（2026-10-15 批 B）
 ///
@@ -31,7 +31,6 @@ class AgentApprovalComposer {
     required this.currentAnchor,
     required this.draftAnchor,
     required this.draftEventSummary,
-    required this.t,
   }) : _repository = repository;
 
   final FactualRepository _repository;
@@ -47,8 +46,6 @@ class AgentApprovalComposer {
 
   /// 本轮草稿事件记忆（同轮二次 record_event_memory 的「将替换」提示）
   final EventSummary? draftEventSummary;
-
-  final Translations t;
 
   /// 组装入口：按工具分派；未知写工具返回空明细（横幅退化为摘要）
   Future<List<AgentApprovalChange>> compose(
@@ -73,43 +70,47 @@ class AgentApprovalComposer {
   Future<List<AgentApprovalChange>> _composeFacts(
     ToolExecutionRequest request,
   ) async {
-    final raw = request.arguments['deltas'];
-    List<dynamic>? decoded;
-    if (raw is List) {
-      decoded = raw;
-    } else if (raw is String && raw.trim().isNotEmpty) {
-      try {
-        final parsed = jsonDecode(raw);
-        if (parsed is List) decoded = parsed;
-      } on FormatException {
-        decoded = null;
-      }
+    final arguments = request.arguments;
+    if (arguments['clear_pending'] == true &&
+        arguments['replace_pending'] != true) {
+      return const [];
     }
-    if (decoded == null || decoded.isEmpty) return const [];
+    final decoded = AgentFactsDeltaInput.decodeList(arguments['deltas']);
+    if (decoded == null || decoded.length > AgentFactsDeltaInput.maxBatchSize) {
+      return const [];
+    }
 
     final changes = <AgentApprovalChange>[];
     for (final item in decoded) {
-      if (item is! Map<String, dynamic>) continue;
-      final FactsDelta delta;
-      try {
-        delta = FactsDelta.fromJson(item);
-      } catch (_) {
-        continue; // 解析失败的条目由工具回执报错，明细区不猜
-      }
-      final change = await _projectDelta(delta);
+      final input = AgentFactsDeltaInput.fromRaw(item).input;
+      final delta = input?.toFactsDelta();
+      if (input == null || delta == null) continue;
+      final change = await _projectDelta(delta, input.originalReason);
       if (change != null) changes.add(change);
     }
     return changes;
   }
 
   /// 单条 delta 的干跑投影（转写循环至终态，深度上限 3 防环）
-  Future<AgentApprovalChange?> _projectDelta(FactsDelta delta) async {
-    var current = delta;
-    final conversionNotes = <String>[];
+  Future<AgentApprovalChange?> _projectDelta(
+    FactsDelta delta,
+    String? originalReason,
+  ) async {
+    var current = await resolveDeltaEntityId(
+          _repository,
+          sessionId,
+          delta,
+        ) ??
+        delta;
+    final conversionNotes = <FactsProjectionNote>[];
     for (var depth = 0; depth < 3; depth++) {
-      final entity = await _resolveEntity(current);
+      final entityId = current.entityId;
+      final entity =
+          entityId == null ? null : await _repository.getEntityById(entityId);
       final attrRows = await _attrRowsFor(current, entity);
-      final recentUpdates = current.isCuration || current.entityId == null
+      final recentUpdates = current.isCuration ||
+              current.skipFrequencyGuard ||
+              current.entityId == null
           ? 0
           : await _countRecentUpdates(current.entityId!);
 
@@ -153,53 +154,34 @@ class AgentApprovalComposer {
                 ? null
                 : await _findByName(current.primaryName!),
           ),
+        FactAction.setImportance =>
+          FactsDeltaProjectionEvaluator.evaluateSetImportance(
+            delta: current,
+            entity: entity,
+          ),
       };
 
-      if (verdict.outcome != FactsProjectionOutcome.converted) {
-        final change = _toChange(verdict);
-        if (conversionNotes.isEmpty) return change;
-        // 保留整条转写链的说明（如 create 撞名→update→别名上限）：用户
-        // 看到的应是「请求的是什么 + 实际会发生什么」两段信息
-        final fullNote = [
-          ...conversionNotes,
-          if (change.note != null) change.note!,
-        ].join('\n');
-        return AgentApprovalChange(
-          entityName: change.entityName,
-          kind: change.kind,
-          attrKey: change.attrKey,
-          before: change.before,
-          after: change.after,
-          note: fullNote,
-          reason: change.reason,
-          confidence: change.confidence,
-          effective: change.effective,
+      final rewritten = verdict.rewrittenDelta;
+      final note = verdict.note;
+      if (note != null) conversionNotes.add(note);
+      if (verdict.outcome != FactsProjectionOutcome.converted ||
+          rewritten == null) {
+        return _toChange(
+          verdict,
+          entity?.type ?? FactualEntityType.tryFromString(current.entityType),
+          conversionNotes,
+          originalReason ?? delta.reason,
         );
       }
-      final rewritten = verdict.rewrittenDelta;
-      if (rewritten == null) return _toChange(verdict);
-      final noteText = _noteText(verdict);
-      if (noteText != null) conversionNotes.add(noteText);
       current = rewritten;
     }
     return null; // 环保护（现有转写链最深 2 层，理论不可达）
   }
 
-  /// 实体定位（模拟 FactApplier._resolveDeltaEntityId 的按名兜底语义）
-  Future<FactualEntity?> _resolveEntity(FactsDelta delta) async {
-    if (delta.entityId != null) {
-      return _repository.getEntityById(delta.entityId!);
-    }
-    if (delta.primaryName == null || delta.action == FactAction.createEntity) {
-      return null;
-    }
-    final name = delta.primaryName!.trim();
-    if (name.isEmpty) return null;
-    final matches = await _repository.findByName(sessionId, [name]);
-    return matches.length == 1 ? matches.first : null;
-  }
-
   /// 归一化键查属性行（entity 缺失或无 attrKey 时为空）
+  ///
+  /// 按对象关系键的对象名规范化与 FactApplier 落库同款（别名唯一命中
+  /// 归一到主名），保证审批横幅看到的行 = 提交时落库判定的行。
   Future<List<FactualAttribute>> _attrRowsFor(
     FactsDelta delta,
     FactualEntity? entity,
@@ -207,9 +189,32 @@ class AgentApprovalComposer {
     if (entity == null || delta.entityId == null || delta.attrKey == null) {
       return const [];
     }
-    final attrKey =
-        AttributeSchema.normalizeAttrKey(entity.type, delta.attrKey!);
+    var attrKey = AttributeSchema.normalizeAttrKey(entity.type, delta.attrKey!);
+    final relationshipObject =
+        AttributeSchema.relationshipObjectOf(delta.attrKey!);
+    if (relationshipObject != null) {
+      attrKey = await _canonicalizeRelationshipKey(relationshipObject);
+    }
     return _repository.getAttributesByKey(delta.entityId!, attrKey);
+  }
+
+  /// 按对象关系键对象名规范化（与 FactApplier._canonicalizeRelationshipKey
+  /// 同语义：唯一命中归一，未命中/歧义保留原键）
+  Future<String> _canonicalizeRelationshipKey(String relationshipObject) async {
+    try {
+      final matches = await _repository.findByName(
+        sessionId,
+        [relationshipObject],
+      );
+      if (matches.length == 1) {
+        return AttributeSchema.buildRelationshipAttrKey(
+          matches.first.primaryName,
+        );
+      }
+    } catch (_) {
+      // 名字解析失败保留原键，与落库侧一致
+    }
+    return AttributeSchema.buildRelationshipAttrKey(relationshipObject);
   }
 
   Future<int> _countRecentUpdates(String entityId) async {
@@ -228,17 +233,23 @@ class AgentApprovalComposer {
     return matches.isEmpty ? null : matches.first;
   }
 
-  AgentApprovalChange _toChange(FactsDeltaProjection verdict) {
-    // 投影器契约：applied/converted 的 effectiveAction = 实际生效动作；
-    // skipped 的 effectiveAction = 源意图动作（UI 灰显展示「想做但不会生效」）
+  AgentApprovalChange _toChange(
+    FactsDeltaProjection verdict,
+    FactualEntityType? entityType,
+    List<FactsProjectionNote> notes,
+    String? reason,
+  ) {
     return AgentApprovalChange(
       entityName: verdict.entityLabel,
       kind: _kindOf(verdict.effectiveAction),
-      attrKey: verdict.normalizedAttrKey,
+      entityType: entityType,
+      attrKey: verdict.effectiveAction == FactAction.setImportance
+          ? 'importance'
+          : verdict.normalizedAttrKey,
       before: verdict.before,
       after: verdict.after,
-      note: _noteText(verdict),
-      reason: verdict.reason,
+      details: notes.isEmpty ? null : ApprovalFactNotes(notes),
+      reason: reason,
       confidence: verdict.confidence,
       effective: verdict.outcome != FactsProjectionOutcome.skipped,
     );
@@ -251,42 +262,8 @@ class AgentApprovalComposer {
         FactAction.removeFromList => ApprovalChangeKind.removeFromList,
         FactAction.addAlias => ApprovalChangeKind.addAlias,
         FactAction.archiveEntity => ApprovalChangeKind.archiveEntity,
+        FactAction.setImportance => ApprovalChangeKind.updateAttr,
       };
-
-  String? _noteText(FactsDeltaProjection verdict) {
-    final note = verdict.note;
-    if (note == null) return null;
-    final s = t.advanced.approval;
-    return switch (note) {
-      FactsProjectionNote.missingFields => s.noteMissingFields,
-      FactsProjectionNote.unknownEntityType => s.noteMissingFields,
-      FactsProjectionNote.entityMissing => s.noteEntityMissing,
-      FactsProjectionNote.nameIsIdentity => s.noteNameIsIdentity,
-      FactsProjectionNote.attrKeyNotWhitelisted => s.noteWhitelist,
-      FactsProjectionNote.valueTooLong => s.noteTooLong,
-      FactsProjectionNote.tooFrequent => s.noteTooFrequent,
-      FactsProjectionNote.valueUnchangedBaseline => s.noteUnchanged,
-      FactsProjectionNote.valueUnchanged => s.noteUnchanged,
-      FactsProjectionNote.confidenceGate => s.noteConfidenceGate,
-      FactsProjectionNote.listRejectsUpdate => s.noteListRejects,
-      FactsProjectionNote.baselineSingleRedirect => s.noteBaselineRedirect,
-      FactsProjectionNote.appendOnSingleConvertsUpdate =>
-        s.noteBaselineRedirect,
-      FactsProjectionNote.duplicateExact => s.noteDuplicate,
-      FactsProjectionNote.duplicateSimilar => s.noteDuplicate,
-      FactsProjectionNote.noMutableList => s.noteNoMutableList,
-      FactsProjectionNote.valueNotInList => s.noteValueNotInList,
-      FactsProjectionNote.aliasEmpty => s.noteMissingFields,
-      FactsProjectionNote.aliasTooLong => s.noteTooLong,
-      FactsProjectionNote.aliasSameAsPrimary => s.noteAliasSameAsPrimary,
-      FactsProjectionNote.aliasExists => s.noteDuplicate,
-      FactsProjectionNote.aliasLimit => s.noteAliasLimit,
-      FactsProjectionNote.alreadyArchived => s.noteAlreadyArchived,
-      FactsProjectionNote.sameNameConvertsUpdate => s.noteSameNameUpdate,
-      FactsProjectionNote.sameNameConvertsAlias => s.noteSameNameAlias,
-      FactsProjectionNote.createsAttrRow => s.noteCreatesAttrRow,
-    };
-  }
 
   // ==================== update_story_anchor ====================
 
@@ -295,42 +272,37 @@ class AgentApprovalComposer {
   ) async {
     final args = request.arguments;
     final before = draftAnchor ?? currentAnchor;
-    final s = t.advanced.approval;
     final changes = <AgentApprovalChange>[];
 
     void field(
-      String key,
-      String labelKey,
+      ApprovalAnchorField field,
       String? Function(StoryAnchor a) get,
       String? after,
     ) {
       if (after == null) return;
       changes.add(
         AgentApprovalChange(
-          entityName: s.anchorEntityName,
+          entityName: '',
           kind: ApprovalChangeKind.anchor,
-          attrKey: labelKey,
           before: before == null ? null : get(before),
           after: after,
+          details: ApprovalAnchorDetails(field),
         ),
       );
     }
 
     field(
-      'arc',
-      s.anchorFieldArc,
+      ApprovalAnchorField.arc,
       (a) => a.arc,
       args['arc']?.toString(),
     );
     field(
-      'one_liner',
-      s.anchorFieldMainline,
+      ApprovalAnchorField.mainline,
       (a) => a.oneLiner,
       args['one_liner']?.toString(),
     );
     field(
-      'narrative_time',
-      s.anchorFieldTime,
+      ApprovalAnchorField.time,
       (a) => a.narrativeTime,
       args['narrative_time']?.toString(),
     );
@@ -351,18 +323,16 @@ class AgentApprovalComposer {
       final removed = oldTexts.difference(newTexts).length;
       changes.add(
         AgentApprovalChange(
-          entityName: s.anchorEntityName,
+          entityName: '',
           kind: ApprovalChangeKind.anchor,
-          attrKey: s.anchorFieldForeshadow,
           before: oldList.isEmpty ? null : oldTexts.join(' / '),
           after: newList.isEmpty ? null : newTexts.join(' / '),
-          note: added == 0 && removed == 0
-              ? s.noteUnchanged
-              : s.foreshadowDiff(
-                  added: added,
-                  removed: removed,
-                ),
           effective: added != 0 || removed != 0,
+          details: ApprovalAnchorDetails(
+            ApprovalAnchorField.foreshadow,
+            added: added,
+            removed: removed,
+          ),
         ),
       );
     }
@@ -376,28 +346,18 @@ class AgentApprovalComposer {
     ToolExecutionRequest request,
   ) async {
     final args = request.arguments;
-    final what = args['what']?.toString() ?? '';
-    final s = t.advanced.approval;
-    final detail = [
-      if (args['who'] != null) '${s.eventFieldWho}：${args['who']}',
-      if (args['when'] != null) '${s.eventFieldWhen}：${args['when']}',
-      if (args['where'] != null) '${s.eventFieldWhere}：${args['where']}',
-      if (args['significance'] != null)
-        '${s.eventFieldSignificance}：${args['significance']}',
-    ].join('；');
-
-    final noteParts = [
-      if (detail.isNotEmpty) detail,
-      if (draftEventSummary != null) s.noteEventReplace,
-    ];
     return [
       AgentApprovalChange(
-        entityName: s.eventEntityName,
+        entityName: '',
         kind: ApprovalChangeKind.eventMemory,
-        before: draftEventSummary?.displayText,
-        after: what,
-        note: noteParts.isEmpty ? null : noteParts.join('\n'),
+        after: args['what']?.toString() ?? '',
         reason: args['significance']?.toString(),
+        details: ApprovalEventDetails(
+          previous: draftEventSummary,
+          who: args['who']?.toString(),
+          when: args['when']?.toString(),
+          where: args['where']?.toString(),
+        ),
       ),
     ];
   }
@@ -409,7 +369,6 @@ class AgentApprovalComposer {
     ToolExecutionRequest request,
   ) async {
     final args = request.arguments;
-    final s = t.advanced.approval;
     final source = await _resolveMergeEndpoint(
       args['source_entity_id']?.toString(),
       args['source_name']?.toString(),
@@ -418,21 +377,20 @@ class AgentApprovalComposer {
       args['target_entity_id']?.toString(),
       args['target_name']?.toString(),
     );
+    final sourceName =
+        source?.primaryName ?? args['source_name']?.toString() ?? '?';
+    final targetName =
+        target?.primaryName ?? args['target_name']?.toString() ?? '?';
+    final reason = args['reason']?.toString();
+    final confidence = _readConfidence(args['confidence']);
 
     final changes = <AgentApprovalChange>[
       AgentApprovalChange(
-        entityName: s.mergePair(
-          source: source?.primaryName ?? args['source_name']?.toString() ?? '?',
-          target: target?.primaryName ?? args['target_name']?.toString() ?? '?',
-        ),
+        entityName: '',
         kind: ApprovalChangeKind.mergeNote,
-        after: s.mergeIntentPlain(
-          source: source?.primaryName ?? args['source_name']?.toString() ?? '?',
-          target: target?.primaryName ?? args['target_name']?.toString() ?? '?',
-        ),
-        note: s.noteMergeDetail,
-        reason: args['reason']?.toString(),
-        confidence: _readConfidence(args['confidence']),
+        reason: reason,
+        confidence: confidence,
+        details: ApprovalMergeDetails(source: sourceName, target: targetName),
       ),
     ];
 
@@ -447,9 +405,10 @@ class AgentApprovalComposer {
           changes.add(
             AgentApprovalChange(
               entityName: target.primaryName,
+              entityType: target.type,
               kind: ApprovalChangeKind.entitySnapshot,
               attrKey: row.attrKey,
-              after: row.displayText,
+              details: ApprovalSnapshotDetails(row),
             ),
           );
         }

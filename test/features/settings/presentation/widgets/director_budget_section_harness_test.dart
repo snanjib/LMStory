@@ -45,7 +45,7 @@ void main() {
     LocaleSettings.setLocale(AppLocale.zhCn);
   });
 
-  testWidgets('高级子折叠暴露两行 harness 写点，stepper 写用户覆盖', (tester) async {
+  testWidgets('高级子折叠移除旧伏笔清点步进器，保留轮日志保留写点', (tester) async {
     final repo = _CapturingSettingsRepository();
     await tester.pumpWidget(
       ProviderScope(
@@ -69,28 +69,17 @@ void main() {
     await tester.tap(find.text('高级'));
     await tester.pumpAndSettle();
 
-    // 两行齐备，默认值回显 8 / 20
-    final foreshadowRow = find.text('伏笔清点间隔（轮）');
+    // 旧伏笔清点间隔步进器已移除；轮日志保留行仍在且默认回显 20
+    expect(find.text('伏笔清点间隔（轮）'), findsNothing);
     final retentionRow = find.text('轮日志保留（轮）');
-    expect(foreshadowRow, findsOneWidget);
     expect(retentionRow, findsOneWidget);
     expect(
       find.descendant(
-        of: find.ancestor(of: foreshadowRow, matching: find.byType(Column)),
-        matching: find.text('8'),
+        of: find.ancestor(of: retentionRow, matching: find.byType(Column)),
+        matching: find.text('20'),
       ),
       findsWidgets,
     );
-
-    // 点「伏笔清点间隔」+ 步进 → 写 advanced.harness.foreshadow_check_interval=9
-    await tester.ensureVisible(foreshadowRow);
-    await tester.pumpAndSettle();
-    final tile =
-        find.ancestor(of: foreshadowRow, matching: find.byType(Column)).first;
-    await tester
-        .tap(find.descendant(of: tile, matching: find.byIcon(Icons.add)));
-    await tester.pumpAndSettle();
-    expect(repo.written['advanced.harness.foreshadow_check_interval'], 9);
 
     // 点「轮日志保留」- 步进 → 写 advanced.harness.event_log_retention_turns=19
     await tester.ensureVisible(retentionRow);

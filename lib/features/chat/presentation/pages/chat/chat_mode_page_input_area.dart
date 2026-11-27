@@ -24,11 +24,13 @@ extension _ChatModePageInputArea on _ChatModePageState {
     // 草稿防抖落库（与 token 计数同窗）：输入中随时退出最多丢 500ms。
     // dispose 不写库（Riverpod 生命周期禁 ref），此路径是退出兜底主力。
     _draftDebounce?.cancel();
-    final sessionId = widget.session.sessionId;
-    // lm-motion-exempt: 草稿落库去抖（交互节流，非过渡动效）
-    _draftDebounce = Timer(const Duration(milliseconds: 500), () {
-      _persistDraftColumn(sessionId, text);
-    });
+    if (!_settingDraftText) {
+      final sessionId = widget.session.sessionId;
+      // lm-motion-exempt: 草稿落库去抖（交互节流，非过渡动效）
+      _draftDebounce = Timer(const Duration(milliseconds: 500), () {
+        _persistDraftColumn(sessionId, text);
+      });
+    }
     if (text.isEmpty) {
       setState(() => _tokenCount = 0);
       return;
@@ -78,13 +80,10 @@ extension _ChatModePageInputArea on _ChatModePageState {
     );
     return ChatModeInputArea(
       key: _inputAreaKey,
+      draftSessionId: widget.session.sessionId,
       controller: _inputController,
       focusNode: _inputFocusNode,
       onSend: _handleSend,
-      // 草稿预检先行——失败时输入与附件原地保留
-      onBeforeSend: (text, attachments) => ref
-          .read(chatModeControllerProvider(widget.session).notifier)
-          .precheckDraftSend(),
       onCancel: _handleCancel,
       isSending: state.isSending,
       isStreaming: state.isStreaming,
@@ -97,11 +96,12 @@ extension _ChatModePageInputArea on _ChatModePageState {
       ],
       sendKey: sendKey,
       newlineKey: newlineKey,
-      // 上下文用量圆环（与故事/导演同款）——数字与旧 token 徽章
-      // 同源：已用 = 最近落库 tokensUsed + 草稿输入；满刻度 = chat
-      // 压缩触发线。core 不依赖 features，圆环经 contextSlot 注入。
+      // 上下文用量圆环（与故事/导演同款）：主数字 = 当前预计上下文
+      //（真实装配材料的本地计数 + 草稿）；满刻度 = 压缩触发线。
+      // core 不依赖 features，圆环经 contextSlot 注入。
       contextSlot: ContextUsageChip(
-        numerator: _lastContextTokens(state.messages) + _tokenCount,
+        // 当前预计上下文（含草稿）；null → 圆环空态，不显示 0%
+        numerator: _currentContextTokens(state),
         denominator: state.compactionTriggerTokens,
         onTap: _showContextUsageSheet,
       ),

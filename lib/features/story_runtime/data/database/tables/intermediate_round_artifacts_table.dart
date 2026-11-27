@@ -94,6 +94,13 @@ class IntermediateRoundArtifactsTable extends Table {
   /// 会话从未设锚时恒为 null（不显示 Recap 卡）。故事模式恒为 null。
   TextColumn get storyAnchor => text().nullable()();
 
+  /// 本轮事实层原始 deltas JSON（FactsDelta 列表序列化）
+  ///
+  /// 供稿件变体快照复制：切换回旧变体时按该 deltas 在轮前状态上确定性
+  /// 重放事实层（记忆是所选正文的派生物）。null = 本轮无事实变更或
+  /// 旧数据（旧轮次切换时不重放，删除当前派生即止）。
+  TextColumn get factsDeltas => text().nullable()();
+
   /// 本轮是否执行了 reviewing 阶段（v0.2.2 新增，schemaVersion 32）
   ///
   /// `true` = 执行了审查（generating → reviewing → summarizing）

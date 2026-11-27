@@ -2,6 +2,8 @@ import 'package:lmstory/core/exceptions/app_exceptions.dart'
     show ResourceApplyException;
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_entity_catalog.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_memory_changes_snapshot.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_memory_history.dart';
 import 'package:lmstory/features/memory/domain/entities/force_inject_target.dart';
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart'
@@ -9,11 +11,18 @@ import 'package:lmstory/features/memory/domain/repositories/experience_repositor
 import 'package:lmstory/features/memory/domain/services/memory_query.dart'
     show MemoryQuery;
 
+export 'package:lmstory/features/memory/domain/entities/factual_entity_catalog.dart';
+
 /// 「记忆查看器」手动编辑属性的固定 updateReason（持久化审计值，非 UI 文案）。
 const factualManualEditReason = '手动编辑';
 
 /// 「记忆查看器」手动归并写审计历史的固定原因（持久化审计值，非 UI 文案）。
 const factualManualMergeReason = '记忆查看器手动归并';
+
+/// 持久化引用不属于当前会话。切稿调用方须撤销整个事务。
+class FactTargetMismatch implements Exception {
+  const FactTargetMismatch();
+}
 
 /// 事实层仓储接口（DOC-11 §11.1、DOC-05 §4.6）
 ///
@@ -110,6 +119,42 @@ abstract class FactualRepository {
   /// 不存在时返回 null。
   Future<FactualEntity?> getEntityById(String entityId);
 
+  /// 按 entityId 列表批量获取实体（严格按 [sessionId] 隔离，包含已归档实体）。
+  ///
+  /// 保留输入去重顺序，不存在或跨会话的 ID 自动忽略。
+  Future<List<FactualEntity>> getEntitiesByIds(
+    String sessionId,
+    List<String> entityIds,
+  );
+
+  /// 分页浏览会话内实体目录，并返回全会话紧凑分布统计头。
+  ///
+  /// - [sourceFilter]：`'dynamic'`（默认，`source == auto || updatedTurn != null`）、
+  ///   `'auto'`、`'worldbook'`、`'card'`、`'all'`
+  /// - [sort]：`'stale_first'`（默认，`importance DESC, COALESCE(updated_turn, created_turn) ASC, created_at ASC`）、
+  ///   `'recently_updated'`、`'importance_desc'`、`'created_desc'`
+  /// - [updatedBeforeTurn]：匹配 `COALESCE(updated_turn, created_turn) < updatedBeforeTurn`
+  /// - [updatedAfterTurn]：匹配 `COALESCE(updated_turn, created_turn) > updatedAfterTurn`
+  /// - [includeArchived]：是否包含已归档实体（默认 false）；非归档的停用注入词条始终保留
+  /// - [limit]：默认 25，上限 50
+  Future<FactualEntityCatalogPage> listEntityCatalog(
+    String sessionId, {
+    FactualEntityType? entityType,
+    String sourceFilter = 'dynamic',
+    String sort = 'stale_first',
+    int? updatedBeforeTurn,
+    int? updatedAfterTurn,
+    bool includeArchived = false,
+    int limit = 25,
+    int offset = 0,
+  });
+
+  /// Looks up a known stored type for an entity in the requested session.
+  Future<FactualEntityType?> getEntityTypeInSession(
+    String sessionId,
+    String entityId,
+  );
+
   // ─── 实体写入 ───────────────────────────────────────────────────────
 
   /// 创建新实体
@@ -126,6 +171,17 @@ abstract class FactualRepository {
   Future<void> updateEntityAliases(
     String entityId,
     List<String> aliases,
+    int updatedTurn,
+  );
+
+  /// 动态调整实体重要度（1-5，同步更新 `updatedTurn` / `updatedAt`）。
+  ///
+  /// 仅修改注入权重元数据，不改主名/类型/属性；同时放行 `auto` 与
+  /// `worldbook`/`card` 导入实体。
+  /// **不开自身事务**，供 FactApplier 在外层 drift transaction 内调用。
+  Future<void> updateEntityImportance(
+    String entityId,
+    int importance,
     int updatedTurn,
   );
 
@@ -213,6 +269,11 @@ abstract class FactualRepository {
   ///
   /// 按 createdAt 降序排列（最新在前）。
   Future<List<FactualMemoryHistory>> getHistory(String entityId);
+
+  /// 在同一只读事务取得当前会话事实流水、对象属性和当前稿证据。
+  Future<FactualMemoryChangesSnapshot> readMemoryChangesSnapshot(
+    String sessionId,
+  );
 
   /// 统计实体在指定轮次范围内的更新次数（更新频率限制 DOC-11 §7.4.5）
   ///

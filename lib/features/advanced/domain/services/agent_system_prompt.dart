@@ -82,19 +82,29 @@ class AgentSystemPromptBuilder {
           '搜索历史用户输入、正文和最终回复，不受记忆评分影响。摘要不足以核实时用；少量关键词、必要时移除人物名；多词按轮内 AND 匹配，按轮号升序分页，命中后回读。',
         'read_story' =>
           '按轮号回读故事原文（用户输入+正文+事件摘要）。核对细节、引用原文、检查伏笔前用；不要用它代替检索翻看全部。',
+        'list_facts' =>
+          '浏览事实库实体目录（默认仅列活跃动态实体并附全库统计头；支持按类型、来源、久未校准顺序与轮次分页）。只列目录不含属性详情，需查细节后再用 query_facts 批量读卡。',
         'query_facts' =>
-          '查事实层实体卡（状态/关系/设定）。核对某角色当前状态时用；卡片中的 [实体ID] 供 update_facts 精确定位；写改用 update_facts。',
+          '查事实层实体卡（状态/关系/设定；支持按名/关键词或 entity_id/entity_ids 批量直查）。核对某角色当前状态时用；卡片中的 [实体ID] 供 update_facts 精确定位；写改用 update_facts。',
+        'query_memory_changes' =>
+          '查当前故事已留存的事实变更流水。想知道某属性在哪几轮改过、最近一次怎么变时用；结果可用 read_story 回读正文，只覆盖已记录变更。',
         'read_compact_summary' => '读剧情主线宏摘要与叙事时间。开场定位或不确定主线时用。',
         'update_facts' =>
-          '写入/更新事实层（先暂存，finish_round 时统一提交）。人物状态变化后用；新实体创建时连同属性一起写入；导入实体基线只读（更新以演变并存）。',
+          '写入/更新事实层（create_entity / update_attr / append_list / remove_from_list / add_alias / archive_entity / set_importance；先暂存，提交时统一落库）。每条均必填 action 与 confidence（1-5 整数，含 set_importance），其余字段按动作提供；状态或重要度变化后用，新实体创建时连同属性一起写入；导入实体基线只读（属性以演变并存，重要度可随剧情升降）。若返回部分或全部错误，只修正失败条目并重调本工具。',
         'update_story_anchor' =>
           '更新剧情锚（当前弧线/伏笔清单/叙事时间/一句主线）。伏笔埋设、兑现、新弧线开启或时间跳跃时用；无实质变化不要调用。',
         'merge_entities' =>
           '把重复实体归并为一个（源主名/别名并入目标、缺失属性搬迁、源归档）。发现同一对象以不同名称重复建档时用；先用 query_facts 核对两侧确为同一实体；世界书实体基线只读（不可作归并目标，但可对它加别名/演变）、角色卡实体不可被吸收但可作保留者。',
         'record_event_memory' => '记录本轮关键事件（5W1E，每轮只记一条）。执笔后、提交前用。',
         'finish_round' =>
-          '提交本轮（含终审检查）：正文经 prose 参数交付——完整正文原文写入该参数，读者在正文卡阅读它；回复文本只作一两句过场播报。',
+          '提交本轮正文（含终审检查）：正文经 prose 参数交付——完整正文原文写入该参数，读者在正文卡阅读它；回复文本只作一两句过场播报。',
+        'finish_maintenance' =>
+          '结束周期审查与维护阶段并提交整轮。仅在大周期轮完成任务一交稿、用 list_facts / query_facts 等完成核对与记忆同步后调用。',
         'read_skill' => '读取一个写作技能的完整规范。动笔前读与当前场景相关的技能。',
+        'calc_eval' =>
+          '幕后 calc 精确计算数值（BigInt 分数、四则/幂/模/函数）。需要核对数字时使用；结果仅作参考，不改变叙事当前时间或事实，也不能替代 finish_round。',
+        'calc_date' =>
+          '幕后 calc 日期算术（显式 ISO/Unix 日期、1y2mo3d 加减与间隔）。需要核对日期时使用；不读取当前时钟、不支持 IANA/DST，结果不能改写故事当前时间或事实，也不能替代 finish_round。',
         'spawn' => '派出子代理（独立上下文，只回传结论）。大范围调研、需要第二双眼睛时用；单点查证用检索工具更快。',
         'ask_user' => '向导演提问（每轮最多 2 次，超限会被拒）。重大剧情抉择且无法自行稳妥决定时用。',
         _ => name,
@@ -103,6 +113,10 @@ class AgentSystemPromptBuilder {
     }
     return lines.join('\n');
   }
+
+  /// 关系属性判定：群体 dict（relationships）与按对象行（relationship:*）
+  static bool _isRelationshipAttr(String attrKey) =>
+      attrKey == 'relationships' || attrKey.startsWith('relationship:');
 
   /// 组装 core memory blocks（⑤：关键实体 + 最新剧情梗概 + 叙事时间 + 剧情锚）
   ///
@@ -113,11 +127,15 @@ class AgentSystemPromptBuilder {
     required List<ExperientialMemory> latestMacros,
     String? narrativeTime,
     StoryAnchor? anchor,
+    List<FactualEntity> recentActiveEntities = const [],
   }) {
     final sections = <String>[];
 
     if (keyEntities.isNotEmpty) {
       final lines = <String>['【当前世界状态（关键实体）】'];
+      // 实体上限 = 导演核心块固有 10 席（口径，不随故事侧
+      // key_entity_auto_cap 配置扩展——装配层 director_core_blocks 已按
+      // cap（默认 10）先行截断，此处 take 为直接调用方的兜底）
       for (final entity in keyEntities.take(10)) {
         //  来源标注：世界书/角色卡导入实体带来源后缀（资料非指令的
         // 分通道提示，对齐 query_facts 的 ｜来源worldbook 风格）
@@ -130,11 +148,28 @@ class AgentSystemPromptBuilder {
           '· ${sanitizeUntrusted(entity.primaryName)}$sourceSuffix',
         );
         final attrs = attributesByEntity[entity.entityId] ?? const [];
+        // 属性选择（每实体至多 4 条）：非关系属性在前，其后是群体关系
+        // dict 行与按对象关系行（最新更新优先）——关系拆分后属性数量
+        // 增长，固定次序保证核心属性与关系都有可见机会，不被互相挤光；
+        // 全量属性仍可经 query_facts 查询
+        final eligible = attrs.where((a) => a.importance >= 3).toList()
+          ..sort((a, b) {
+            final relA = _isRelationshipAttr(a.attrKey);
+            final relB = _isRelationshipAttr(b.attrKey);
+            if (relA != relB) return relA ? 1 : -1;
+            if (relA && relB) {
+              // 关系桶内按更新时间新者在前：最近变化的关系（个人或群体）
+              // 先获得槽位，不按创建早晚长期占位
+              final updatedA = a.updatedAt?.millisecondsSinceEpoch ?? 0;
+              final updatedB = b.updatedAt?.millisecondsSinceEpoch ?? 0;
+              return updatedB.compareTo(updatedA);
+            }
+            return 0;
+          });
         // 属性值经导入资料包裹承载（值可能是导入内容/模型转写，
         // 标签向模型声明「数据非指令」的结构级隔离）；：注入点先经
         // sanitizeUntrusted 消毒（哨兵标签/零宽/控制字符不进上下文）
-        final attrTexts = attrs
-            .where((a) => a.importance >= 3)
+        final attrTexts = eligible
             .take(4)
             .map(
               (a) =>
@@ -175,6 +210,18 @@ class AgentSystemPromptBuilder {
         }
       }
       if (lines.isNotEmpty) sections.add(lines.join('\n'));
+    }
+
+    if (recentActiveEntities.isNotEmpty) {
+      final lines = <String>['【近期活跃动态实体（非核心，按需用 query_facts 查阅）】'];
+      for (final entity in recentActiveEntities) {
+        final safeName = sanitizeUntrusted(entity.primaryName);
+        lines.add(
+          '· [${entity.entityId}] $safeName'
+          '（${entity.type.name}｜重要度${entity.importance}）',
+        );
+      }
+      sections.add(lines.join('\n'));
     }
 
     if (sections.isEmpty) return null;
@@ -220,13 +267,14 @@ const String kAgentWorkRules = '''
 你是本剧的叙事引擎与总编辑。你输出的叙事正文会直接呈给读者，没有后审环节——落笔即终稿。
 
 【自主权】
-每轮怎么工作由你判断：需要什么就查什么，不需要就径直执笔。连续对话的轮次往往一气呵成；伏笔回收、久别重逢、时空跳跃的轮次值得多查多想。没有人给你规定流程，你的判断就是流程。
+每轮怎么工作由你判断：既要保持叙事推进的自然连贯，也要同步维护世界设定、事件记忆、剧情锚与实体重要度；实体重要度代表当前及后续剧情对注入视野的需求权重，可随角色或设定戏份升降动态调整。伏笔回收、久别重逢、时空跳跃或周期审查的轮次值得多查多想。没有人给你规定固定步序，你的判断就是流程。
 
 【质量观】
 - 写进正文的每个事实都要有出处：检索结果、世界状态或本轮用户输入。拿不准就查，查不到就绕开，绝不编造既有设定。
-- 正文承接上一轮的最后一个画面；每轮覆盖的故事时间跨度与可替主角做出的决定，以本轮注入的节奏指令为准。正文一次性完整写入 finish_round 的 prose 参数（保留原始换行与标点）；回复文本只作一两句过场播报——读者在正文卡阅读正文，回复文本里再写一遍，读者会看到两遍。任务完成即 finish_round 提交，不做多余检查。
+- 正文承接上一轮的最后一个画面；每轮覆盖的故事时间跨度与可替主角做出的决定，以本轮注入的节奏指令为准。正文一次性完整写入 finish_round 的 prose 参数（保留原始换行与标点）；回复文本只作一两句过场播报——读者在正文卡阅读正文，回复文本里再写一遍，读者会看到两遍。正文与必要的记忆同步确认妥当后，通过 finish_round 提交本轮。
 - 工作步之间用一两句话陈述你的判断：为什么查这个、查到了什么、现在写还是再等等。让导演看得见你的思路，而不是复述流程。
-- 发现前文的问题可以顺手先修（update_facts）再交稿。
+- 发现前文的遗漏或状态变化时及时维护（update_facts / update_story_anchor / record_event_memory），随剧情演进动态调整实体重要度。
+- 任意工具返回错误时，先核对失败原因并修正参数后重试（或改用合适工具补全），不要跳过未完成的写入直接收尾交稿。
 
 【文风铁律】
 严禁破折号；严禁"不是A，而是B"式虚假对仗；严禁凑三连排比；句长错落（短句紧张、长句交代）；允许毛边（人物会卡壳、跑题、说话不完整）；用具体细节代替抽象形容；直接以正文开始，禁止"好的/我来续写"类开场白；中文写作。''';
@@ -283,12 +331,17 @@ String wrapCoreBlocksForTail(String coreBlocks) =>
 /// 措辞纪律（设计原则 5）：只提醒能力在场+自问自查，不规定步骤顺序。
 /// 按当轮注册集点名类别——注册了才提；全被 deny 时降级为通用表述
 ///（不再空许诺"随时可用"，消除对模型说的与运行时状态的失配）。
-String workbenchContractText(Set<String> toolNames) {
+String workbenchContractText(
+  Set<String> toolNames, {
+  bool isMajorReviewRound = false,
+}) {
   const memoryTools = {
     'search_story',
     'search_story_text',
     'read_story',
+    'list_facts',
     'query_facts',
+    'query_memory_changes',
     'read_compact_summary',
   };
   const factTools = {'update_facts', 'merge_entities', 'record_event_memory'};
@@ -298,26 +351,40 @@ String workbenchContractText(Set<String> toolNames) {
     if (toolNames.contains('update_story_anchor')) '锚点',
     if (toolNames.contains('read_skill')) '技能',
   ];
-  if (categories.isEmpty) {
-    return '【工作契约】本轮以已有材料直接创作。交稿前自问：材料里的信息用准了吗？';
-  }
-  return '【工作契约】${categories.join('/')}工具本轮随时可用。'
-      '提交前自问：该查的查了吗？该记的记了吗？';
+  final base = categories.isEmpty
+      ? '【工作契约】本轮以已有材料直接创作。交稿前自问：材料里的信息用准了吗？'
+      : '【工作契约】${categories.join('/')}工具本轮随时可用。'
+          '提交前自问：该查的查了吗？该记的记了吗？';
+  if (!isMajorReviewRound) return base;
+  return '$base\n本轮通过 finish_round 交付正文后将自动进入周期全面审查与维护阶段，届时结合正文与近况核对同步后，再调用 finish_maintenance 收尾。';
 }
 
-/// 伏笔清点轮判定（轮尾清点提醒与 finish_round 对账闸门共用的节奏源：
-/// 两处必须同轮触发，"先提醒、未对账再拦一次"才成立）。interval<=0 =
-/// 停用清点（不提醒不拦截）。
+/// 构建开放原则化的定期维护缺口提示（不含具体字段维度枚举）。
+///
+/// 仅报告达到 [gapInterval] 阈值的维度连续未更新轮数；
+/// 均未达阈值或 [gapInterval] <= 0 时返回 null。
+String? maintenanceGapReminderText({
+  required int factsGap,
+  required int anchorGap,
+  required int eventGap,
+  int gapInterval = 7,
+}) {
+  if (gapInterval <= 0) return null;
+  final overdue = <String>[
+    if (factsGap >= gapInterval) '事实库（update_facts）已连续 $factsGap 轮未更新',
+    if (anchorGap >= gapInterval) '剧情锚（update_story_anchor）已连续 $anchorGap 轮未校准',
+    if (eventGap >= gapInterval) '事件记忆（record_event_memory）已连续 $eventGap 轮未记录',
+  ];
+  if (overdue.isEmpty) return null;
+  return '【维护提醒】以下维度的记忆与设定已持续多轮未校准：${overdue.join('；')}。'
+      '本轮推进正文之余，请按实际剧情变化顺手核对并同步相关记录与实体重要度。';
+}
+
+/// 伏笔清点轮判定（兼容旧调用点；新调度统一由维护缺口与大周期接管）。
 bool isForeshadowSweepRound(int turnNumber, int interval) =>
     interval > 0 && turnNumber % interval == 0;
 
-/// 伏笔定期清点提醒（体验重构卡片 C 维护性补强）
-///
-/// 锚的更新是"有实质变化才调用"的 on-change 语义——模型不写到手边就没
-/// 有时机盘点"清单是否已过时"；压缩后兑现伏笔的原文轮次离开上下文，
-/// 未兑现清单每轮照常注入，过时条目因此无限期挂着。此提醒按清点轮注入
-/// 尾部 recency 位，把未兑现清单摆到眼前要求当轮核对。返回 null =
-/// 无未兑现伏笔（无物可清点，不占尾部）。
+/// 伏笔定期清点提醒（兼容旧调用点；新路径统一使用 [maintenanceGapReminderText]）。
 String? foreshadowSweepReminderText(StoryAnchor? anchor) {
   final open = anchor?.openForeshadows ?? const [];
   if (open.isEmpty) return null;

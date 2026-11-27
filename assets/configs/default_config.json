@@ -103,6 +103,7 @@
       "factual": {
         "enabled": true,
         "key_entity_importance_threshold": 5,
+        "key_entity_auto_cap": 10,
         "injection_max_entities": 20,
         "force_inject_safety_cap": 50,
         "modify_confidence_threshold": 4,
@@ -160,7 +161,13 @@
       "core_blocks_in_tail": true,
       "full_chunk_events": false,
       "foreshadow_check_interval": 8,
-      "event_log_retention_turns": 20
+      "event_log_retention_turns": 20,
+      "maintenance_gap_interval": 7,
+      "maintenance_nudge_cooldown": 4,
+      "major_review_interval": 50,
+      "maintenance_extra_steps": 6,
+      "recent_active_entities_window": 15,
+      "recent_active_entities_cap": 10
     },
     "context": {
       "effective_context_limit": null
@@ -181,11 +188,12 @@
       "factual": {
         "enabled": true,
         "key_entity_importance_threshold": 5,
+        "key_entity_auto_cap": 10,
         "injection_max_entities": 20,
         "force_inject_safety_cap": 50,
         "modify_confidence_threshold": 4,
         "max_updates_per_3turns": 4,
-        "max_attr_value_length": 500
+        "max_attr_value_length": 1000
       }
     },
     "consolidation": {
@@ -207,7 +215,18 @@
       "max_reply_length": 150
     },
     "review_enabled": false,
-    "prompts": {}
+    "prompts": {},
+    "engineering_compaction": {
+      "output_reserve_tokens": 16384,
+      "headroom_tokens": 8192,
+      "retain_ratio": 0.3,
+      "retain_min_tokens": 8192,
+      "retain_max_tokens": 32768,
+      "retain_max_window_ratio": 0.45,
+      "chars_per_token": 4,
+      "oversized_result_chars": 8192,
+      "degrade_head_chars": 500
+    }
   },
   "resource_ai": {
     "max_steps": 6

@@ -14,10 +14,15 @@ class DirectorResumeContext {
     required this.priorTotalTokens,
     required this.priorDurationMs,
     required this.draft,
+    this.attemptId,
   });
 
   /// 续跑起点消息序列（deriveAgentSurface 投影）
   final List<AgentMessage> surface;
+
+  /// 上次尝试的生成身份（续跑同 attempt 续——事件盖戳与绑定留痕连续；
+  /// null = 上次尝试无身份（旧日志），续跑段起用新身份）
+  final String? attemptId;
 
   /// 上次尝试已完成步数（续跑步号基数 + 步数预算余量执法）
   final int priorSteps;

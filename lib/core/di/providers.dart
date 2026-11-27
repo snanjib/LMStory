@@ -13,6 +13,7 @@ import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/network/dio_client.dart';
 import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
+import 'package:lmstory/core/services/data_store_operation_guard.dart';
 import 'package:lmstory/core/services/incoming_file_receiver.dart';
 import 'package:lmstory/core/storage/preferences.dart';
 import 'package:lmstory/core/storage/secure_storage.dart';
@@ -127,6 +128,14 @@ final flutterLocaleProvider = Provider<Locale>((ref) {
 
 /// AppDatabase Provider（全局单例）
 final appDatabaseProvider = Provider<AppDatabase>((ref) => AppDatabase());
+
+final _storeOperationGuards = Expando<DataStoreOperationGuard>();
+
+/// The same database shares one guard, including across container overrides.
+final dataStoreOperationGuardProvider = Provider<DataStoreOperationGuard>(
+  (ref) => _storeOperationGuards[ref.watch(appDatabaseProvider)] ??=
+      DataStoreOperationGuard(),
+);
 
 // -- Secure Storage --
 
@@ -245,6 +254,7 @@ final messageVariantsCountPortProvider = Provider<MessageVariantsCountPort>(
 /// 统一封装数据管理业务逻辑，由 DataManagementPage 和会话导出入口调用。
 final dataManagementServiceProvider = Provider<DataManagementService>(
   (ref) => DataManagementService(
+    operationGuard: ref.read(dataStoreOperationGuardProvider),
     chatRepository: ref.read(chatRepositoryProvider),
     presetRepository: ref.read(apiPresetRepositoryProvider),
     settingsRepository: ref.read(settingsRepositoryProvider),

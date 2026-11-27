@@ -7,6 +7,7 @@ import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/resource_library/domain/entities/character_card.dart';
+import 'package:lmstory/features/resource_library/domain/entities/worldbook.dart';
 import 'package:lmstory/features/resource_library/domain/repositories/resource_library_repository.dart';
 import 'package:lmstory/features/story_runtime/presentation/widgets/seed_resource_section.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -68,6 +69,21 @@ void main() {
     expect(groups['card-9']!.name, 'ReZero 角色卡');
   });
 
+  test('角色卡的内嵌条目同组显示为角色卡', () {
+    final groups = groupProjectedSeedEntities(
+      [
+        entity('内嵌词条', source: FactualSource.worldbook, sourceRef: 'card-9'),
+        entity('莱昂', source: FactualSource.card, sourceRef: 'card-9'),
+      ],
+      cardNamesById: const {'card-9': '向导角色卡'},
+    );
+
+    final group = groups.values.single;
+    expect(group.name, '向导角色卡');
+    expect(group.source, FactualSource.card);
+    expect(group.count, 2);
+  });
+
   test('资源反查不到（已删/数据漂移）→ 回退首个实体主名', () {
     final groups = groupProjectedSeedEntities(
       [
@@ -118,6 +134,7 @@ void main() {
     WidgetTester tester, {
     required FakeFactualRepository factualRepo,
     required ResourceLibraryRepository resourceRepo,
+    required Future<String?> Function() ensureSessionIdForApply,
   }) async {
     await tester.pumpWidget(
       TranslationProvider(
@@ -126,10 +143,14 @@ void main() {
             factualRepositoryProvider.overrideWithValue(factualRepo),
             resourceLibraryRepositoryProvider.overrideWithValue(resourceRepo),
           ],
-          child: const MaterialApp(
+          child: MaterialApp(
             home: Scaffold(
               body: SingleChildScrollView(
-                child: SeedResourceSection(sessionId: 's1', enabled: true),
+                child: SeedResourceSection(
+                  sessionId: 'draft',
+                  enabled: true,
+                  ensureSessionIdForApply: ensureSessionIdForApply,
+                ),
               ),
             ),
           ),
@@ -140,7 +161,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
   }
 
-  testWidgets('预览弹窗三段式：只读基线段 + 注入方式段 + 只读说明', (tester) async {
+  testWidgets('预览确认后将角色卡应用到保存后的会话并显示资源名', (tester) async {
     // 卡内词条：3 启用（1 常驻 + 2 关键词触发）+ 1 停用 →
     // constantCount=1、enabledEntryCount=3、按关键词触发=2
     final card = CharacterCard(
@@ -181,10 +202,16 @@ void main() {
       createdAt: DateTime(2026),
       updatedAt: DateTime(2026),
     );
+    final factualRepo = FakeFactualRepository();
+    var ensureCalls = 0;
     await pumpSection(
       tester,
-      factualRepo: FakeFactualRepository(),
+      factualRepo: factualRepo,
       resourceRepo: _SingleCardRepository(card),
+      ensureSessionIdForApply: () async {
+        ensureCalls++;
+        return 'saved-session';
+      },
     );
 
     // 选卡 → 预览弹窗
@@ -206,6 +233,25 @@ void main() {
     expect(find.text('其余 2 条按关键词触发'), findsOneWidget);
     // 尾部：只读基线 + 演变并存说明
     expect(find.textContaining('不会改写原文'), findsOneWidget);
+    expect(ensureCalls, 0);
+    expect(factualRepo.createdEntities, isEmpty);
+
+    await tester.tap(find.text('应用'));
+    await tester.pumpAndSettle();
+    expect(ensureCalls, 1);
+    expect(factualRepo.createdEntities, isNotEmpty);
+    expect(
+      factualRepo.createdEntities.map((entity) => entity.sessionId),
+      everyElement('saved-session'),
+    );
+    expect(
+      find.text('角色卡 · 测试主角'),
+      findsOneWidget,
+      reason: tester
+          .widgetList<Text>(find.byType(Text))
+          .map((w) => w.data)
+          .join(' / '),
+    );
   });
 }
 
@@ -217,6 +263,9 @@ class _SingleCardRepository implements ResourceLibraryRepository {
 
   @override
   Future<List<CharacterCard>> getAllCharacterCards() async => [card];
+
+  @override
+  Future<List<Worldbook>> getAllWorldbooks() async => const [];
 
   @override
   Future<CharacterCard?> getCharacterCard(String cardId) async =>

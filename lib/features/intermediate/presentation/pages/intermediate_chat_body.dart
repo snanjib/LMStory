@@ -14,8 +14,10 @@ import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/core/utils/follow_scroll_executor.dart';
 import 'package:lmstory/core/utils/smooth_follow_scroller.dart'
     show streamingFollowCushionPx;
+import 'package:lmstory/core/widgets/conversation_navigation.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 // 阅读位置记忆——复用 chat 侧滚动位置 LRU 缓存
+import 'package:lmstory/features/chat/presentation/utils/conversation_round_navigation.dart';
 import 'package:lmstory/features/chat/presentation/utils/scroll_position_cache.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
 import 'package:lmstory/features/intermediate/presentation/pages/intermediate_round_panels_builder.dart';
@@ -137,14 +139,10 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
     with SingleTickerProviderStateMixin {
   final _scrollController = ScrollController();
 
-  /// 滚动导航：用户正在滑动时为 true，停止 2 秒后自动 false
-  bool _isScrollActive = false;
-
-  /// 滚动导航：是否位于底部附近（在底部时隐藏导航）
-  bool _atBottom = true;
-
-  /// 滚动空闲计时器（2 秒后标记滑动停止）
-  Timer? _scrollIdleTimer;
+  late final _roundNavigation = ConversationRoundNavigation(
+    _scrollController,
+    onTailChanged: () => setState(() {}),
+  );
 
   /// 贴底跟随裁决与执行（2026-09-10 chatbox smooth-follow-output 语义
   /// 移植，与 chat/导演同款 [FollowScrollExecutor]， 单源）：状态机
@@ -311,6 +309,7 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
             .read(scrollPositionCacheProvider)
             .save(oldWidget.state.session.sessionId, _scrollController.offset);
       }
+      _roundNavigation.reset();
       _followExecutor
         ..reset()
         ..forceToBottom();
@@ -404,6 +403,7 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
   /// 这三条路径都有「一次到位」预期，懒加载列表 maxScrollExtent 修正后做
   /// 单次校准（稳态下距离 ≤1 直接 no-op；流式跟随路径零 settle）。
   void _forceToBottomWithSettle() {
+    _roundNavigation.clearTail();
     _followExecutor.forceToBottom();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -435,38 +435,29 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
     });
   }
 
-  /// 滚动监听：跟随状态机输入 + 导航可见性状态。
-  ///
-  /// 滑动时立即标记 `_isScrollActive = true`，重置 2 秒空闲计时器。
-  /// 同步更新 `_atBottom`（底部 50px 容差，仅服务导航显隐），在底部时
-  /// 隐藏导航。
-  ///
-  /// 跟随裁决交给 [FollowScrollExecutor]（chatbox 语义）：
-  /// - 上划即停：pixels 下降（且非内容收缩钳位）首帧即冻结贴底跟随
-  /// - 滚回距底 ≤4px 自动恢复；发送/点胶囊由执行器强制回底
   void _onScroll() {
     if (!_scrollController.hasClients) return;
+    if (_roundNavigation.readingSelection || _roundNavigation.tail > 0) {
+      _followExecutor.rebase();
+      return;
+    }
     final position = _scrollController.position;
-    final pixels = position.pixels;
-    final atBottom = position.maxScrollExtent - pixels < 50;
+    _followExecutor.handleScrollMetrics(
+      position.pixels,
+      position.maxScrollExtent,
+    );
+  }
 
-    _followExecutor.handleScrollMetrics(pixels, position.maxScrollExtent);
-
-    if (!_isScrollActive) {
-      setState(() => _isScrollActive = true);
-    }
-    _scrollIdleTimer?.cancel();
-    _scrollIdleTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _isScrollActive = false);
-    });
-
-    if (_atBottom != atBottom) {
-      setState(() => _atBottom = atBottom);
-    }
+  void _jumpRound({required bool forward}) {
+    _followExecutor.stop();
+    _followExecutor.state.pauseFollowing();
+    _roundNavigation.jump(forward: forward);
   }
 
   /// 跳到顶部（最旧消息）。
   void _jumpToTop() {
+    _roundNavigation.clearTail();
+    _followExecutor.state.pauseFollowing();
     if (!_scrollController.hasClients) return;
     _followExecutor.stop(); // 宿主自驱滚动：避免与桌面 ticker 抢帧
     _scrollController.animateTo(
@@ -476,90 +467,7 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
     );
   }
 
-  /// 跳到底部（最新消息）。
-  ///
-  /// 用户主动点击"跳到底部" = 强制恢复贴底跟随。
-  void _jumpToBottom() {
-    if (!_scrollController.hasClients) return;
-    _followExecutor.state.forceFollowing();
-    _followExecutor.stop(); // 宿主自驱滚动：避免与桌面 ticker 抢帧
-    _scrollController.animateTo(
-      _scrollController.position.maxScrollExtent,
-      duration: LmMotion.emphasis,
-      curve: LmMotion.easeStandard,
-    );
-  }
-
-  /// 跳到上一条用户消息（向前查找 role='user'）。
-  void _jumpToPrevUserMessage() {
-    final messages = widget.state.messages;
-    if (messages.isEmpty || !_scrollController.hasClients) return;
-
-    final visibleIndex = _findFirstVisibleIndex();
-    if (visibleIndex == null) {
-      _jumpToTop();
-      return;
-    }
-
-    // 从当前可见消息向前查找用户消息
-    for (var i = visibleIndex - 1; i >= 0; i--) {
-      if (messages[i].role == 'user') {
-        _scrollToMessage(messages[i].messageId);
-        return;
-      }
-    }
-    // 找不到更早的用户消息，跳到顶部
-    _jumpToTop();
-  }
-
-  /// 跳到下一条用户消息（向后查找 role='user'）。
-  void _jumpToNextUserMessage() {
-    final messages = widget.state.messages;
-    if (messages.isEmpty || !_scrollController.hasClients) return;
-
-    final visibleIndex = _findFirstVisibleIndex();
-    if (visibleIndex == null) {
-      _jumpToBottom();
-      return;
-    }
-
-    // 从当前可见消息向后查找用户消息
-    for (var i = visibleIndex + 1; i < messages.length; i++) {
-      if (messages[i].role == 'user') {
-        _scrollToMessage(messages[i].messageId);
-        return;
-      }
-    }
-    // 找不到更晚的用户消息，跳到底部
-    _jumpToBottom();
-  }
-
-  /// 查找当前视口中第一条可见消息的索引。
-  int? _findFirstVisibleIndex() {
-    final messages = widget.state.messages;
-    if (messages.isEmpty) return null;
-    if (!_scrollController.hasClients) return 0;
-
-    // 优先检查当前已分配且已挂载的活跃 Key（目标/高亮消息）
-    for (final entry in _messageKeys.entries) {
-      final context = entry.value.currentContext;
-      if (context == null) continue;
-      final renderBox = context.findRenderObject();
-      if (renderBox is! RenderBox) continue;
-      final offset = renderBox.localToGlobal(Offset.zero);
-      // y > 100 表示在视口顶部下方可见
-      if (offset.dy > 100) {
-        final idx = messages.indexWhere((m) => m.messageId == entry.key);
-        if (idx != -1) return idx;
-      }
-    }
-
-    // 无法通过少数活跃 Key 判定时，按滚动比例常数时间预估，避免全量遍历
-    final pos = _scrollController.position;
-    if (pos.maxScrollExtent <= 0) return 0;
-    final ratio = (pos.pixels / pos.maxScrollExtent).clamp(0.0, 1.0);
-    return (ratio * (messages.length - 1)).round();
-  }
+  void _jumpToBottom() => _forceToBottomWithSettle();
 
   /// 滚动到指定消息（通过 GlobalKey 定位）。
   void _scrollToMessage(String messageId) {
@@ -629,7 +537,7 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
       nextOffset =
           position.maxScrollExtent * targetIndex / (messages.length - 1);
     } else {
-      final visibleIndex = _findFirstVisibleIndex();
+      final visibleIndex = _roundNavigation.firstVisible;
       final direction =
           visibleIndex == null || targetIndex > visibleIndex ? 1.0 : -1.0;
       nextOffset = position.pixels + position.viewportDimension * direction;
@@ -659,7 +567,7 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
           .save(widget.state.session.sessionId, _scrollController.offset);
     }
     _flashTimer?.cancel();
-    _scrollIdleTimer?.cancel();
+    _roundNavigation.reset();
     _roundDoneHintTimer?.cancel();
     _followExecutor.dispose();
     _scrollController
@@ -672,6 +580,8 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
     final state = widget.state;
+
+    _roundNavigation.update(state.messages, pending: state.pendingUserMessage);
 
     // 空状态：无消息 + 无 pendingUserMessage + idle
     // Stage 3：pendingUserMessage 非空时不进空状态（显示临时用户气泡）
@@ -730,96 +640,118 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
         //
         // 只包列表自身：Stack 内的完成提示胶囊 / 滚动导航 / 准备中遮罩等
         // 兄弟节点仍按整窗定位，浮层位置不受影响。
-        Center(
-          child: RepaintBoundary(
-            child: ConstrainedBox(
-              constraints:
-                  BoxConstraints(maxWidth: LmLayout.readingWidthOf(context)),
-              child: ListView.builder(
-                controller: _scrollController,
-                scrollCacheExtent: const ScrollCacheExtent.pixels(600),
-                // 2026-09-10：底部缓冲留白（惰性跟随用）——写入行在缓冲内下走时
-                // 视口不动，已读文字保持静止。
-                padding: const EdgeInsets.only(
-                  top: IntermediateSpacing.sMd,
-                  bottom: IntermediateSpacing.sMd + streamingFollowCushionPx,
+        ConversationNavigation(
+          key: ValueKey(state.session.sessionId),
+          controller: _scrollController,
+          onTop: _jumpToTop,
+          onBottom: _jumpToBottom,
+          jumpRound: _jumpRound,
+          canJumpRound: _roundNavigation.canJump,
+          hasReadingTail: () => _roundNavigation.tail > 0,
+          onUserScroll: _roundNavigation.cancelSelection,
+          narrative: true,
+          child: Center(
+            child: RepaintBoundary(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: LmLayout.readingWidthOf(context),
                 ),
-                itemCount: state.messages.length + tailItemCount,
-                itemBuilder: (context, index) {
-                  if (index < state.messages.length) {
-                    final item = _buildPersistedMessageGroup(
-                      colors: colors,
-                      state: state,
-                      index: index,
-                      lastAssistantMessageId: lastAssistantMessageId,
-                      actionsEnabled: actionsEnabled,
-                    );
-                    if (index != 0) return item;
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        StoryOpening(
-                          title: state.session.title,
-                          modeLabel:
-                              Translations.of(context).chat.sidebar.modeStory,
-                        ),
-                        item,
-                      ],
-                    );
-                  }
-
-                  var tailIndex = index - state.messages.length;
-                  if (hasPendingMessage) {
-                    if (tailIndex == 0) {
-                      return _buildMessage(
-                        colors,
-                        state.pendingUserMessage!,
-                        lastAssistantMessageId: null,
-                        actionsEnabled:
-                            (state.phase == IntermediatePhase.idle ||
-                                    state.phase == IntermediatePhase.failed) &&
-                                !state.isManualCompacting,
-                        canOperateOverride: true,
-                        animateEntrance: true,
-                      );
-                    }
-                    tailIndex--;
-                  }
-
-                  if (hasCurrentRound && tailIndex == 0) {
-                    // 当前轮 idle 态的切换器由顶层函数渲染，
-                    // 此处构建好组件传入（回调在 widget 上，顶层函数拿不到）
-                    final lastTurn = completedTurnCount(
-                      compactedTurnBase: state.compactedTurnBase,
-                      messages: state.messages,
-                    );
-                    final currentRoundSwitcher =
-                        _buildCurrentRoundVariantSwitcher(
-                      state: state,
-                      lastTurn: lastTurn,
-                    );
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: buildCurrentRoundPanels(
-                        context: context,
-                        state: state,
-                        generatingFoldDelayMs: widget.generatingFoldDelayMs,
-                        retrievalFoldDelayMs: widget.retrievalFoldDelayMs,
-                        onRetryRetrieval: widget.onRetryRetrieval,
-                        messageActions: _buildCurrentRoundMessageActions(
+                child: ListView.builder(
+                  controller: _scrollController,
+                  scrollCacheExtent: const ScrollCacheExtent.pixels(600),
+                  // 2026-09-10：底部缓冲留白（惰性跟随用）——写入行在缓冲内下走时
+                  // 视口不动，已读文字保持静止。
+                  padding: EdgeInsets.only(
+                    top: IntermediateSpacing.sMd,
+                    bottom: IntermediateSpacing.sMd +
+                        streamingFollowCushionPx +
+                        _roundNavigation.tail,
+                  ),
+                  itemCount: state.messages.length + tailItemCount,
+                  itemBuilder: (context, index) {
+                    if (index < state.messages.length) {
+                      final item = _roundRow(
+                        message: state.messages[index],
+                        index: index,
+                        child: _buildPersistedMessageGroup(
+                          colors: colors,
                           state: state,
+                          index: index,
                           lastAssistantMessageId: lastAssistantMessageId,
                           actionsEnabled: actionsEnabled,
                         ),
-                        embeddingConfigured: widget.embeddingConfigured,
-                        fontScale: widget.fontScale,
-                        variantSwitcher: currentRoundSwitcher,
-                      ),
-                    );
-                  }
+                      );
+                      if (index != 0) return item;
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          StoryOpening(
+                            title: state.session.title,
+                            modeLabel:
+                                Translations.of(context).chat.sidebar.modeStory,
+                          ),
+                          item,
+                        ],
+                      );
+                    }
 
-                  return const SizedBox.shrink();
-                },
+                    var tailIndex = index - state.messages.length;
+                    if (hasPendingMessage) {
+                      if (tailIndex == 0) {
+                        return _roundRow(
+                          message: state.pendingUserMessage!,
+                          index: index,
+                          child: _buildMessage(
+                            colors,
+                            state.pendingUserMessage!,
+                            lastAssistantMessageId: null,
+                            actionsEnabled: (state.phase ==
+                                        IntermediatePhase.idle ||
+                                    state.phase == IntermediatePhase.failed) &&
+                                !state.isManualCompacting,
+                            canOperateOverride: true,
+                            animateEntrance: true,
+                          ),
+                        );
+                      }
+                      tailIndex--;
+                    }
+
+                    if (hasCurrentRound && tailIndex == 0) {
+                      // 当前轮 idle 态的切换器由顶层函数渲染，
+                      // 此处构建好组件传入（回调在 widget 上，顶层函数拿不到）
+                      final lastTurn = completedTurnCount(
+                        compactedTurnBase: state.compactedTurnBase,
+                        messages: state.messages,
+                      );
+                      final currentRoundSwitcher =
+                          _buildCurrentRoundVariantSwitcher(
+                        state: state,
+                        lastTurn: lastTurn,
+                      );
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: buildCurrentRoundPanels(
+                          context: context,
+                          state: state,
+                          generatingFoldDelayMs: widget.generatingFoldDelayMs,
+                          retrievalFoldDelayMs: widget.retrievalFoldDelayMs,
+                          onRetryRetrieval: widget.onRetryRetrieval,
+                          messageActions: _buildCurrentRoundMessageActions(
+                            state: state,
+                            lastAssistantMessageId: lastAssistantMessageId,
+                            actionsEnabled: actionsEnabled,
+                          ),
+                          embeddingConfigured: widget.embeddingConfigured,
+                          fontScale: widget.fontScale,
+                          variantSwitcher: currentRoundSwitcher,
+                        ),
+                      );
+                    }
+
+                    return const SizedBox.shrink();
+                  },
+                ),
               ),
             ),
           ),
@@ -853,21 +785,6 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
                   ),
                 ),
               ),
-            ),
-          ),
-        // 滚动导航浮层（滑动时出现，停止 2 秒后自动消失；在底部时不显示）
-        if (state.messages.isNotEmpty)
-          Positioned(
-            right: IntermediateSpacing.sSm,
-            bottom: IntermediateSpacing.sMd,
-            child: context.lmUi.messageNavigation(
-              context,
-              narrative: true,
-              visible: _isScrollActive && !_atBottom,
-              onJumpToTop: _jumpToTop,
-              onJumpToBottom: _jumpToBottom,
-              onPrevUserMessage: _jumpToPrevUserMessage,
-              onNextUserMessage: _jumpToNextUserMessage,
             ),
           ),
         // 重新生成/编辑重发"准备中"遮罩（DOC-09A-1 §2.4/§2.5）
@@ -910,6 +827,24 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
             ),
           ),
       ],
+    );
+  }
+
+  Widget _roundRow({
+    required ChatMessage message,
+    required int index,
+    required Widget child,
+  }) {
+    final row = ConversationRoundRow(
+      navigation: _roundNavigation,
+      index: index,
+      child: child,
+    );
+    if (message.role != 'user' || message.isSummary) return row;
+    // Keep the gap between rounds outside the measured top of the question.
+    return Padding(
+      padding: const EdgeInsets.only(top: IntermediateSpacing.s2xs),
+      child: row,
     );
   }
 
@@ -1080,9 +1015,9 @@ class IntermediateChatBodyState extends ConsumerState<IntermediateChatBody>
           color: isFlashTarget ? colors.primaryDim : Colors.transparent,
           borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
         ),
-        padding: const EdgeInsets.symmetric(
-          vertical: IntermediateSpacing.s2xs,
-        ),
+        padding: isUser
+            ? const EdgeInsets.only(bottom: IntermediateSpacing.s2xs)
+            : const EdgeInsets.symmetric(vertical: IntermediateSpacing.s2xs),
         child: context.lmUi.narrativeBubble(
           context,
           content: message.content ?? '',

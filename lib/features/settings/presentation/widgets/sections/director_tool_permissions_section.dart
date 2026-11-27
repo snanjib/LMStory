@@ -65,8 +65,12 @@ class DirectorToolPermissionsSection extends ConsumerWidget {
             'search_story',
             'read_story',
             'query_facts',
+            'list_facts',
+            'query_memory_changes',
             'read_compact_summary',
             'read_skill',
+            'calc_eval',
+            'calc_date',
           ],
           overrides: tools,
         ),
@@ -83,7 +87,12 @@ class DirectorToolPermissionsSection extends ConsumerWidget {
         ),
         _ToolGroup(
           title: tt.groups.control,
-          toolNames: const ['spawn', 'ask_user', 'finish_round'],
+          toolNames: const [
+            'spawn',
+            'ask_user',
+            'finish_round',
+            'finish_maintenance',
+          ],
           overrides: tools,
           initiallyExpanded: true,
         ),
@@ -101,7 +110,7 @@ class DirectorToolPermissionsSection extends ConsumerWidget {
   }
 
   /// 应用预设：自由创作 = 逐工具移除覆写（回内置全 allow）；
-  /// 监督模式 = 12 键写入监督预设值。
+  /// 监督模式 = 全量键写入监督预设值。
   Future<void> _applyPreset(WidgetRef ref, {required bool supervised}) async {
     if (!supervised) {
       for (final name in ToolPermissions.allTools) {
@@ -178,9 +187,9 @@ class _ToolPermissionRow extends ConsumerWidget {
     final colors = context.lm.palette;
     final t = Translations.of(context);
     final tt = t.settings.director.tools;
-    // finish_round 锁死 allow——历史全局配置
+    // 控制收尾工具锁死 allow——历史全局配置
     // 存的 deny/ask 值展示时同样兜底为 allow
-    final locked = toolName == ToolPermissions.lockedAllowTool;
+    final locked = ToolPermissions.isLockedAllow(toolName);
     final effectiveValue = locked ? 'allow' : value;
     final desc = _toolDesc(tt, toolName);
 
@@ -306,8 +315,11 @@ String _toolDesc(
     'search_story' => d.search_story,
     'read_story' => d.read_story,
     'query_facts' => d.query_facts,
+    'list_facts' => d.list_facts,
     'read_compact_summary' => d.read_compact_summary,
     'read_skill' => d.read_skill,
+    'calc_eval' => d.calc_eval,
+    'calc_date' => d.calc_date,
     'update_facts' => d.update_facts,
     'merge_entities' => d.merge_entities,
     'update_story_anchor' => d.update_story_anchor,
@@ -315,6 +327,7 @@ String _toolDesc(
     'spawn' => d.spawn,
     'ask_user' => d.ask_user,
     'finish_round' => d.finish_round,
+    'finish_maintenance' => d.finish_maintenance,
     _ => toolName,
   };
 }

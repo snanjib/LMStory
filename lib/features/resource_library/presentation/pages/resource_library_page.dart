@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/shared/components/lm_activity_dots.dart';
 import 'package:lmstory/core/theme/shared/components/lm_arrival.dart';
@@ -102,9 +103,7 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
       _showSnack(t.settings.resourceLibrary.imported(name: imported.name));
       await _reload();
     } catch (e) {
-      if (mounted) {
-        _showSnack(t.settings.resourceLibrary.importFailed(error: '$e'));
-      }
+      _showImportFailure(e);
     }
   }
 
@@ -138,9 +137,7 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
       _showSnack(t.settings.resourceLibrary.imported(name: imported.name));
       await _reload();
     } catch (e) {
-      if (mounted) {
-        _showSnack(t.settings.resourceLibrary.importFailed(error: '$e'));
-      }
+      _showImportFailure(e);
     }
   }
 
@@ -175,10 +172,20 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
       _showSnack(t.settings.resourceLibrary.imported(name: imported.name));
       await _reload();
     } catch (e) {
-      if (mounted) {
-        _showSnack(t.settings.resourceLibrary.importFailed(error: '$e'));
-      }
+      _showImportFailure(e);
     }
+  }
+
+  void _showImportFailure(Object error) {
+    if (!mounted) return;
+    final messages = Translations.of(context).settings.resourceLibrary;
+    // Database exceptions can contain SQL parameters, including the file body.
+    final detail = switch (error) {
+      FormatException(:final message) => message,
+      QueryException() => messages.importSaveFailed,
+      _ => messages.importFileFailed,
+    };
+    _showSnack(messages.importFailed(error: detail));
   }
 
   Future<void> _deleteCard(CharacterCard card) async {
@@ -371,6 +378,13 @@ class _ResourceLibraryPageState extends ConsumerState<ResourceLibraryPage> {
                     child: ListView(
                       padding: const EdgeInsets.all(SimpleSpacing.sLg),
                       children: [
+                        Text(
+                          t.settings.resourceLibrary.applyGuide,
+                          style: SimpleTextStyles.body.copyWith(
+                            color: context.lm.palette.ink,
+                          ),
+                        ),
+                        const SizedBox(height: SimpleSpacing.sLg),
                         Wrap(
                           spacing: SimpleSpacing.sSm,
                           runSpacing: SimpleSpacing.sSm,

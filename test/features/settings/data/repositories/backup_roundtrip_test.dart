@@ -11,6 +11,7 @@ import 'package:lmstory/features/chat/data/repositories/chat_repository_impl.dar
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/memory/data/repositories/experience_repository_impl.dart';
+import 'package:lmstory/features/memory/data/repositories/memory_fts_rebuilder.dart';
 import 'package:lmstory/features/settings/data/auto_backup_manager.dart';
 import 'package:lmstory/features/settings/data/repositories/backup_repository_impl.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
@@ -19,6 +20,8 @@ import 'package:lmstory/features/settings/domain/entities/llm_protocol.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
 import 'package:lmstory/features/settings/domain/services/data_management_service.dart';
+
+import 'fixtures/story_copy_legacy_v55.dart';
 
 /// v3 备份 roundtrip 测试矩阵（备份完整性立项，2026-09-02）
 ///
@@ -36,9 +39,24 @@ void main() {
   late _StubSettingsRepository settingsRepo;
   late _StubPresetRepository presetRepo;
   late DataManagementService service;
+  late int forcedReplacementFailures;
 
   setUp(() async {
-    db = AppDatabase.forTesting(NativeDatabase.memory());
+    forcedReplacementFailures = 0;
+    db = AppDatabase.forTesting(
+      NativeDatabase.memory(
+        setup: (database) {
+          database.createFunction(
+            functionName: 'record_replacement_failure',
+            directOnly: false,
+            function: (_) {
+              forcedReplacementFailures++;
+              return 0;
+            },
+          );
+        },
+      ),
+    );
     chatRepo = ChatRepositoryImpl(database: db);
     backupRepo = BackupRepositoryImpl(database: db);
     settingsRepo = _StubSettingsRepository();
@@ -182,6 +200,689 @@ void main() {
     return sessionId;
   }
 
+  Map<String, dynamic> legacySession(String key) =>
+      (jsonDecode(storyCopyLegacyV55Json) as Map<String, dynamic>)[key]
+          as Map<String, dynamic>;
+
+  String sessionIdOf(Map<String, dynamic> data) =>
+      (data['session'] as Map<String, dynamic>)['session_id'] as String;
+
+  Map<String, dynamic> activeMemory(Map<String, dynamic> data) =>
+      (data['experientialMemories'] as List<dynamic>).single
+          as Map<String, dynamic>;
+
+  Future<Map<String, Object?>> readLibrary() async => {
+        'sessions': await backupRepo.exportAllSessionsData(),
+        'presets': await backupRepo.exportAllPresets(),
+        'preferences': await settingsRepo.getUserOverrides(),
+        'keys': Map.of(settingsRepo.apiKeys),
+        'assets': await backupRepo.exportGlobalAssets(),
+        'failureLogs':
+            (await db.customSelect('SELECT * FROM failure_logs').get())
+                .map((row) => row.data)
+                .toList(),
+        'allFactsFts':
+            (await db.customSelect('SELECT * FROM factual_fts').get())
+                .map((row) => row.data)
+                .toList(),
+        'allExperiencesFts':
+            (await db.customSelect('SELECT * FROM memories_fts').get())
+                .map((row) => row.data)
+                .toList(),
+        'facts': (await db.customSelect(
+          'SELECT * FROM factual_fts WHERE factual_fts MATCH ?',
+          variables: [Variable.withString('符文的石碑')],
+        ).get())
+            .map((row) => row.data)
+            .toList(),
+        'experiences': (await db.customSelect(
+          'SELECT * FROM memories_fts WHERE memories_fts MATCH ?',
+          variables: [Variable.withString('古堡发现')],
+        ).get())
+            .map((row) => row.data)
+            .toList(),
+      };
+
+  Future<Map<String, Object?>> seedProtectedLibrary() async {
+    final existingId = await seedEverything();
+    await db.customStatement(
+      "UPDATE factual_entities SET source = 'worldbook' WHERE session_id = ?",
+      [existingId],
+    );
+    await rebuildSessionFts(db, existingId);
+    await db.customStatement(
+      'INSERT INTO failure_logs '
+      '(session_id, mode, error_category, raw_error, created_at) '
+      "VALUES (?, 'intermediate', 'persist', 'synthetic failure', 1000)",
+      [existingId],
+    );
+    expect(
+      await backupRepo.importSessionData(
+        legacySession('memoryTwo'),
+        mode: ImportMode.append,
+      ),
+      2,
+    );
+    final library = await readLibrary();
+    expect(library['sessions'], hasLength(2));
+    expect(library['presets'], isNotEmpty);
+    expect(library['preferences'], isNotEmpty);
+    expect(library['keys'], isNotEmpty);
+    expect(library['failureLogs'], hasLength(1));
+    expect(library['facts'], hasLength(1));
+    expect(library['experiences'], hasLength(1));
+    final assets = library['assets'];
+    if (assets is! Map<String, dynamic>) {
+      throw StateError('Expected exported global assets');
+    }
+    for (final key in [
+      'characterCards',
+      'worldbooks',
+      'userTemplates',
+      'agentEvents',
+    ]) {
+      expect(assets[key], isNotEmpty, reason: '原库须包含 $key');
+    }
+    return library;
+  }
+
+  String overwriteBackup(int version, List<Map<String, dynamic>> sessions) =>
+      jsonEncode({
+        'version': version,
+        'sessions': sessions,
+        'presets': [
+          {
+            'preset_id': 'incoming-preset',
+            'name': '导入替代供应商',
+            'api_key': 'synthetic-imported-key',
+          },
+        ],
+        'preferences': {'intermediate.generation.temperature': 0.2},
+        if (version == 3) ...{
+          'characterCards': <Object>[],
+          'worldbooks': <Object>[],
+          'userTemplates': <Object>[],
+          'agentEvents': <Object>[],
+        },
+      });
+
+  Future<void> failReplacementWithTrigger(
+    Map<String, dynamic> replacement,
+  ) async {
+    (replacement['session'] as Map<String, dynamic>)['title'] =
+        'synthetic blocked replacement';
+    await db.customStatement('''
+      CREATE TRIGGER reject_test_replacement
+      BEFORE INSERT ON chat_sessions
+      WHEN NEW.title = 'synthetic blocked replacement'
+      BEGIN
+        SELECT record_replacement_failure();
+        SELECT RAISE(ABORT, 'synthetic replacement failure');
+      END
+    ''');
+  }
+
+  Future<void> makeReplacementFail(
+    String failure,
+    Map<String, dynamic> replacement,
+  ) async {
+    final session = replacement['session'] as Map<String, dynamic>;
+    switch (failure) {
+      case 'invalid title':
+        session['title'] = {'invalid': true};
+      case 'null title':
+        session['title'] = null;
+      case 'sqlite trigger':
+        await failReplacementWithTrigger(replacement);
+      default:
+        throw ArgumentError.value(failure);
+    }
+  }
+
+  Future<File> saveSnapshot() async {
+    final dir = await Directory.systemTemp.createTemp('lmstory-roundtrip');
+    addTearDown(() => dir.delete(recursive: true));
+    return AutoBackupManager(
+      dataManagementService: service,
+      settingsRepository: settingsRepo,
+      chatRepository: chatRepo,
+      documentsDirectory: () async => dir,
+    ).createPreImportSnapshot();
+  }
+
+  Future<ImportResult> overwrite(
+    String content, {
+    bool importApiKeys = false,
+  }) =>
+      service.importBackup(
+        content,
+        ImportMode.overwrite,
+        importApiKeys: importApiKeys,
+        preImportSnapshot: saveSnapshot,
+      );
+
+  const directorMessageIds = ['u0', 'a0', 'u1', 'a1', 'u2', 'a2'];
+
+  Future<String> seedDirectorTurns() async {
+    final session = await chatRepo.createSession(
+      title: 'Synthetic harbor',
+      mode: 'advanced',
+    );
+    for (final (index, id) in directorMessageIds.indexed) {
+      await chatRepo.addMessage(
+        ChatMessage(
+          messageId: id,
+          sessionId: session.sessionId,
+          role: index.isEven ? 'user' : 'assistant',
+          content: 'fixture-$id',
+          createdAt: DateTime.utc(2026, 1, 1, 0, 0, index ~/ 2),
+        ),
+      );
+    }
+    return session.sessionId;
+  }
+
+  test('备份导出固定消息原入库顺序', () async {
+    final sessionId = await seedDirectorTurns();
+    await db.customStatement('PRAGMA reverse_unordered_selects = ON');
+
+    final data = await backupRepo.exportSessionData(sessionId);
+    final rows =
+        (data['messages'] as List<dynamic>).cast<Map<String, dynamic>>();
+    expect(rows.map((row) => row['message_id']), directorMessageIds);
+  });
+
+  test('乱序备份恢复后同秒导演消息保持原轮配对', () async {
+    final sessionId = await seedDirectorTurns();
+    final data = await backupRepo.exportSessionData(sessionId);
+    final rows =
+        (data['messages'] as List<dynamic>).cast<Map<String, dynamic>>();
+    final reverseBySourceId = rows.toList()
+      ..sort((a, b) => (b['id'] as int).compareTo(a['id'] as int));
+    data['messages'] = reverseBySourceId;
+    final content = jsonEncode({
+      'version': 3,
+      'sessions': [data],
+    });
+    await backupRepo.deleteAllSessionData();
+
+    final result = await overwrite(content);
+    expect(result.importedMessages, directorMessageIds.length);
+    final messages = await chatRepo.getMessages(sessionId);
+    expect(messages.map((message) => message.messageId), directorMessageIds);
+    expect(
+      messages.map((message) => message.content),
+      directorMessageIds.map((id) => 'fixture-$id'),
+    );
+    await service.verifyRecoveryReadback(content);
+  });
+
+  test('备份缺少原行号时保留文件中的消息顺序', () async {
+    final sessionId = await seedDirectorTurns();
+    final data = await backupRepo.exportSessionData(sessionId);
+    final rows =
+        (data['messages'] as List<dynamic>).cast<Map<String, dynamic>>();
+    final inFileOrder = rows.reversed.toList();
+    inFileOrder[2].remove('id');
+    data['messages'] = inFileOrder;
+    final expected = inFileOrder.map((row) => row['message_id']).toList();
+    await backupRepo.deleteAllSessionData();
+
+    expect(
+      await backupRepo.importSessionData(data, mode: ImportMode.append),
+      directorMessageIds.length,
+    );
+    final actual = await backupRepo.exportSessionData(sessionId);
+    final stored =
+        (actual['messages'] as List<dynamic>).cast<Map<String, dynamic>>();
+    expect(stored.map((row) => row['message_id']), expected);
+  });
+
+  Map<String, dynamic> draftRow(
+    String sessionId,
+    int turn,
+    int index,
+    String content,
+  ) =>
+      {
+        'session_id': sessionId,
+        'turn_number': turn,
+        'variant_index': index,
+        'content': content,
+        'created_at': DateTime.utc(2026, 11, 23).millisecondsSinceEpoch,
+      };
+
+  for (final mode in ImportMode.values) {
+    test('备份稿件同轮同号时拒绝 ${mode.name} 并保留原来的全部会话', () async {
+      await seedEverything();
+      final before = await backupRepo.exportAllSessionsData();
+      final valid = legacySession('memorySource');
+      final conflict = legacySession('memoryOne');
+      final id = sessionIdOf(conflict);
+      conflict['messageVariants'] = [
+        draftRow(id, 1, 0, '林中的旧稿。'),
+        draftRow(id, 1, 0, '同一编号的另一段正文。'),
+      ];
+      final payload = overwriteBackup(3, [valid, conflict]);
+      final rejection = throwsA(
+        isA<BackupDraftIndexConflictException>().having(
+          (error) => error.source,
+          'source',
+          isNull,
+        ),
+      );
+      var snapshots = 0;
+
+      await expectLater(
+        service.importBackup(
+          payload,
+          mode,
+          preImportSnapshot: () async => snapshots++,
+        ),
+        rejection,
+      );
+      expect(
+        () => DataManagementService.inspectRecoveryBackup(payload),
+        rejection,
+      );
+      expect(snapshots, 0);
+      expect(await backupRepo.exportAllSessionsData(), before);
+    });
+  }
+
+  test('不同会话和不同轮的同编号稿件会完整恢复', () async {
+    final first = legacySession('memorySource');
+    final second = legacySession('memoryOne');
+    final firstId = sessionIdOf(first);
+    final secondId = sessionIdOf(second);
+    first['messageVariants'] = [
+      draftRow(firstId, 1, 0, '甲的首轮原稿。'),
+      draftRow(firstId, 1, 1, '甲的首轮改稿。'),
+      draftRow(firstId, 2, 0, '甲的次轮原稿。'),
+    ];
+    second['messageVariants'] = [draftRow(secondId, 1, 0, '乙的首轮原稿。')];
+    final result = await service.importBackup(
+      overwriteBackup(3, [first, second]),
+      ImportMode.append,
+    );
+    expect(result.importedSessions, 2);
+    for (final incoming in [first, second]) {
+      final restored = await backupRepo.exportSessionData(
+        sessionIdOf(incoming),
+      );
+      final drafts =
+          (restored['messageVariants'] as List).cast<Map<String, dynamic>>();
+      expect(
+        drafts.map((row) => row['content']),
+        (incoming['messageVariants'] as List).cast<Map<String, dynamic>>().map(
+              (row) => row['content'],
+            ),
+      );
+    }
+  });
+
+  test('整文件覆盖遇到跨会话经历 ID 冲突时保留原库和索引', () async {
+    final existingId = await seedEverything();
+    await db.customStatement(
+      "UPDATE factual_entities SET source = 'worldbook' WHERE session_id = ?",
+      [existingId],
+    );
+    await rebuildSessionFts(db, existingId);
+    final source = legacySession('memorySource');
+    final copy = legacySession('memoryOne');
+    expect(
+      await backupRepo.importSessionData(copy, mode: ImportMode.append),
+      2,
+    );
+    expect(sessionIdOf(copy), isNot(sessionIdOf(source)));
+    activeMemory(copy)['memory_id'] = activeMemory(source)['memory_id'];
+
+    final before = await readLibrary();
+    expect(before['facts'], hasLength(1));
+    expect(before['experiences'], hasLength(1));
+    var snapshots = 0;
+    for (final version in [2, 3]) {
+      final incoming = jsonEncode({
+        'version': version,
+        'sessions': [source, copy],
+        'presets': [
+          {
+            'preset_id': 'incoming-preset',
+            'name': '导入替代供应商',
+            'api_key': 'synthetic-imported-key',
+          },
+        ],
+        'preferences': {'intermediate.generation.temperature': 0.2},
+        if (version == 3) ...{
+          'characterCards': <Object>[],
+          'worldbooks': <Object>[],
+          'userTemplates': <Object>[],
+          'agentEvents': <Object>[],
+        },
+      });
+      await expectLater(
+        service.importBackup(
+          incoming,
+          ImportMode.overwrite,
+          preImportSnapshot: () async => snapshots++,
+          importApiKeys: true,
+        ),
+        throwsA(
+          isA<BackupExperienceIdConflictException>().having(
+            (error) => error.source,
+            'source',
+            isNull,
+          ),
+        ),
+      );
+      expect(await readLibrary(), before);
+    }
+    expect(snapshots, 0);
+  });
+
+  for (final version in [2, 3]) {
+    for (final failure in ['invalid title', 'null title', 'sqlite trigger']) {
+      test('v$version 覆盖时重复会话 $failure 后仍占有原经历 ID', () async {
+        final before = await seedProtectedLibrary();
+        final source = legacySession('memorySource');
+        final replacement = legacySession('memorySource');
+        final copy = legacySession('memoryOne');
+        replacement['experientialMemories'] = <Object>[];
+        activeMemory(copy)['memory_id'] = activeMemory(source)['memory_id'];
+        await makeReplacementFail(failure, replacement);
+
+        var snapshots = 0;
+        File? snapshot;
+        Object? caught;
+        try {
+          await service.importBackup(
+            overwriteBackup(version, [source, replacement, copy]),
+            ImportMode.overwrite,
+            preImportSnapshot: () async {
+              snapshots++;
+              snapshot = await saveSnapshot();
+            },
+            importApiKeys: true,
+          );
+        } catch (error) {
+          caught = error;
+        }
+
+        final after = await readLibrary();
+        if (failure == 'sqlite trigger') {
+          expect(forcedReplacementFailures, greaterThan(0));
+        }
+        expect(caught, isA<BackupExperienceIdConflictException>());
+        expect(after, before);
+        if (failure == 'sqlite trigger') {
+          expect(snapshots, 1);
+          final saved = snapshot;
+          if (saved == null) fail('缺少实际写入的覆盖前快照');
+          await service.verifyRecoveryReadback(await saved.readAsString());
+        } else {
+          expect(snapshots, inInclusiveRange(0, 1));
+        }
+      });
+
+      test('v$version 覆盖时重复会话 $failure 不占有未落库的经历 ID', () async {
+        await seedProtectedLibrary();
+        final source = legacySession('memorySource');
+        final replacement = legacySession('memorySource');
+        final copy = legacySession('memoryOne');
+        final originalId = activeMemory(source)['memory_id'];
+        final unusedId = activeMemory(copy)['memory_id'];
+        expect(unusedId, isNot(originalId));
+        activeMemory(replacement)['memory_id'] = unusedId;
+        await makeReplacementFail(failure, replacement);
+
+        var snapshots = 0;
+        final result = await service.importBackup(
+          overwriteBackup(version, [source, replacement, copy]),
+          ImportMode.overwrite,
+          preImportSnapshot: () async {
+            snapshots++;
+            await saveSnapshot();
+          },
+          importApiKeys: true,
+        );
+
+        expect(result.importedSessions, 2);
+        expect(result.skippedSessions, 1);
+        expect(result.importedMessages, 4);
+        expect(snapshots, 1);
+        expect(await chatRepo.getMessages(sessionIdOf(source)), hasLength(2));
+        expect(await chatRepo.getMessages(sessionIdOf(copy)), hasLength(2));
+        final restored = await backupRepo.exportAllSessionsData();
+        expect(
+          {
+            for (final session in restored)
+              sessionIdOf(session): activeMemory(session)['memory_id'],
+          },
+          {sessionIdOf(source): originalId, sessionIdOf(copy): unusedId},
+        );
+        expect(await tableCount('memories_fts'), 2);
+        if (failure == 'sqlite trigger') {
+          expect(forcedReplacementFailures, greaterThan(0));
+        }
+      });
+    }
+
+    test('v$version 覆盖时经历行所属会话不同会拒绝并保留原库', () async {
+      final before = await seedProtectedLibrary();
+      final source = legacySession('memorySource');
+      final replacement = legacySession('memorySource');
+      final owner = legacySession('memoryOne');
+      final other = legacySession('memoryTwo');
+      replacement['experientialMemories'] = <Object>[];
+      owner['experientialMemories'] = <Object>[];
+      activeMemory(source)['session_id'] = sessionIdOf(owner);
+      activeMemory(other)['memory_id'] = activeMemory(source)['memory_id'];
+
+      var snapshots = 0;
+      await expectLater(
+        service.importBackup(
+          overwriteBackup(version, [owner, source, replacement, other]),
+          ImportMode.overwrite,
+          preImportSnapshot: () async => snapshots++,
+          importApiKeys: true,
+        ),
+        throwsA(isA<BackupExperienceIdConflictException>()),
+      );
+      expect(await readLibrary(), before);
+      expect(snapshots, 0);
+    });
+
+    test('v$version 覆盖时仅经历行所属会话不同也会拒绝并保留原库', () async {
+      final before = await seedProtectedLibrary();
+      final source = legacySession('memorySource');
+      final owner = legacySession('memoryOne');
+      owner['experientialMemories'] = <Object>[];
+      activeMemory(source)['session_id'] = sessionIdOf(owner);
+
+      var snapshots = 0;
+      await expectLater(
+        service.importBackup(
+          overwriteBackup(version, [owner, source]),
+          ImportMode.overwrite,
+          preImportSnapshot: () async => snapshots++,
+          importApiKeys: true,
+        ),
+        throwsA(isA<FormatException>()),
+      );
+      expect(await readLibrary(), before);
+      expect(snapshots, 0);
+    });
+
+    for (final malformedType in ['invalid title', 'missing memory session']) {
+      test('v$version 覆盖时普通坏会话 $malformedType 跳过后继续导入正常会话', () async {
+        await seedProtectedLibrary();
+        final source = legacySession('memorySource');
+        final malformed = legacySession('memoryTwo');
+        final copy = legacySession('memoryOne');
+        if (malformedType == 'invalid title') {
+          (malformed['session'] as Map<String, dynamic>)['title'] = {
+            'invalid': true,
+          };
+        } else {
+          activeMemory(malformed).remove('session_id');
+        }
+
+        final result = await overwrite(
+          overwriteBackup(version, [source, malformed, copy]),
+          importApiKeys: true,
+        );
+
+        expect(result.importedSessions, 2);
+        expect(result.skippedSessions, 1);
+        expect(result.importedMessages, 4);
+        expect(await chatRepo.getMessages(sessionIdOf(source)), hasLength(2));
+        expect(await chatRepo.getMessages(sessionIdOf(copy)), hasLength(2));
+        expect(await chatRepo.getMessages(sessionIdOf(malformed)), isEmpty);
+        expect(
+          (await backupRepo.exportAllSessionsData()).map(sessionIdOf).toSet(),
+          {sessionIdOf(source), sessionIdOf(copy)},
+        );
+        expect(await tableCount('memories_fts'), 2);
+      });
+    }
+
+    test('v$version 覆盖时成功替换空经历会释放原经历 ID', () async {
+      final source = legacySession('memorySource');
+      final replacement = legacySession('memorySource');
+      final copy = legacySession('memoryOne');
+      final releasedId = activeMemory(source)['memory_id'];
+      replacement['experientialMemories'] = <Object>[];
+      activeMemory(copy)['memory_id'] = releasedId;
+
+      final result = await service.importBackup(
+        overwriteBackup(version, [source, replacement, copy]),
+        ImportMode.overwrite,
+      );
+
+      expect(result.importedSessions, 3);
+      expect(result.skippedSessions, 0);
+      expect(result.importedMessages, 6);
+      final restored = await backupRepo.exportAllSessionsData();
+      final restoredSource = restored.singleWhere(
+        (session) => sessionIdOf(session) == sessionIdOf(source),
+      );
+      final restoredCopy = restored.singleWhere(
+        (session) => sessionIdOf(session) == sessionIdOf(copy),
+      );
+      expect(restoredSource['experientialMemories'], isEmpty);
+      expect(activeMemory(restoredCopy)['memory_id'], releasedId);
+      expect(await tableCount('memories_fts'), 1);
+    });
+  }
+
+  test('整文件覆盖会替换同一会话并释放先前的活动经历 ID', () async {
+    final existingId = await seedEverything();
+    final source = legacySession('memorySource');
+    final replacement = legacySession('memorySource');
+    final copy = legacySession('memoryOne');
+    final releasedId = activeMemory(source)['memory_id'];
+    final distinctId = activeMemory(copy)['memory_id'];
+    expect(distinctId, isNot(releasedId));
+    activeMemory(replacement)['memory_id'] = distinctId;
+    activeMemory(copy)['memory_id'] = releasedId;
+
+    final result = await overwrite(
+      jsonEncode({
+        'version': 3,
+        'sessions': [source, source, replacement, copy],
+      }),
+    );
+    expect(result.importedSessions, 4);
+    expect(result.skippedSessions, 0);
+    expect(result.importedMessages, 8);
+    expect(await chatRepo.getMessages(existingId), isEmpty);
+    final restored = await backupRepo.exportAllSessionsData();
+    expect(
+      {
+        for (final session in restored)
+          sessionIdOf(session): activeMemory(session)['memory_id'],
+      },
+      {sessionIdOf(source): distinctId, sessionIdOf(copy): releasedId},
+    );
+    expect(await tableCount('memories_fts'), 2);
+  });
+
+  test('覆盖期间事务失效会跳过后续写入并保留原库', () async {
+    final before = await seedProtectedLibrary();
+    final source = legacySession('memorySource');
+    final replacement = legacySession('memorySource');
+    final copy = legacySession('memoryOne');
+    (replacement['session'] as Map<String, dynamic>)['title'] =
+        'synthetic rollback of file transaction';
+    await db.customStatement(
+      'CREATE TEMP TRIGGER abort_backup_transaction BEFORE INSERT '
+      'ON chat_sessions '
+      "WHEN NEW.title = 'synthetic rollback of file transaction' "
+      "BEGIN SELECT RAISE(ROLLBACK, 'synthetic storage failure'); END",
+    );
+
+    await expectLater(
+      overwrite(overwriteBackup(3, [source, replacement, copy])),
+      throwsException,
+    );
+    expect(await readLibrary(), before);
+    expect(await chatRepo.getMessages(sessionIdOf(copy)), isEmpty);
+  });
+
+  test('整文件追加继续跳过冲突的单条会话', () async {
+    final existingId = await seedEverything();
+    await rebuildSessionFts(db, existingId);
+    final source = legacySession('memorySource');
+    final copy = legacySession('memoryOne');
+    activeMemory(copy)['memory_id'] = activeMemory(source)['memory_id'];
+
+    final result = await service.importBackup(
+      jsonEncode({
+        'version': 3,
+        'sessions': [source, copy],
+      }),
+      ImportMode.append,
+    );
+    expect(result.importedSessions, 1);
+    expect(result.skippedSessions, 1);
+    expect(result.importedMessages, 2);
+    expect(await chatRepo.getMessages(existingId), hasLength(4));
+    expect(await chatRepo.getMessages(sessionIdOf(source)), hasLength(2));
+    expect(await chatRepo.getMessages(sessionIdOf(copy)), isEmpty);
+    expect(await tableCount('memories_fts'), 2);
+  });
+
+  test('整文件覆盖和隔离恢复按各自口径处理重复会话包', () async {
+    final source = legacySession('factSource');
+    final incomplete = legacySession('factSource')..remove('messages');
+    final replacement = legacySession('factSource');
+    for (final (session, title) in [
+      (incomplete, '缺正文的重复会话'),
+      (replacement, '完整替换的重复会话'),
+    ]) {
+      (session['session'] as Map<String, dynamic>)['title'] = title;
+    }
+    final file = jsonEncode({
+      'version': 3,
+      'sessions': [source, incomplete, replacement],
+    });
+    final sid = sessionIdOf(source);
+    final cover = await overwrite(file);
+    expect(cover.importedSessions, 2);
+    expect(cover.skippedSessions, 1);
+    expect((await chatRepo.getSession(sid)).title, '完整替换的重复会话');
+
+    await backupRepo.deleteAllSessionData();
+    final recovery = await service.importRecoveryTrial(file);
+    expect(recovery.importedSessions, 1);
+    expect(recovery.skippedSessions, 2);
+    expect(
+      (await chatRepo.getSession(sid)).title,
+      (source['session'] as Map<String, dynamic>)['title'],
+    );
+    await service.verifyRecoveryReadback(file);
+  });
+
   test('v3 全量导出→清库→覆盖导入→逐表计数与抽样内容还原', () async {
     final sessionId = await seedEverything();
 
@@ -220,7 +921,8 @@ void main() {
     expect(await tableCount('agent_events'), 0);
 
     // ── 覆盖导入 ──
-    final result = await service.importBackup(json, ImportMode.overwrite);
+    final result = await overwrite(json);
+    await service.verifyRecoveryReadback(json);
 
     expect(result.importedSessions, 1);
     expect(result.importedMessages, 4);
@@ -241,8 +943,10 @@ void main() {
     expect(await tableCount('intermediate_round_artifacts'), 1);
     // 供应商
     expect(
-      await count('SELECT 1 FROM api_presets WHERE preset_id '
-          "= 'preset-custom'"),
+      await count(
+        'SELECT 1 FROM api_presets WHERE preset_id '
+        "= 'preset-custom'",
+      ),
       1,
     );
     // 资源库（抽样内容）
@@ -258,24 +962,17 @@ void main() {
     expect(await count("SELECT 1 FROM worldbooks WHERE book_id = 'book-1'"), 1);
     // 模板：自建还原 + 内置保留（覆盖导入只清自建）
     expect(
-      await count(
-        "SELECT 1 FROM templates WHERE template_id = 'tmpl-custom'",
-      ),
+      await count("SELECT 1 FROM templates WHERE template_id = 'tmpl-custom'"),
       1,
     );
     expect(
-      await count(
-        "SELECT 1 FROM templates WHERE template_id = 'tmpl-builtin'",
-      ),
+      await count("SELECT 1 FROM templates WHERE template_id = 'tmpl-builtin'"),
       1,
     );
     // 事件日志
     expect(await tableCount('agent_events'), 1);
     // 偏好
-    expect(
-      settingsRepo.overrides['intermediate.generation.temperature'],
-      0.7,
-    );
+    expect(settingsRepo.overrides['intermediate.generation.temperature'], 0.7);
     // API Key 不随备份（includeApiKeys=false）：导入后无 Key
     expect(settingsRepo.apiKeys.containsKey('preset-custom'), isFalse);
   });
@@ -303,10 +1000,7 @@ void main() {
     await db.customStatement('DELETE FROM worldbooks');
     await db.customStatement('DELETE FROM templates WHERE is_built_in = 0');
 
-    final result = await service.importBackup(
-      v2Json,
-      ImportMode.overwrite,
-    );
+    final result = await overwrite(v2Json);
 
     // v2 路由正确（不再误入 v1 链）：会话数据还原
     expect(result.importedSessions, 1);
@@ -369,7 +1063,7 @@ void main() {
 
     // 覆盖导入同一会话：deleteSessionData 先删 agent_events，文件里有 → 还原。
     // 修复前导出缺该表 → 覆盖导入净损失事件日志（轮轨迹/日志恢复失守）。
-    final result = await service.importBackup(json, ImportMode.overwrite);
+    final result = await overwrite(json);
 
     expect(result.importedSessions, 1);
     expect(result.importedMessages, 4);
@@ -379,13 +1073,15 @@ void main() {
 
   test('兼容: 旧单会话导出（无 agentEvents 键）覆盖导入不崩、缺键不导入', () async {
     final sessionId = await seedEverything();
-    final map = jsonDecode(await service.exportSessionAsJson(sessionId))
-        as Map<String, dynamic>;
-    ((map['sessions'] as List).single as Map<String, dynamic>)
-        .remove('agentEvents');
+    final map = jsonDecode(
+      await service.exportSessionAsJson(sessionId),
+    ) as Map<String, dynamic>;
+    ((map['sessions'] as List).single as Map<String, dynamic>).remove(
+      'agentEvents',
+    );
     final oldJson = jsonEncode(map);
 
-    final result = await service.importBackup(oldJson, ImportMode.overwrite);
+    final result = await overwrite(oldJson);
 
     // 缺键 = 不导入该表，保持现状行为（旧导出文件向后兼容）
     expect(result.importedSessions, 1);
@@ -410,8 +1106,7 @@ void main() {
       'agentEvents': <Map<String, dynamic>>[],
     });
 
-    final result =
-        await service.importBackup(emptyBackup, ImportMode.overwrite);
+    final result = await overwrite(emptyBackup);
 
     // UI 三处承诺「覆盖不会影响你的任何会话」→ 会话与衍生数据全部保留
     expect(result.importedSessions, 0);
@@ -435,7 +1130,7 @@ void main() {
       'userTemplates': <Map<String, dynamic>>[],
     });
 
-    await service.importBackup(noKeyBackup, ImportMode.overwrite);
+    await overwrite(noKeyBackup);
 
     expect(await tableCount('chat_sessions'), 1);
     expect(await tableCount('chat_messages'), 4);
@@ -451,7 +1146,7 @@ void main() {
       'preferences': <String, dynamic>{},
     });
 
-    await service.importBackup(v1Empty, ImportMode.overwrite);
+    await overwrite(v1Empty);
 
     expect(await tableCount('chat_sessions'), 1);
     expect(await tableCount('chat_messages'), 4);
@@ -475,10 +1170,7 @@ void main() {
       ..remove('userTemplates');
     map['worldbooks'] = <dynamic>[]; // 键存在且空 → 覆盖清空（既有语义）
 
-    final result = await service.importBackup(
-      jsonEncode(map),
-      ImportMode.overwrite,
-    );
+    final result = await overwrite(jsonEncode(map));
 
     // 缺键表原样保留
     expect(await tableCount('character_cards'), 1, reason: '缺键=该域不动');
@@ -515,11 +1207,7 @@ void main() {
               'createdAt': '2026-01-01T00:00:00.000',
             },
             'garbage-not-a-map',
-            {
-              'role': 'user',
-              'content': '坏日期',
-              'createdAt': 'not-a-date',
-            },
+            {'role': 'user', 'content': '坏日期', 'createdAt': 'not-a-date'},
           ],
         },
         42,
@@ -530,11 +1218,7 @@ void main() {
     // 修复前：presetRaw as Map 抛 TypeError 直穿 importBackup——
     // 覆盖模式删除已先行提交，剩余条目全部不导入（半空库终态）
     // Key 导入默认关闭，本用例验证好条目落地能力故显式勾选
-    final result = await service.importBackup(
-      v1,
-      ImportMode.overwrite,
-      importApiKeys: true,
-    );
+    final result = await overwrite(v1, importApiKeys: true);
 
     expect(result.importedPresets, 1);
     expect(result.skippedPresets, 2, reason: '非 Map 条目 + 坏值条目');
@@ -543,10 +1227,7 @@ void main() {
     expect(result.importedMessages, 1, reason: '坏消息跳过，好消息保留');
     // 覆盖删除先行后，好条目仍落地（不再半空库）。v1 链总是新建会话
     // （sessionId 仅用于追加去重），按标题断言。
-    expect(
-      await count("SELECT 1 FROM chat_sessions WHERE title = 'v1 会话'"),
-      1,
-    );
+    expect(await count("SELECT 1 FROM chat_sessions WHERE title = 'v1 会话'"), 1);
     expect(await tableCount('chat_messages'), 1);
     expect(settingsRepo.overrides['k'], 'v');
     expect(settingsRepo.apiKeys.values, contains('sk-1'));
@@ -601,9 +1282,9 @@ void main() {
     expect((rows.single as Map<String, dynamic>)['embedding_dimensions'], 8);
 
     // ── 旧备份（缺键）：导入后 NULL → 导入侧回填补齐 ──
-    final oldRow =
-        Map<String, dynamic>.from(rows.single as Map<String, dynamic>)
-          ..remove('embedding_dimensions');
+    final oldRow = Map<String, dynamic>.from(
+      rows.single as Map<String, dynamic>,
+    )..remove('embedding_dimensions');
     final oldBackup = Map<String, dynamic>.from(data)
       ..['experientialMemories'] = [oldRow];
 
@@ -681,10 +1362,7 @@ void main() {
       await manager.setEnabled(enabled: false);
       now = now.add(const Duration(hours: 25));
       expect(await manager.runIfNeeded(), isNull);
-      expect(
-        settingsRepo.overrides[AutoBackupManager.enabledKey],
-        false,
-      );
+      expect(settingsRepo.overrides[AutoBackupManager.enabledKey], false);
 
       // 自动备份文件不含 API Key（默认安全导出）
       final content =
@@ -743,6 +1421,7 @@ class _StubPresetRepository implements ApiPresetRepository {
     required String name,
     String baseUrl = '',
     LlmProtocol protocol = LlmProtocol.openaiCompatible,
+    bool omitSamplingParams = true,
   }) async {
     final preset = ApiPreset(
       presetId: 'stub-preset-${_nextId++}',

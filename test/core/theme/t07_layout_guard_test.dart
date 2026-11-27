@@ -298,6 +298,10 @@ const _widthWhitelist = <String, Set<int>>{
   'lib/features/settings/presentation/widgets/model_picker_dialog.dart': {600},
   // 失败条内容的最大高度。
   'lib/features/story_runtime/presentation/widgets/failure_bar.dart': {120},
+  // 导演模式精简输入框折叠前的最大高度（同故事模式输入框内容固有上限）。
+  'lib/features/advanced/presentation/widgets/director_compact_composer.dart': {
+    200,
+  },
   // 故事模式输入框折叠前的最大高度。
   'lib/features/story_runtime/presentation/widgets/intermediate_chat_input.dart':
       {200},

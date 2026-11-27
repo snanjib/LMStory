@@ -1,4 +1,5 @@
 common:
+  backupOverwriteInProgress: 正在覆盖导入，请等导入完成后再发送。
   errors:
     directorFirstResponseTimeout: 等待模型首响应超时；已停止自动重试，可检查供应商日志或调整首响应时限
     directorCompleteResponseTimeout: 非流式完整结果接收超时；已停止自动重试，可检查供应商日志或调整完成时限
@@ -10,6 +11,9 @@ common:
     llmTimeout: "请求超时"
     llmEmptyResponse: "模型返回了空响应（无正文与工具调用）"
     llmNonStreamFailed(detail): "非流式请求失败：$detail"
+    factWriteWarning(param=count):
+      one: "本轮有 $count 条事实变更未保存。"
+      other: "本轮有 $count 条事实变更未保存。"
   confirm: 确认
   cancel: 取消
   save: 保存
@@ -102,10 +106,23 @@ common:
     # 「≈」前缀 = 端点未回 usage 时控制器本地估算的值
     usageNote: "「—」表示端点未返回该分项；「≈」为本地估算值（非端点精确统计）"
     estTokenCount: "≈ $count tokens"
+    # 2026-11-09 上下文数据可靠性：主数字=当前预计（下一次请求输入），
+    # 与「最近一轮请求」实报分开；覆盖行说明命中率样本口径
+    currentEstimateLabel: 当前预计输入（下一次请求）
+    updatedAtLabel: 更新时间
+    cacheCoverageLabel: 命中率覆盖
+    cacheCoverageValue: "$count 轮可比样本"
+    cacheSampleInvalid: 计量异常，命中率不可比较
   # 种子资源应用区段（DOC-15 §9.3， 自 intermediate.chat.sessionSettings
   # 抽取共享——组件 story_runtime/presentation/widgets/seed_resource_section.dart
   # 故事/导演共用；分区标题键留在各自命名空间）
   seedResource:
+    appliedTitle: 已应用到本会话
+    appliedEmpty: 尚未应用角色卡或世界书
+    appliedLoadFailed: 暂时无法读取本会话已应用的资源
+    applySessionUnavailable: 暂时无法保存本会话，请稍后再应用资源
+    appliedCard(name): 角色卡 · $name
+    appliedBook(name): 世界书 · $name
     applyCard: 应用角色卡
     applyBook: 应用世界书
     resourceEmpty: 暂无资源，请先在「设置 → 角色卡/世界书」导入
@@ -336,8 +353,8 @@ chat:
     mermaidNotSupported: Mermaid 图表暂不支持移动端渲染，可复制到 mermaid.live 查看
   navigation:
     jumpToTop: 跳到顶部
-    prevUserMessage: 上一条用户消息
-    nextUserMessage: 下一条用户消息
+    prevUserMessage: 上一轮
+    nextUserMessage: 下一轮
     jumpToBottom: 跳到底部
   modelSelector:
     noModel: 未选择模型
@@ -433,7 +450,7 @@ chat:
     suggestedActions:
       config: 前往「设置」检查 API 供应商、模型 ID 和 API Key
       network: 切换 Wi-Fi/移动数据，或重启路由器后重试
-      auth: 前往「设置」确认 API Key 是否有效，必要时重新生成
+      auth: 在「设置 → 模型提供商 → 对应供应商」检查或更正 API Key，再重试。
       rateLimit: 等待 1 分钟后重试，或降低请求频率
       server: 等待 5 分钟后重试，如持续异常请联系供应商
       timeout: 切换更快的模型，或检查网络稳定性
@@ -452,6 +469,24 @@ chat:
     displayFormatWithDetail: "$message（$code）\n$suggestionLabel：$suggestion\n$detailLabel：$detail"
 
 advanced:
+  auxiliaryFailure:
+    titleFailed: 标题生成失败 · $reason
+    noConversation: 当前没有可用于生成的对话内容
+    modelOrKeyUnavailable: 没有可用的模型或 API 密钥，请检查模型配置
+    timeout: 请求超时，请稍后重试
+    network: 无法连接供应商，请检查网络
+    auth: 供应商验证失败，请检查 API 密钥和权限
+    rateLimit: 请求被限流，请稍后重试
+    requestRejected: 供应商拒绝了请求，请检查模型和参数
+    unsupportedParameter: 供应商不支持参数 $parameter
+    contextOverflow: 请求超过模型的上下文窗口
+    server: 供应商服务暂时异常
+    emptyOutput: 模型返回了空内容
+    invalidCandidates: 模型没有返回可用的候选回复
+    titleChanged: 标题已变更，已保留当前标题
+    saveFailed: 新标题保存失败，请重试
+    unknown: 生成时发生异常，请稍后重试
+    withHttpStatus: $reason（HTTP $status）
   # 导演会话设置入口专用键（原借用故事模式文案）
   sessionSettingsTitle: 会话设置
   emptyHint: 导演模式下，AI 总编辑将自主检索记忆、撰写正文并维护设定。发送第一句话开始。
@@ -460,6 +495,9 @@ advanced:
   # 指不到真正的修复入口（GM 与故事四步模型是两条独立解析链）
   failure:
     gmMissing: 导演主模型未配置：前往「设置 → 导演模式设置 → 模型与生成」配置导演主模型后，重新发送
+    inputRecovered: 已找回上次提交的输入
+    inputRecoveredSuggestion: 可以继续本轮。若尚未配置主模型，请先前往「设置 → 导演模式设置 → 模型与生成」。
+    inputSaveFailed: 保存失败。修改后的文字仍在这里，可以重试。
     #  残余：导演侧溢出横幅（原借用 intermediate.chat.failure）
     contextOverflow: 已自动压缩重试仍超限，请手动压缩或精简输入
   # 请求重试等待状态条（退避/Retry-After）
@@ -485,6 +523,15 @@ advanced:
     delete: 删除此版
     deleteDone: 已删除该版本
     sourceLabel: "生成指令：$input"
+    switchBlockedRestore: 无法完整恢复这份稿件，已保留当前版本。
+    switchBlockedDownstream: 该版之后还有后续轮次，切换会使记忆与正文不一致；请先删除后续轮次再切换
+    switchBlockedCompacted: 该轮已并入压缩摘要，切换会使记忆与正文不一致，已保留当前版本
+  # 单槽待发（生成中排队，轮正常结束后自动发送一次）
+  queue:
+    chip(text): "本轮结束后将发送：$text"
+    withdraw: 撤回
+    overwriteTitle: 覆盖待发消息？
+    overwriteConfirm(queued): "已有一条待发消息「$queued」，要用新内容替换吗？"
   input:
     hint: 给导演的指令…
   # 空态引导（体验重构 §4.3.5）：示例开场语 + 项目规则提示
@@ -499,6 +546,8 @@ advanced:
     searchStory: 翻阅前情
     readStory: 回读原文
     queryFacts: 查证设定
+    listFacts: 浏览设定目录
+    queryMemoryChanges: 查记忆变更
     readCompactSummary: 重读主线
     updateFacts: 修订设定集
     recordEventMemory: 记入大事记
@@ -506,7 +555,10 @@ advanced:
     mergeEntities: 归并设定
     askUser: 请示导演
     finishRound: 落幕
+    finishMaintenance: 完成校准
     readSkill: 翻阅手记
+    calcEval: 精算数字
+    calcDate: 核对日期
     spawn: 派出子代理
     fallback: 幕后工作
   # 导演失败/审批/留痕文案此前整批硬编码中文
@@ -592,9 +644,18 @@ advanced:
     # 连续同工具动作 >3 的聚合行
     aggregatedActions(verb, count): "$verb × $count"
     interruptedToolPlaceholder: "中断占位"
-    interruptedToolOutput: "（应用中断，未执行；如仍需要请在后续轮次重试）"
+    interruptedToolOutput: "（应用中断，此操作是否已执行无法确认；如仍需要请基于当前状态重新判断后再操作）"
     # 播报行无障碍语义（视觉为无框裸文本，与正文同字体）
     narrationLabel: 导演播报
+  # 周期记忆审查与校准（任务二轻量进度胶囊）
+  maintenance:
+    capsuleIdle: 正文已就绪 · 正在执行周期记忆审查与校准…
+    capsuleWithStep(step, verb): "正文已就绪 · 周期记忆校准（第 $step 步）· $verb"
+    capsuleWithBudget(step, maxSteps, verb): "正文已就绪 · 周期记忆校准（第 $step/$maxSteps 步）· $verb"
+    capsuleWithCount(count, verb): "正文已就绪 · 周期记忆校准（$count 步）· $verb"
+    checkingVerb: 巡检记忆
+    pureReadingStatus: 正文已就绪 · 后台正在校准记忆…
+    noStepsYet: 正在准备记忆巡检…
   # 心跳行（体验重构 §4.3.2）：发送后首字前
   heartbeat:
     composing: 导演正在构思…
@@ -739,6 +800,9 @@ advanced:
     confidenceBadge(n): "置信度 $n/5"
     beforeLabel: 旧
     afterLabel: 新
+    valueLine(label, value): "$label：$value"
+    emptyListValue: 无
+    eventFieldSeparator: "；"
     reasonLabel: 理由
     commentEntry: 附加批注（可选）
     commentHint: 随本次处置下发给 AI 的即时指导，留空不发送；想立长期规则请改项目规则或设定
@@ -753,15 +817,19 @@ advanced:
     noteConfidenceGate: 关键属性置信度不足，会被拒绝
     noteListRejects: 列表型属性不接受整值覆盖，会被拒绝（应逐项追加/移除）
     noteBaselineRedirect: 当前是单值属性，将转为整值修改
-    noteDuplicate: 已有相同或相近条目，不会重复写入
+    noteDuplicate: 已有相同条目，不会重复写入
     noteNoMutableList: 无可移除的列表属性，不会生效
     noteValueNotInList: 列表中没有该条目，不会生效
+    noteDictRejectsAppend: 字典型关系属性不接受追加，不会生效（个人关系请用「relationship:对方名」属性，群体关系请整体更新）
+    noteDictKeyCreatesList: 该属性是字典型，不能以追加方式新建列表，不会生效
+    baseDriftTrace(items): "以下属性在暂存后被其他途径更新，本次不覆盖：$items（如需改写请重新发起）"
     noteAliasSameAsPrimary: 与主名相同，不会写入
     noteAliasLimit: 别名已达上限，不会写入
     noteAlreadyArchived: 已是归档状态，不会重复归档
     noteSameNameUpdate: 同名实体已存在，将转为修改它的属性
     noteSameNameAlias: 同名实体已存在，将转为给它加别名
     noteCreatesAttrRow: 该属性尚不存在，将新建
+    noteImportanceOutOfRange: 重要度须在 1 到 5 之间，会被拒绝
     anchorEntityName: 剧情锚
     anchorFieldArc: 弧线
     anchorFieldMainline: 一句话主线
@@ -836,6 +904,25 @@ advanced:
     retrievalProfileLoose: 宽松
     retrievalProfileLooseDesc: 多而广：检索默认返回 12 条，不过滤
     sectionContextDesc: 上下文与压缩参数独立保存于会话；「重置为全局当前值」写入此刻的全局值快照；生成中禁止修改
+    # 工程上下文模式（导演实验）：会话级开关 + 退出破坏性警示 + 修复态
+    engineeringTitle: 工程上下文模式（实验）
+    engineeringHint: 开启后完整保留工作轨迹（播报、工具调用与结果），上下文按事件账本装配，事件日志不再按轮数裁剪；关闭将恢复旧保留策略
+    engineeringExitTitle: 关闭工程上下文模式
+    engineeringExitWarnLimited(turns): 关闭工程上下文模式将恢复旧日志保留策略，$turns 轮之前的详细工具调用与思考轨迹将被永久清理裁剪（小说正文将完整保留）。是否确认关闭？
+    engineeringExitWarnUnlimited: 关闭工程上下文模式将切换为传统正文装配模式。当前设置保留全部事件日志，历史工具轨迹不会被立即裁剪。是否确认关闭？
+    engineeringSwitchFailed: 切换未完成（生成中或数据校验未通过）
+    engineeringSummaryNeedsModel: 请先配置导演主模型，再生成工程压缩摘要。
+    engineeringBlockedTitle: 工程上下文需要修复
+    engineeringBlockedDesc: 会话的模式开关与工作记录不一致。为保护数据已暂停生成，可按当前历史重建新纪元，或确认退出该模式。
+    engineeringRepair: 修复重捕获
+    engineeringExitButton: 确认退出
+    engineeringReasonNoEpoch: 开关已开启，但缺少有效的工作纪元记录
+    engineeringReasonPending: 上一次开启未完成（事务中断残留）
+    engineeringReasonExited: 开关已开启，但工作纪元已退出
+    engineeringReasonDisabledOpen: 开关已关闭，但工作纪元仍在进行
+    engineeringReasonCapture: 开启时捕获的历史记录缺失
+    engineeringReasonUnknownEvent: 存在当前版本无法识别的工作记录
+    engineeringReasonUnknown: 原因未知（详见诊断日志）
     sectionMemoryManagement: 记忆管理
     # 导演面板挂载种子资源区段（内容键在 common.seedResource）
     sectionResource: 角色卡/世界书
@@ -904,6 +991,93 @@ advanced:
     compaction:
       undoSuccess: 已撤销压缩，归档对话已恢复
       undoFailed: 撤销失败，请稍后再试
+  actUnit:
+    actHeaderWithTime(act, time): "第 $act 幕 · $time"
+    settled: 已落笔
+    settledChanges(count, param=count):
+      one: "已落笔 · $count 项变动"
+      other: "已落笔 · $count 项变动"
+    writing: 执笔中
+    maintaining: 整理记忆中
+    interrupted: 已中断
+    expandDirective: 展开指示
+    collapseDirective: 收起指示
+    directiveActions: 指示操作
+    pillEntityCreated(name): "新设定 · $name"
+    pillEntityArchived(name): "归档 · $name"
+    pillAliasAdded(name): "$name · 新增别名"
+    pillImportance(name): "$name · 重要度调整"
+    pillAttrUpdated(name, attr): "$name · $attr更新"
+    pillEntityUpdated(name): "$name · 设定更新"
+    pillEntityMultiUpdated(name, count): "$name · $count 项更新"
+    pillForeshadowNew(text): "新伏笔 · $text"
+    pillForeshadowNewCount(count): "新伏笔 · $count 项"
+    pillForeshadowResolved(text): "已兑现 · $text"
+    pillForeshadowResolvedCount(count): "已兑现 · $count 项伏笔"
+    pillAnchorUpdated: 剧情锚已更新
+    pillRetrievalSummary(count, param=count):
+      one: "已查证 $count 处前情"
+      other: "已查证 $count 处前情"
+    pillMaintenanceCalibrated: 长线记忆已校准
+    pillEventLogged: 已记入大事记
+    pillBackstageCount(count, param=count):
+      one: "幕后处理 $count 步"
+      other: "幕后处理 $count 步"
+    overflowPill(count): "+$count 项变动"
+    changesSummaryTitle: 本幕变动
+    changesSummaryCount(count): "本幕变动 · $count 项"
+    expandMorePillsTooltip: 展开其余变动项
+    collapseMorePillsTooltip: 收起其余变动项
+    showAllChanges: 查看全部
+    actionVerbDetail(verb, detail): "$verb：$detail"
+    drawerTitle: 本幕世界变动
+    goToMemory: 去记忆库校准
+    editAnchor: 编辑当前锚点
+    foreshadowNew: 新伏笔
+    foreshadowResolved: 已兑现
+    arcProgress: 主线进展
+    narrativeTimeChange: 叙事时间
+    chronicleLabel: 大事记
+    directorActions: 导演动作
+    thinkingNotes: 思考笔记
+    thinkingNotesCount(count, param=count):
+      one: "思考笔记 · $count 段"
+      other: "思考笔记 · $count 段"
+    pulseExpand: 查看导演进度
+    pulseCollapse: 收起导演进度
+    maintenanceHeadline: 正文已定稿 · 后台正在整理长线记忆
+    maintenanceStepActive(verb): "正文已定稿 · 正在$verb…"
+    maintenanceProgress(step, maxSteps): "$step / $maxSteps"
+    unknownEntity: 未知设定
+    actionMergedInto(source, target): "归并「$source」到「$target」"
+  worldSheet:
+    entryLabel: 场记板
+    entryTooltip: 查看场记板与快捷工具
+    title: 场记板
+    refreshTooltip: 刷新场记板
+    openMemory: 记忆库
+    sectionNow: 此刻世界
+    narrativeTimeLabel: 叙事时间
+    oneLinerLabel: 当前进展
+    storylineLabel: 主线脉络
+    nowEmpty: 故事尚未记录时间与主线进展
+    sectionForeshadows: 伏笔清单
+    foreshadowsEmpty: 暂无伏笔记录
+    sectionEntities: 关键角色与设定
+    recentActiveSection: 近期登场
+    entitiesEmpty: 暂无已登记的关键角色或设定
+    entitiesUnavailable: 世界设定暂不可用，可前往记忆库查看完整档案
+    entityTypeCharacter: 角色
+    entityTypeLocation: 地点
+    entityTypeItem: 物品
+    entityTypeLore: 设定
+    entityTypeOrganization: 组织
+    entityTypeMisc: 其他
+  composer:
+    toolsExpandTooltip: 展开写作辅助工具
+    toolsCollapseTooltip: 收起写作辅助工具
+    quoteButton: 引号
+    parenButton: 括号
 intermediate:
   title: 故事
   # 草稿页专用标题——对齐 chat.draft.title「新对话」/
@@ -993,6 +1167,8 @@ intermediate:
     factsTypeLore: 设定
     factsTypeOrganization: 组织
     factsTypeMisc: 杂项
+    factsMatchName(type, name): '$type"$name"'
+    factsMatchAliases(label, aliases): '（$label：$aliases）'
     # 事实层变更小窗（DOC-11 §4 配套，2026-08-13 新增）
     factsChangeHint: 正在更新事实...
     factsChangeReady(param=count):
@@ -1017,6 +1193,7 @@ intermediate:
     factsActionRemoveFromList: 移除
     factsActionAddAlias: 别名
     factsActionArchiveEntity: 归档
+    factsActionSetImportance: 重要度
     summarizingHint: 正在整理中...
     summarizingReady: 摘要已生成
     preparingRegenerate: 正在准备重新生成...
@@ -1397,6 +1574,10 @@ intermediate:
     # 检索（FTS/向量两通道均排除），此前浏览器无标识也无筛选，造成"看得见
     # 却搜不到"的静默
     archivedBadge: 已归档
+    # MEM-20：未入索引标识——importance < importanceStorageThreshold
+    # 的记忆按策略不建 memories_fts 行（主表子串通道兜底可达），
+    # 行内标识防"库里有却搜不到"的误解
+    notIndexed: 未入索引
     # 经历记忆归档/恢复通路
     archiveMemory: 归档
     unarchiveMemory: 恢复
@@ -1530,6 +1711,27 @@ intermediate:
     fieldAttrKeyHint: 选择要记录的属性
     fieldAttrValue: 属性值
     fieldCustomAttrKey: 自定义属性
+    attributeLabels:
+      name: 名称
+      characterName: 姓名
+      locationName: 地点名
+      itemName: 物品名
+      loreName: 设定名
+      organizationName: 组织名
+      description: 描述
+      loreDescription: 设定描述
+      organizationDescription: 组织描述
+      personality: 性格
+      background: 背景
+      relationships: 关系
+      relationshipWith(name): "与 $name 的关系"
+      skills: 技能
+      features: 特征
+      owner: 所有者
+      category: 分类
+      leader: 首领
+      members: 成员
+      custom(key): "$key（自定义属性）"
     fieldCustomAttrKeyHint: 不在预定义列表内，AI 无法自动更新此属性
     customAttrKeyOption: 自定义...
     # 值类型（仅自定义属性时显示）
@@ -1635,7 +1837,10 @@ settings:
       one: "$count 个模型"
       other: "$count 个模型"
     fetchModels: 获取模型列表
-    fetchError: "获取模型列表失败: $error"
+    fetchFailedTitle: "获取模型列表失败"
+    fetchAuthSuggestion: 请在此供应商的设置中检查或更正 API Key，再获取列表。
+    fetchRetry: 检查网络或供应商地址后重试。
+    fetchHttpStatus: HTTP $status
     fetchEmpty: 供应商连接正常，但返回了 0 个模型（可手动添加模型 ID）
     # 编辑态空保存=清除 Key，先确认（G3 后为无声破坏性操作）
     clearKeyConfirmTitle: 清除 API Key？
@@ -1646,6 +1851,10 @@ settings:
     editModel: 编辑模型
     modelId: 模型 ID
     modelIdHint: 输入模型 ID
+    modelIdCheckTitle: 核对模型 ID
+    modelIdCheckMessage: 模型 ID 含有容易看错的字符（$codePoint）。请对照供应商给出的 ID，留意普通连字符（-）和全角符号。
+    modelIdKeep: 按原样保存
+    modelIdEdit: 返回修改
     modelIdDuplicate(modelId): "模型 $modelId 已在列表中，请勿重复添加"
     modelIdReadonly: 模型 ID 创建后不可修改
     modelDisplayName: 显示名称
@@ -1707,7 +1916,7 @@ settings:
     samplingParams:
       title: 采样参数
       omitTitle: 不发送采样参数
-      omitSubtitle: 开启后本供应商所有模型都不发送 temperature / top_p；已知不支持采样的新模型会自动省略。
+      omitSubtitle: 新建供应商默认开启。开启后，本供应商的模型调用会省略温度、Top P 和惩罚参数。
       editorDirtyHint: 高级参数有未保存的修改，请先保存或取消后再切换
     # providerOptions 高级参数 JSON 文本域
     advancedOptions:
@@ -1717,7 +1926,7 @@ settings:
       # 三协议消费面差异大，helperText 按协议
       # 列有效键位——键名为代码原样保留英文
       hintOpenai: 以下键在本协议生效：extra_headers、extra_body、parallel_tool_calls、thinking。extra_body 在基础字段之后展开，可覆盖 model/messages/stream 等同名保留键。留空表示无自定义参数。保留键 omit_sampling_params=true 等同上方「不发送采样参数」开关。
-      hintAnthropic: 以下键在本协议生效：anthropic_version、anthropic_beta、anthropic_send_sampling、anthropic_thinking_mode、anthropic_effort、thinking、extra_headers、anthropic_capabilities。默认不发送 temperature/top_p；官方端点默认 adaptive thinking，第三方默认不发送 thinking。留空表示无自定义参数。保留键 omit_sampling_params=true 等同上方「不发送采样参数」开关。
+      hintAnthropic: 以下键在本协议生效：anthropic_version、anthropic_beta、anthropic_send_sampling、anthropic_thinking_mode、anthropic_effort、thinking、extra_headers、anthropic_capabilities。默认不发送 temperature/top_p；官方端点默认 adaptive thinking，第三方默认不发送 thinking。anthropic_capabilities.stable_system_cache 控制故事生成/审查是否把固定 system 段拆成可缓存块：官方端点缺省开启、第三方缺省关闭，布尔值可显式开关。留空表示无自定义参数。保留键 omit_sampling_params=true 等同上方「不发送采样参数」开关。
       hintGemini: 仅 thinkingConfig 在本协议生效（写入 generationConfig）；extra_headers / extra_body 在本协议无消费通道，配置后不生效。留空表示无自定义参数。保留键 omit_sampling_params=true 等同上方「不发送采样参数」开关。
       invalidJson: JSON 格式无效，请检查逗号与引号
       mustBeObject: 必须是 JSON 对象（以 { 开头）
@@ -1777,7 +1986,7 @@ settings:
     # 2026-09-13 上下文配置收敛：导演上下文唯一旋钮（百分比⇄token 双显示）
     context:
       threshold: 上下文压缩阈值
-      thresholdHint: 历史占用到达生效窗口的这一比例时，下一轮开始前压缩历史；轮内另有 85% 保命线兜底
+      thresholdHint: 达到此阈值后在下一轮开始前压缩。工程上下文可能为输出留空间而提前压缩。
       thresholdTokensUnit: tokens
       thresholdTokenInputTitle: 阈值（生效 tokens）
       windowAdvanced: 高级：窗口上限
@@ -1805,10 +2014,6 @@ settings:
       approvalTimeoutSwitchOff: 关闭后横幅一直等待你的处置，不再自动拒绝
       subagentMaxSteps: 子代理步数上限
       subagentMaxDuration: 子代理时长上限（分钟）
-      # 帮助文案承诺的写点落地——两个
-      # harness 键此前只有配置文件入口，设置 UI 无写点
-      foreshadowCheckInterval: 伏笔清点间隔（轮）
-      foreshadowCheckIntervalHint: 每隔 N 轮在轮尾提醒未兑现的伏笔清单；0 = 停用清点与闸门
       eventLogRetentionTurns: 轮日志保留（轮）
       eventLogRetentionTurnsHint: 幕后事件日志滚动保留最近 N 轮；0 = 不限制
     suggestReply:
@@ -1846,8 +2051,12 @@ settings:
         search_story: 检索故事记忆
         read_story: 按轮号回读原文
         query_facts: 查询事实层实体卡片
+        list_facts: 浏览动态实体目录与统计分布
+        query_memory_changes: 查询事实变更流水
         read_compact_summary: 读取剧情主线概览
         read_skill: 读取写作技能规范
+        calc_eval: 精确计算数值
+        calc_date: 核对显式日期
         update_facts: 写入/更新事实层（暂存有误可清空/重设）
         merge_entities: 归并重复实体
         update_story_anchor: 更新剧情锚
@@ -1855,6 +2064,7 @@ settings:
         spawn: 派出子代理调研
         ask_user: 向导演提问
         finish_round: 提交本轮
+        finish_maintenance: 完成周期审查与维护
     memory:
       embeddingModel: 向量化模型
       # 切换确认（与故事侧嵌入切换同语义：已有完整配置时切换会让向量失效）
@@ -1862,6 +2072,9 @@ settings:
       embeddingSwitchConfirmContent: 切换后，已有记忆的向量将不再参与语义检索。是否继续？
       embeddingSwitchConfirmAction: 确认切换
       embeddingModelDesc: 用于故事记忆的语义检索；未配置时仅关键词检索
+      # MEM-06 ③：嵌入通道解析状态（与 resolveAdvancedEmbeddingConfig
+      # 同源——advanced.embedding_preset_id/model_id 均非空即已配置）
+      embeddingNotConfiguredStatus: 未配置 · 仅关键词检索
       factualEnabled: 事实记忆
       factualEnabledDesc: 开启后 agent 维护实体卡片（人物状态/关系/设定）
       keyEntityThreshold: 关键实体重要性阈值
@@ -1936,7 +2149,8 @@ settings:
         other: "仅显示前 20 条，还有 $count 条未展示"
       rawJson: 原始 JSON（解析失败兜底）
     title: 角色卡/世界书
-    entrySubtitle: 导入并管理 SillyTavern 角色卡与世界书
+    entrySubtitle: 为故事与导演会话导入和管理角色卡、世界书
+    applyGuide: 打开一个故事或导演会话，在「会话设置 → 角色卡/世界书」选择要应用的资源。若首页没有「新建故事」，可在「设置 → 故事模式设置」开启。
     cardsSection: 角色卡
     booksSection: 世界书
     importCard: 导入角色卡（PNG）
@@ -1971,6 +2185,8 @@ settings:
     deleted: "已删除 \"$name\"（含投影级联移除）"
     deleteConfirm: "确定删除 \"$name\" 吗？\n\n已应用到会话的该资源投影（实体及其 AI 演变值）将被一并移除，此操作不可恢复。"
     importFailed: "导入失败：$error"
+    importSaveFailed: 无法保存到资源库，请稍后重试。
+    importFileFailed: 无法读取该文件，请重新选择。
     imported: "已导入 \"$name\""
     # 列表加载失败错误态（重试按钮复用 common.retry）
     loadFailed: 资源库加载失败，请检查数据文件后重试
@@ -2514,8 +2730,12 @@ settings:
     exportFailed(error): "导出失败：$error"
     importSuccess: 导入成功
     importFailed: "导入失败: $error"
+    overwriteExperienceConflict: "备份中的往事标识与所属故事冲突。已取消覆盖，现有数据已保留。"
+    draftIndexConflict: "这份备份里有同一轮使用相同编号的稿件。现有故事已保留，请选择另一份备份。"
     # 导入进行中的进度弹层文案（不可关闭，完成/失败自动撤除）
     importing: 正在导入数据，请稍候…
+    importStorageFailed: 导入未能保存，请检查可用存储空间后重试。
+    overwriteBusy: 请等待正在进行的操作结束，或停止生成并等它收尾后再试。
     importSummary:
       presets: "预设: 导入 $imported 个, 跳过 $skipped 个"
       sessions: "会话: 导入 $imported 个, 跳过 $skipped 个"
@@ -2523,6 +2743,7 @@ settings:
       preferences: "偏好: 导入 $imported 个, 跳过 $skipped 个"
       # v3 全局资产 + API Key 提示直达
       assets: "全局资产: 导入 $imported 行（角色卡/世界书/模板/事件日志）"
+      skippedRows(count): 已跳过 $count 条消息、会话数据或资产记录。
       # Key 提示三档口径，与  含 Key 备份语义对齐——
       # 勾选导入后不得再说「API Key 不随备份保存」
       apiKeyReminder: 供应商已恢复，但这份备份不含 API Key，需重新填写
@@ -2560,7 +2781,7 @@ settings:
       appendDesc: 保留现有数据，跳过已存在的，只导入新的
       overwrite: 覆盖
       overwriteDesc: 清空备份包含的数据类型，再用备份重建
-      overwriteWarning: 覆盖模式将清空当前数据！此操作不可恢复（系统会先自动创建快照），确定继续？
+      overwriteWarning: 覆盖会替换备份包含的对应数据。该范围内已有数据时，应用会先保存可恢复的快照。
       # 含 Key 备份导入
       secretsNotice: 该备份包含 API Key。默认不导入密钥；如需用备份中的 Key 覆盖本机密钥，请勾选下方开关。
       importApiKeysLabel: 导入备份中的 API Key（覆盖本机密钥）
@@ -2572,9 +2793,46 @@ settings:
       # 资产域会被清空重建（现状）——「仅供应商/偏好配置」低估影响面
       overwriteNoSessionsHint: 这份备份不含会话数据，会话不受影响；但覆盖仍会清空并按备份重建供应商、偏好与全局资产（如有——导出时可选择不携带世界资产）。
       # 覆盖导入前置自动快照说明（确认页 + 摘要）
-      snapshotHint: 覆盖前会自动快照当前数据（文档目录 backups/，保留最近 2 份，不含 API Key）——导入搞砸可从该快照回滚。
+      snapshotHint: 替换已有数据前，应用会在备份目录保存快照，保留最近两份，快照不含 API Key。
+      browserSnapshotHint: 替换已有数据前，应用会在当前浏览器保存快照，保留最近两份，快照不含 API Key。
       snapshotCreated: "已自动创建导入前快照：$fileName"
-      snapshotFailed: "导入前快照创建失败，已中止导入：$error"
+      snapshotRequired: 无法保存并校验恢复快照。请检查可用存储空间，或改用追加导入。
+      browserSnapshotFailed: 浏览器无法保存并校验恢复快照。可先用“导出数据”择项备份，或改用追加导入。
+      restoreSnapshotAfterFailure: 无法确认原数据已经完整恢复。请打开“从备份恢复”，选择最新的覆盖前快照。需要修正的 API Key 请重新填写。
+    startupRecovery:
+      title: 从备份恢复
+      opening: 正在打开数据…
+      openFailed: LMStory 无法打开数据库。
+      preservationFailed: LMStory 无法在开库前暂存数据库文件。请检查可用空间和文件访问权限后重试。
+      nativeInstructions: 选择一份备份，应用会在独立数据库中试恢复。你可以检查结果后再切换。
+      webInstructions: 可以检查本地备份文件或当前浏览器内的快照。这里暂不支持切换浏览器数据库，也可以重试打开。
+      originalLocation(path): '数据库位置：$path'
+      preservedLocation(path): '开库前保全的文件：$path'
+      chooseFile: 选择备份文件
+      retryOpen: 重试打开
+      savedBackups: 已保存的备份
+      automatic: 自动备份
+      snapshot: 覆盖前快照
+      selectedFile: 选择的文件
+      unknownDate: 日期未知
+      version(number): '备份格式 v$number'
+      legacyFormat: 旧版备份格式
+      readFailed: 无法读取备份，请重试或选择其他文件。
+      catalogFailed: 无法列出已保存的备份，可以手动选择文件。
+      invalidBackup: 备份文件格式无效，请选择其他备份。
+      noRestorableData: 这份备份没有可恢复的数据，请选择其他备份。
+      working: 正在检查备份或启用恢复…
+      trialFailed: 试恢复或读回检查失败。请检查可用存储空间，或选择其他备份。
+      trialReady: 已在独立数据库中恢复并读回备份。
+      summary(sessions, messages, presets, preferences, assets): '$sessions 个会话 · $messages 条消息 · $presets 个供应商 · $preferences 项设置 · $assets 条资产记录'
+      skippedItems: 试恢复跳过了部分条目，请核对以上数量后继续。
+      webCheckPassed: 备份格式检查通过。
+      webPartialCheck: 备份含有可用数据，检查时跳过了部分条目。
+      useBackup: 使用这份备份
+      confirmTitle: 切换到恢复库？
+      confirmBody: LMStory 将打开已检查的恢复库，已保全的数据库文件和备份会继续留存。备份中的 API Key 会跳过。
+      activate: 切换数据库
+      activationFailed: 未能启用恢复库，原库文件和备份仍保留。可以重试或选择其他备份。
     recovery:
       title: 数据恢复
       desc: 扫描并恢复孤立消息
@@ -2735,7 +2993,8 @@ settings:
       share: 分享日志
       shareSubject: LMStory 运行日志
       shareConfirmTitle: 分享运行日志？
-      shareConfirmBody: 日志可能包含你的会话内容与提示词文本（不含 API Key）。请确认接收方可信后再分享。
+      shareConfirmBody: 导出包含当前和轮转日志。服务地址和常见凭据已遮盖，会话内容和提示词仍可能保留。请确认接收方可信后再分享。
+      shareFailed: 分享日志失败，请稍后重试。
       shareConfirmAction: 分享
       saveFailed(error): "保存日志失败：$error"
     failures:
@@ -3152,7 +3411,7 @@ help:
   # 第一次打开 App 子页内容（2026-07-27 新增：第一部分 1.1）
   # 设计原则：示意图优先，6 步引导用 WikiStepCard 紧凑列表
   firstLaunch:
-    intro: 首次启动 LMStory 会自动进入 6 步新手引导，介绍核心概念并可选配置 API Key。
+    intro: "首次打开 LMStory 时，可以先跟随离线演示读到一段故事。简中提供五个仿真候选，英文提供一篇本地故事样例。无需模型账号或 API Key。完成介绍后，可从本页开始演示或继续已保存的进度。"
     # 示意图标题
     flowTitle: 启动流程
     flowSubtitle: 从启动到进入主界面
@@ -3343,36 +3602,36 @@ help:
   messageNavWiki:
     title: 消息导航
   messageNav:
-    intro: 长对话中滚动不方便，4 个浮动按钮帮助你快速跳到对话开头、结尾或下一条用户消息。按钮在滚动停止 2 秒后自动隐藏，不遮挡内容。
+    intro: 在对话、故事和导演会话里，拖动或用滚轮翻阅正文即可展开导航。生成过程中也可以回看旧轮。
     # 主视觉
-    buttonsTitle: 4 个浮动按钮 + 自动隐藏
-    buttonsSubtitle: 双箭头跳端点 / 单箭头翻消息
+    buttonsTitle: 会话导航
+    buttonsSubtitle: 双箭头到顶或到底，单箭头按轮翻阅
     diagramButtonsTitle: 4 个浮动按钮（从上到下）
     btnJumpTop: 跳到顶部
     btnJumpTopDesc: 双箭头向上 · 跳到最早消息
-    btnPrevUser: 上一条用户消息
-    btnPrevUserDesc: 单箭头向上 · 翻到前一条用户消息
-    btnNextUser: 下一条用户消息
-    btnNextUserDesc: 单箭头向下 · 翻到下一条用户消息
+    btnPrevUser: 上一轮
+    btnPrevUserDesc: 上箭头 · 定位到上一轮开头
+    btnNextUser: 下一轮
+    btnNextUserDesc: 下箭头 · 定位到下一轮开头
     btnJumpBottom: 跳到底部
     btnJumpBottomDesc: 双箭头向下 · 跳到最新消息
-    diagramHideTitle: 自动隐藏时序
-    timeline1: 滚动中
-    timeline2: 停止滚动
-    timeline3: 2 秒后自动隐藏
+    diagramHideTitle: 停下翻阅后
+    timeline1: 拖动或滚轮翻阅
+    timeline2: 停止翻阅
+    timeline3: 3 秒后只留回底键，已在底部则隐藏
     # 4 个按钮说明
     opsTitle: 4 个按钮的图标含义
     btn1Title: 跳到顶部（双箭头向上）
     btn1Body: 快速回到对话最早的消息。适合查看对话开头的内容。
-    btn2Title: 上一条用户消息（单箭头向上）
-    btn2Body: 跳到前一条你发的消息。便于回溯自己之前的提问，比手动滚动快很多。
-    btn3Title: 下一条用户消息（单箭头向下）
-    btn3Body: 跳到下一条你发的消息。便于快速浏览问答节奏，跳过 AI 长回复。
+    btn2Title: 上一轮（单箭头向上）
+    btn2Body: 从正在读的这一轮回到上一轮。提问对齐窗口上沿，导演纯净阅读时直接对齐稿件开头。
+    btn3Title: 下一轮（单箭头向下）
+    btn3Body: 从正在读的这一轮前往下一轮。长回复中也可以按轮前进，点到最后一轮后箭头变灰。
     btn4Title: 跳到底部（双箭头向下）
     btn4Body: 快速回到最新消息。AI 流式输出期间也可用，方便跳回查看实时生成的内容。
     # 自动隐藏
-    hideTitle: 自动隐藏机制
-    hideBody: 浮动按钮在滚动停止 2 秒后会自动隐藏，避免遮挡消息内容。滚动时按钮会立即重新出现。按钮采用半透明设计，减少视觉干扰。
+    hideTitle: 什么时候显示导航
+    hideBody: 拖动或使用滚轮时展开四键。停稳 3 秒后，阅读历史时只保留「回到底部」，已在底部则全部收起。连续点按会重新计时，辅助功能焦点停在按钮上时保持展开。
     # 批 K：会话内搜索（手册面补账）
     searchTitle: 会话内搜索
     searchBody: 除了浮动按钮，还能按内容找消息：从右上角菜单或 Ctrl+F（macOS 为 Cmd+F）唤起「会话内搜索」，按 Esc 收起。输入即显示命中数，Enter / Shift+Enter 在上一处、下一处之间跳转，定位到的消息会短暂高亮提示。搜索只匹配当前分支可见的消息，切换分支后命中会同步过滤。
@@ -3492,10 +3751,10 @@ help:
   # - 补充「清空本轮」按钮说明：回填用户消息到输入框
   failure:
     intro: >-
-      故事模式每轮对话默认发起 3 次 AI 请求 + 1 次本地检索 + 1 次向量化（开启审查阶段后为 4 次 AI 请求）。调用次数多了，失败的概率也会高。但故事模式的失败处理有一个核心原则：要么全部成功，要么全部失败。常见错误码速查与场景排查，参见：附录 → 故障排除 FAQ。
+      故事模式每轮对话默认发起 3 次 AI 请求 + 1 次本地检索 + 1 次向量化（开启审查阶段后为 4 次 AI 请求）。整轮失败时会回滚；单条事实变更写入失败的处理见下方。常见错误码速查与场景排查，参见：附录 → 故障排除 FAQ。
     atomicityTitle: 核心原则：原子事务
     atomicityBody: >-
-      每一轮对话是一个原子事务——提取→检索→生成→审查→摘要→入库，要么全成功要么全失败。关键区分：数据回滚 ≠ UI 清空。失败时数据库绝不写入（事务回滚）。但 UI 保留已显示的中间产物（生成内容、检索结果、半截回复），让你能看到失败发生在哪一步。不降级质量：不会拿生成内容充当最终回复，不会静默跳过检索。
+      整轮失败时，正文和记忆的提交会回滚。但 UI 保留已显示的中间产物（生成内容、检索结果、半截回复），让你能看到失败发生在哪一步。单条事实变更写入失败有独立的回退与提示，见下方。
     retryTableTitle: 各阶段失败的处理
     retryTableBody: >-
       生成失败：重试 2 次，仍失败则整轮失败让你重试。提取关键词失败：重试 2 次，仍失败则整轮失败让你重试。检索两路都失败：重试 1 次，仍失败则整轮失败让你重试。检索单路失败：不重试，用另一路结果继续。审查失败：重试 2 次，仍失败则整轮失败让你重试。摘要失败：重试 2 次，仍失败则整轮失败让你重试。向量化失败：自动重试 1 次，仍失败则让你选——整轮重试/临时降级为关键词检索/清空本轮（外加从中断处继续）。持久化失败：不重试，事务回滚，整轮失败。
@@ -3507,7 +3766,7 @@ help:
       失败栏会根据失败类型显示操作按钮：「整轮重试」——清掉所有已显示的中间产物，保留你的消息，从头开始整轮六步生成（不从失败步骤继续，因为中间产物可能已部分生成，继续会导致状态不一致）；「从中断处继续」——保留已完成阶段产出（如生成内容、检索结果），从失败阶段继续重试，适合失败发生在靠后阶段时省前面的 AI 调用；「续写」——生成失败且已有半截正文时出现，带着半截正文继续生成，不重复已有内容；「以此收稿」——生成/审查失败且半截正文可用时出现，把半截正文直接作为本轮定稿，照常走完摘要与入库；「临时降级为关键词检索」——仅 E104 嵌入模型调用失败时显示，跳过向量检索继续本轮（仍走 FTS5 关键词检索）；「清空本轮」——清掉所有中间产物，把你的消息回填到输入框，方便你修改后重新发送。
     factualFallbackTitle: 事实层的特殊失败降级
     factualFallbackBody: >-
-      事实层的失败处理和经历层不一样。检索阶段（绝不阻塞）：事实层检索的代码用 try-catch 全包，任何异常都返回空结果，不抛错。即使事实层检索挂了，经历层检索照常进行，审查阶段照常进行（只是少了「世界设定」区块）。写入阶段（单变更容错）：每个事实 delta 独立 try-catch，单个失败只记日志，不传播。即使事实层写入部分失败，经历记忆始终能写入。为什么这么设计？因为 AI 输出格式问题频发（字段缺失、entityId 不存在等），如果任一 delta 失败就整轮回滚，会导致「新对话记忆库一直为空」——这是最严重的可用性问题。所以牺牲少量原子性换取可用性。
+      事实层检索出错时返回空结果，经历检索仍可继续。写入时每条事实变更独立处理：失败项回退，成功项可与正文和经历一起提交。故事和导演模式在收稿成功后短暂提示未保存的事实变更数量；按规则跳过或没有失败时不提示。整轮失败或取消仍按整轮失败流程处理。
 
   # ── 第三部分 3.1：故事模式与对话模式的区别（2026-07-27 新增）──
   storyVsChatWiki:
@@ -3790,12 +4049,12 @@ help:
     step3Title: API Host
     step3Body: 供应商服务地址。内置供应商已预填，自定义时需手动填写。开启手动模式后可输入完整 URL。
     step4Title: API Key
-    step4Body: 从供应商官网获取密钥并仅在本机保存。点「测试连接」会请求该供应商的模型列表来验证地址和凭据，不消耗生成 Token；部分非标准手动端点可能不支持此请求。
+    step4Body: 从供应商官网获取密钥并仅在本机保存。点「测试连接」会请求该供应商的模型列表来验证地址和凭据，不消耗生成 Token；部分非标准手动端点可能不支持此请求。 如果应用提示 API Key 无效或无权限，请在对应供应商的详情页更正 Key 后重试。
     step5Title: 高级参数
     step5Body: 面向高级用户的协议特有参数（如 thinking、thinkingConfig、extra_headers），以 JSON 对象透传给出网适配器。留空表示无自定义参数；重置供应商为模板默认值时会一并清空。普通用户无需理会。
     # 模型管理
     modelsTitle: 模型管理
-    modelsBody: 每个供应商下可管理多个模型。点「获取模型列表」从供应商拉取，或点「+」手动添加。拉取后可勾选要保留的模型，避免数百个模型挤满列表。
+    modelsBody: 每个供应商下可管理多个模型。点「获取模型列表」从供应商拉取，或点「+」手动添加。拉取后可勾选要保留的模型，避免数百个模型挤满列表。 手动输入请以供应商给出的模型 ID 为准。遇到全角连字符等易混字符，应用会在保存前请你核对，可返回修改或确认原样保存。
     # 入口
     entryTitle: 怎么进入
     entryBody: 设置 → 通用设置 → 供应商 → 进入供应商列表 → 点「+」新建 / 点列表项进入详情。
@@ -4192,7 +4451,7 @@ help:
     step4Body: 在「数据管理 → 导入」中选择备份文件，再选择「追加」或「覆盖」模式。导入完成会显示各类导入/跳过数量摘要。旧版 v2/v1 备份文件可直接导入（自动兼容）。
     # 自动备份
     autoBackupTitle: 自动备份
-    autoBackupBody: 开启后，应用启动一段时间会自动检查：距上次备份超过 24 小时且存在会话数据时，静默导出一份全量备份到应用文档目录的 backups/ 文件夹（应用私有存储，文件管理器不可见；不含 API Key），只保留最近 3 份。可在「数据管理」页开关，也可随时点「立即备份」或「打开备份目录」。
+    autoBackupBody: 开启后，应用启动一段时间会自动检查：距上次备份超过 24 小时且存在会话数据时，静默导出一份全量备份到应用文档目录的 backups/ 文件夹（应用私有存储，文件管理器不可见；不含 API Key），只保留最近 3 份。可在「数据管理」页开关，也可随时点「立即备份」或「打开备份目录」。 覆盖前已有数据时另存快照，可以从「从备份恢复」选取。Web 在当前浏览器保存覆盖前快照。
     # 单会话导出
     singleSessionTitle: 单会话导出
     singleSessionBody: 在会话列表中长按某个会话，或会话内菜单选择「导出此会话」，可选 JSON（含该会话关联数据）、Markdown 或纯文本。JSON 适合迁移恢复，另外两种适合阅读分享。
@@ -4325,10 +4584,10 @@ help:
     step3Title: 查看失败历史
     step3Body: 列出最近 50 条失败记录，每条含会话 ID、模式、错误码、失败阶段、HTTP 状态、错误消息、原始异常。点击展开查看完整技术详情。
     step4Title: 分享或清空
-    step4Body: 顶部「分享」按钮可分享当前同步写入的日志文件；「清空」会同时清空失败历史和日志文件（含轮转备份），需二次确认。
+    step4Body: 顶部「分享」在移动端确认后分享、在桌面端保存合并后的当前和轮转日志，按时间排列并遮盖服务地址与常见凭据。普通文本（包括主动记录的会话内容和提示词）仍可能保留，请谨慎分享。「清空」会同时清空失败历史和日志文件（含轮转备份），需二次确认。
     # 文件特性
     fileTitle: 日志文件特性
-    fileBody: 同步写入（避免 null 字节）+ UTF-8 编码 + ASCII 控制字符过滤 + 每次启动清空历史 + 10MB 大小轮转保留 1 个备份。Web 平台无文件日志。
+    fileBody: 同步写入（避免 null 字节）+ UTF-8 编码 + ASCII 控制字符过滤。启动时非空旧日志先轮转；默认按 10MB 大小轮转并保留 1 个备份。Web 平台无文件日志。
     # 入口
     entryTitle: 怎么进入
     entryBody: 设置 → 诊断信息。
@@ -4437,7 +4696,7 @@ help:
       desc: 某些模型（如 DeepSeek-R1）有「深度思考」能力，思考预算控制思考多深：disabled/low/medium/high。
     samplingParamsOmit:
       term: 采样参数省略（Omit Sampling Parameters）
-      desc: 部分新模型或严格校验的中转站会拒绝非默认 temperature / top_p。开启供应商级开关后，该供应商的所有请求都不带这些参数，由模型使用默认值——遇到 400「does not support non-default temperature」时打开它。
+      desc: 新建供应商默认开启「不发送采样参数」，由模型使用默认采样设置。温度、Top P 和惩罚参数的控件会按当前模型实际可用的参数显示。
     # 记忆/检索术语
     memoryTitle: 记忆 / 检索术语
     compactionPoint:
@@ -4505,6 +4764,9 @@ help:
     eventLog:
       term: 事件日志
       desc: 导演每一步工作的流水记录；应用崩溃或重启后按它恢复现场、接着续写。
+    engineeringMode:
+      term: 工程上下文模式（实验）
+      desc: 导演会话级实验开关：开启后每轮发给模型的上下文改为从事件日志投影装配（正文与幕后轨迹共用同一份账本），压缩改为两段提交、可整体撤销，模式异常时用会话设置的修复卡处置。长期收益未经真实运行验证。 每个导演会话单独开启，默认关闭。
     fourStepGen:
       term: 六步生成
       desc: 故事模式每轮对话的流程：extracting（提取关键词）→ retrieving（检索记忆）→ generating（生成）→ reviewing（审查，可选）→ summarizing（生成摘要）→ persisting（固化入库）；上下文接近上限时轮前先自动压缩。默认 3 次 AI 请求，开启审查阶段后为 4 次。
@@ -4572,8 +4834,8 @@ help:
       # 上下文配置收敛：措辞统一「上下文压缩阈值」
       desc: 输入区小圆环指示器：满刻度=上下文压缩阈值。点开详情面板可看窗口用量、缓存命中率、最近一轮 token 明细；对话足够长时可手动「立即压缩」，压缩摘要卡还可撤销最近一次压缩（对话/故事/导演三模式同款）。
     foreshadowSweep:
-      term: 伏笔定期清点
-      desc: 导演模式的伏笔对账机制：每隔 N 轮（默认 8，可在导演设置调整）在轮尾提醒未兑现的伏笔清单；清点轮提交时若仍有未处理伏笔，终审提醒会拦下一次，划去已兑现或确认后才放行——防止已埋伏笔长期挂着无人问。
+      term: 周期记忆校准（含伏笔清点）
+      desc: 导演模式的长会话记忆与伏笔对账机制（已取代旧设置项「每 N 轮清点一次」步进器）：设定、场记或大事记任一连续 7 轮未更新时在轮尾轻量提醒（带 4 轮冷却）；每 50 轮在正文落幕后自动进入「任务二：周期记忆校准」阶段（额外追加 6 步维护预算，正文下方显示可展开的状态胶囊，并锁定正文不闪烁、不中断），导演可借助「浏览设定目录（list_facts）」、按 ID 批量查证、调整实体重要度（1–5 级）清理陈旧设定与待兑现伏笔，最后经「完成校准」单事务收尾。
     roundTimeline:
       term: 轮时间线
       desc: 导演每轮幕后工作的忠实回放：思考、播报、动作按真实发生顺序交错排列，随轮存档，重进会话可回看。
@@ -4616,15 +4878,15 @@ help:
     moduleIntermediateTitle: 故事模式功能
     moduleIntermediateBody: v0.2 交付。六步生成流程（压缩→提取→检索→生成→审查→摘要→入库）、经历记忆、事实记忆三表、累积压缩摘要与分段宏摘要、5W1E、叙事时间、记忆库、嵌入模型、FTS5+Vector 检索、分阶段模型、工具调用模式、失败处理 E010-E018/E104 和轮次产物持久化；上下文用量圆环与手动压缩、会话顶部世界状态条、压缩摘要卡「已归档第 X–Y 轮」标注与「撤销压缩」、找相似聚类与疑似重复归并预选、空态示例开场、思考区流式（自动展开/限高/复制）、继续生成接写合并（单气泡+续写徽标）、流式长会话渲染优化（冻结前缀分块渲染）；记忆检索可达性硬化（切词与主表子串兜底，库里可见即可查到）、记忆索引健康条（缺行/嵌入维度不匹配）与一键重建、经历归档标识与三档筛选、复制会话完整继承记忆与向量、压缩宏摘要可检索、世界书/角色卡只读语义（基线永不改写、演变并存，记忆库行级徽标，应用预览三段式）；故事稿件变体（重生成/编辑重发自动快照旧稿，稿件卡下方 ◀ n/m ▶ 切换器可查看/复制/设为当前/删除，切换后上下文随之改变）、中断正文保留（半截正文保留为未完成稿件卡，失败栏可「以此收稿」或「续写」不重复已有内容）、稿件导出（范围×内容导出 Markdown）、会话内搜索（菜单或 Ctrl/Cmd+F，命中跳转+高亮闪示）、阅读位置记忆（重进恢复上次阅读处）；入口开关（默认隐藏，设置 → 故事模式设置 开启，开启后首页/侧边栏/快捷键恢复入口，不影响已有数据）。
     moduleDirectorTitle: 导演模式
-    moduleDirectorBody: v0.3 交付。项目规则、主模型与分阶段模型、步数/时间预算与软着陆、监督模式（逐项审批写入）、请示导演（支持「一直等待」档与横幅倒计时）、台前/幕后过程分层（轮时间线）、幕间回顾卡（设定集变更直达记忆库）、事件日志与重启恢复、技能手记、子代理（同任务书二次派发直接回执上次结论）、记忆库实体归并、独立设置体系（三态工具权限）、剧情节奏三档、上下文用量指示与手动压缩、压缩摘要卡撤销压缩、伏笔定期清点（每 N 轮轮尾提醒+清点轮终审对账闸门）、角色卡/世界书种子应用入口、流式长会话渲染优化（稿件卡冻结前缀+合帧）、稿件变体（重生成不覆盖旧版，稿件卡右下 n/m 切换器）、重试等待倒计时状态条与会话打开加载骨架、事件日志滚动保留（默认最近 20 轮，超限自动清理）、记忆库来源/常驻徽标与词条级注入停用、角色卡/世界书应用前预览、推荐回复候选数量与单条字数入口、会话检索松紧度三档（保守/平衡/宽松，快照写会话列）、轮中预算进度标题（第 N/M 步·已用时长，预算将尽转警示色）、复制会话补齐轮产物与稿件变体、稿件导出（范围×内容四选 Markdown）、剧情锚编辑（Recap 卡入口，与 AI 同一数据源）、场记板视图（「AI 眼中的现在」，注入面同源）、失败轮未定稿徽标、伏笔清单展开全部、播报行弱化、同类动作聚合行（×N 展开）、纯净阅读模式（按会话记忆偏好）、系统裁决 3s 提示（溢出自愈/HITL 超时）、上下文构成分布（圆环详情面板四段估算）、单一「上下文压缩阈值」旋钮（百分比⇄token 双显示，token 直输反推；窗口上限高级折叠，0=自动+生效值披露）、失败真续跑（失败后「从中断处继续」经事件日志投影复用已完成的步骤与产出，不再整轮重跑；停止保留的半截正文合成进续跑上下文，模型从断句处继续）、导演会话创建向导（首页独立入口三步「模型→嵌入模型→项目规则」走完即进配置就绪会话：未配置用户从模板接供应商+贴 Key+拉模型并顺带写全局默认，已配置用户直选模型仅本会话覆盖；嵌入模型三态可跳可关；规则步模板直选或三题问卷→本地拼装/模型生成（知情确认）→预览采用并默认存模板）。 历史正文搜索：摘要不足以核实细节时，AI 可改用少量关键词搜索已保存的用户输入、正文和最终回复，按轮号定位后回读；不受记忆重要性评分影响。
+    moduleDirectorBody: v0.3 交付。项目规则、主模型与分阶段模型、步数/时间预算与软着陆、监督模式（逐项审批写入）、请示导演（支持「一直等待」档与横幅倒计时）、台前/幕后过程分层（轮时间线）、幕间回顾卡（设定集变更直达记忆库）、事件日志与重启恢复、技能手记、子代理（同任务书二次派发直接回执上次结论）、记忆库实体归并、独立设置体系（三态工具权限）、剧情节奏三档、上下文用量指示与手动压缩、压缩摘要卡撤销压缩、角色卡/世界书种子应用入口、流式长会话渲染优化（稿件卡冻结前缀+合帧）、稿件变体（重生成不覆盖旧版，稿件卡右下 n/m 切换器）、重试等待倒计时状态条与会话打开加载骨架、事件日志滚动保留（默认最近 20 轮，超限自动清理）、记忆库来源/常驻徽标与词条级注入停用、角色卡/世界书应用前预览、推荐回复候选数量与单条字数入口、会话检索松紧度三档（保守/平衡/宽松，快照写会话列）、轮中预算进度标题（第 N/M 步·已用时长，预算将尽转警示色）、复制会话补齐轮产物与稿件变体、稿件导出（范围×内容四选 Markdown）、剧情锚编辑（Recap 卡入口，与 AI 同一数据源）、场记板视图（「AI 眼中的现在」，注入面同源）、失败轮未定稿徽标、伏笔清单展开全部、播报行弱化、同类动作聚合行（×N 展开）、纯净阅读模式（按会话记忆偏好）、系统裁决 3s 提示（溢出自愈/HITL 超时）、上下文构成分布（圆环详情面板四段估算）、单一「上下文压缩阈值」旋钮（百分比⇄token 双显示，token 直输反推；窗口上限高级折叠，0=自动+生效值披露）、失败真续跑（失败后「从中断处继续」经事件日志投影复用已完成的步骤与产出，不再整轮重跑；停止保留的半截正文合成进续跑上下文，模型从断句处继续）、导演会话创建向导（首页独立入口三步「模型→嵌入模型→项目规则」走完即进配置就绪会话：未配置用户从模板接供应商+贴 Key+拉模型并顺带写全局默认，已配置用户直选模型仅本会话覆盖；嵌入模型三态可跳可关；规则步模板直选或三题问卷→本地拼装/模型生成（知情确认）→预览采用并默认存模板）。 查记忆变更：导演可按当前故事筛选已记录的事实流水并回读对应正文，不替代完整审计，也不覆盖未留痕的手工变化。 历史正文搜索：摘要不足以核实细节时，AI 可改用少量关键词搜索已保存的用户输入、正文和最终回复，按轮号定位后回读；不受记忆重要性评分影响。记忆与正文一致性（切稿不串线：切回旧版时事实、经历与剧情锚随所选正文同步，旧版派生资料随变体保存与恢复，后续轮或已压缩轮拒绝切换防混线）、生成中单槽待发（本轮结束后自动发送一次，可撤回，覆盖需确认，重启只回输入框不自动发）、审批基底守护（暂存后设定被其他途径改写时提交留痕不覆盖）、关系按对象记忆（与具体角色的关系各存一条独立属性，历史可回溯；群体关系单独整体维护）、同轮多个子代理可区分身份。工程上下文模式（实验，导演会话级开关）：开启后每轮发给模型的上下文改为从事件日志投影装配（正文成果与幕后轨迹共用同一份可重放账本），压缩改为两段提交事务、可整体撤销，自动压缩带快速重填熔断与证据闸门，模式异常时用会话设置的修复卡处置。实验能力，长期收益未经真实运行验证。 后台 calc 精确核算（数值与显式日期间隔）作为导演参考，不读取当前时钟、不改写事实。 v0.5.0 开发线的导演历史按轮打开幕后和稿件，长会话可跳轮并保留阅读位置。 长会话记忆维护与校准：新增只读目录工具 list_facts 浏览实体与全库分布、query_facts 支持按 entity_id/entity_ids 批量直查（含已归档卡片）、update_facts 新增 set_importance 动态升降重要度（1–5 级）；7 轮轻量缺口提醒（4 轮冷却）与 50 轮双任务接力（「写作 → 周期记忆校准」+6 步预算、正文下方状态胶囊与取消安全正文保留、finish_maintenance 单事务提交），取代旧独立伏笔清点步进器；Core Blocks 末尾附带近期活跃非核心实体名录。
     moduleSettingsTitle: 设置功能
     moduleSettingsBody: v0.1-v0.3。API 供应商管理（7 个内置模板 + 自定义；高级参数 JSON 透传协议特有参数）、默认模型选择、分步骤模型（含「影响：XX」消费者标注）、提示词模板系统、故事模式 10 段提示词自定义、外观（三轴：主题结构×配色族×深浅，12-22 档字体）、语言与输入（界面语言：简体中文/English 切换即时生效）、高级设置（思考预算/超时/标题模型/请示等待含一直等待档）、显示偏好、自动压缩、全局生成默认（对话 maxTokens 留空由模型决定）、模型测试、供应商级「不发送采样参数」开关（严格校验 temperature / top_p 的中转站与模型可自助省略）、导演模式开关、角色卡/世界书资源库入口、AI 建卡（与 agent 对话生成/编辑角色卡与世界书草稿，确认后落库，含覆盖保存护栏与退出拦截）、会话级设置面板（模型/温度/单轮步数+实时草稿预览+完成创建，落库后自动退出）、助手消息 Markdown 渲染与改稿过程线、首用模型选择真正生效、配置双模式（设置 → 通用「配置显示模式」开关：简单模式只显示常用配置，进阶=全部配置；全部设置页与会话内面板按级别过滤，被隐藏项已有值继续生效；向量化/嵌入模型配置在简单模式下同样可见）。
     moduleDataTitle: 数据维护功能
-    moduleDataBody: v0.1+v0.3。全量导出（多选 + API Key 开关，v3 备份含角色卡/世界书/自建模板/导演事件日志）、单会话导出（JSON/Markdown/TXT）、全量导入（追加/覆盖，完成报告含资产行数与 API Key 重填直达；覆盖导入前自动快照到 backups/ 保留最近 2 份、快照失败中止导入）、自动备份（24h 静默滚动保留 3 份，按前缀分域不动快照与外来文件）、数据恢复（孤立消息）、修复表结构（纯增量不丢数据）、清除所有数据、诊断页（失败历史 + 日志 + 调试开关）、存储统计（含导演事件日志条数与体积，滚动保留默认最近 20 轮）、导入进度反馈（导入全程不可关闭弹层）、外部打开分流（用「打开方式/分享」发给应用的备份 JSON 自动进入数据导入，不再误入资源库）。
+    moduleDataBody: v0.1+v0.3。全量导出（多选 + API Key 开关，v3 备份含角色卡/世界书/自建模板/导演事件日志）、单会话导出（JSON/Markdown/TXT）、全量导入（追加/覆盖，完成报告含资产行数与 API Key 重填直达；覆盖前已有数据时验证快照，存储失败时回退并读回）、自动备份（24h 静默滚动保留 3 份，按前缀分域不动快照与外来文件）、数据恢复（孤立消息）、修复表结构（纯增量不丢数据）、清除所有数据、诊断页（失败历史 + 日志 + 调试开关）、存储统计（含导演事件日志条数与体积，滚动保留默认最近 20 轮）、导入进度反馈（导入全程不可关闭弹层）、外部打开分流（用「打开方式/分享」发给应用的备份 JSON 自动进入数据导入，不再误入资源库）。原生端开库失败时可以从启动界面选择备份并试恢复，确认后启用新库。Web 可以检查备份和浏览器快照。
     moduleHelpTitle: 帮助功能
     moduleHelpBody: v0.2 交付。新手引导（6 步首次启动 + 可重温）、Wiki 主目录（8 个章节分组、47 个入口，含搜索）：开始使用 / 对话模式用法 / 故事模式用法 / 故事模式原理 / 导演模式 / 配置与个性化 / 数据与维护 / 附录。
     moduleDemoTitle: 新手演示功能
-    moduleDemoBody: v0.4 交付（机制层）。首次启动交互式演示：在真实页面上引导零配置用户体验一次完整导演模式回合——邀请弹窗、真实向导选虚拟模型、内置异世界模板、固定首轮提示词亲自发送、查看沉淀记忆、会话保留并可配置真实模型后续写。全程本地回放不联网（守卫计数即证据）、演示数据与正式库隔离、完成后单事务交接保留全部成果；支持中途退出/恢复/重看（全新运行永不覆写已保留会话）。演示内容为真实轮次采集的正式包（kind=official）；首轮开始前可在向导模型步从五个仿真候选中选择体验对象（GLM-5.3 默认、DeepSeek-V4.1-Flash、GLM-5.3-Flash、Kimi-K3.1-Pro、MiMo-V2.6-Flash），选择时显示仿真说明；首轮发送后候选锁定，换模型重新体验走「重新体验」。入口=首次启动弹窗或 帮助 → 第一次打开 App →「开始体验」。
+    moduleDemoBody: "零配置用户可在真实页面体验一次导演模式回合，包括选择演示模型、用内置模板建立故事、发送首句、读正文与查看记忆。简中提供五个仿真候选，英文提供一篇本地创作的故事样例。回放使用隔离的演示库，支持保存退出、恢复和重看。完成后可保留会话，配置自己的模型后续写。入口为首启邀请或「帮助 → 第一次打开 App」。"
     # 入口
     entryTitle: 怎么进入
     entryBody: 帮助 → 附录 → 功能索引表。
@@ -4662,6 +4924,28 @@ help:
     # 重要节点
     milestonesTitle: 重要节点
     milestones:
+    - 2026-11-26 导演长会话记忆维护与校准：新增只读目录工具 list_facts（含全库分布统计与按陈旧度排序），扩展 query_facts 支持按 entity_id/entity_ids（单次最多 8 条）批量直查含已归档卡片；update_facts 新增 set_importance 动态调整 1–5 级重要度，同源 preflightDelta 暂存预检并放宽单属性长度上限至 1000 字；引入 7 轮轻量缺口提醒（冷却 4 轮）与 50 轮「写作→周期记忆校准」双任务接力（+6 步预算、正文下方校准状态胶囊与取消安全正文保留、finish_maintenance 单事务收尾），退役旧伏笔清点设置项与 3 轮零记忆强拦；Core Blocks 末尾新增近期活跃非核心实体名录，并打通 narrative_time 全链路回填与工程上下文快照重发修复。
+    - 2026-11-23 导演模式补齐推荐回复和标题生成的失败原因、新会话主模型回显，以及两种上下文路径的阈值保存和自动触发。
+    - 2026-11-23 导演首句可从首页打开原会话找回。缺少导演主模型时，配好后回到原会话继续。首句与待发消息分别保存。
+    - 2026-11-23 导入或恢复备份时会检查同一轮是否有同编号的稿件。遇到冲突会提示更换备份，并保留原有故事。
+    - 2026-11-23 英文首启可离线读到一段完整故事，从帮助页可恢复演示进度。
+    - 2026-11-23 故事模式开关可整行点击。手填模型 ID 会提示易混字符，模型列表与对话的鉴权失败提示检查相应供应商的 API Key。
+    - 2026-11-23 资源库标出故事与导演会话的应用路径。会话设置直接显示已应用的角色卡和世界书。
+    - 2026-11-23 导演页在窄屏大字号下可使用软键盘输入和发送，并可滚动查看配置提示和失败操作。
+    - 2026-11-23 资源库入库失败会提示稍后重试，文件格式错误仍会说明具体原因。
+    - 2026-11-22 v0.5.0 开发线整合。导演可按需打开幕后与稿件，查询当前稿已记录的事实变更。开发包包含数据升级、覆盖恢复和双语审批修复。
+      - 2026-11-21 导演历史正文先显示，幕后与稿件版本按需读取。首页减少了最近会话和首次演示的读取量。
+      - 2026-11-21 三种会话支持逐轮对齐阅读，导航条更窄、更通透。导演长会话直接打开到最新内容或搜索命中轮，轻点稿件时保持阅读位置。
+      - 2026-11-21 新建供应商默认开启「不发送采样参数」。各模式按当前模型显示可用的采样控件。
+      - 2026-11-19 导演查记忆变更（实验）：新增只读 query_memory_changes，按当前故事和当前选定稿件查询已记录事实流水，按实际变更项筛选并在本轮证据能唯一对应时提供正文回读线索；不替代完整审计，也不覆盖未留痕的手工编辑。
+      - 2026-11-18 故事与导演模式在副本切稿时分别恢复各自的人物卡、变更记录和往事。切稿仅恢复当时生效的事实。无法确认原人物或完整恢复时保留当前稿。覆盖备份遇到跨会话往事标识冲突时保留现有数据。
+      - 2026-11-16 导演幕后 calc 参考能力：新增 BigInt 精确数值与严格显式日期算术（四则/幂/模/函数、1y2mo3d 月末钳制与双口径间隔），无当前时钟、IANA/DST 或外部服务。
+      - 2026-11-14 工程上下文模式（实验分支）：导演会话级开关——开启后出站上下文来自事件日志投影（正文与幕后轨迹同一账本可重放），压缩改两段提交可整体撤销，自动压缩带快速重填熔断与证据闸门；关闭态行为不变。实验能力，实际收益未验证
+      - 2026-11-10 Anthropic 故事固定前缀缓存条件：故事生成/审查把固定角色提示词、压缩摘要与审查规则段拆为独立 system 块并打缓存标记，动态世界设定/往事与历史断点保持原布局；官方端点缺省开启、第三方按 anthropic_capabilities.stable_system_cache 显式开启，其他协议与导演带工具请求不变。实际命中、延迟与账单仍需真机实测
+      - 2026-11-10 上下文用量可信度：主数字改为下一次主请求的预计完整输入（实报、≈本地估算、—未知三态）；压缩/删除按同一材料口径重算并扣除被替换的旧摘要，模型、规则、资料、工具等配置变化后旧值失效；缓存命中率只用可比样本聚合，字段冲突或非法计量显示未知并保留诊断信息；工具轮按下一轮材料边界扣除临时工作面，真实 0 缓存计为有效样本，压缩后构成图与历史同修订且不再重复计入指令；已打开详情面板随真实控制器压缩同步刷新；末次请求异常与整轮诊断分离，旧会话回填的数字与异常标识同源
+      - 2026-11-20 质量收尾：事实写入失败在收稿后提示数量；检索摘要标签随语言切换；多路向量检索共享候选读取；日志导出合并当前及轮转文件并遮盖服务地址与常见凭据。
+      - 2026-11-20 事务与备份恢复。导演回退正文、记忆和事件时一起落库。覆盖导入保护原数据，原生端开库失败可检查备份并启用恢复库。
+      - 2026-11-20 会话操作与覆盖导入保护。发送、重试、续跑及轮次修改按会话串行，导演待发在收尾后自动派发，三种聊天模式与同库覆盖导入互斥。普通对话切页期间，发送成功只清理原会话的已发送草稿。
       - 2026-11-07 首启演示多仿真模型：向导模型步可选五个仿真候选（GLM-5.3 默认、DeepSeek-V4.1-Flash、GLM-5.3-Flash、Kimi-K3.1-Pro、MiMo-V2.6-Flash，均为真实轮次采集回放包）；选模提示操作当时可见，选择一致绑定（换包/画像/持久身份），首轮发送后锁定，恢复按所选候选定位
       - 2026-11-05 首启演示正式包与回放画像绑定：官方采集包替换测试样本（zhipu 流式工具通道），数据包 formatVersion=2 声明回放画像，恢复对账升级为画像级
       - 2026-11-04 导演向导项目规则：题材与文风改为抽象方向，模型按稳定叙述者模板结构生成；人称留空时不写入人称、视角或称呼约定
@@ -4729,6 +5013,7 @@ help:
       - 2026-10-05 超长消息流式渲染冻结窗口（纯性能优化，视觉行为零变化）：超长单段正文的已渲染部分按行冻结缓存、每帧只对尾部活窗排版，切块/判纯扫描同步增量化——单帧成本与全文长度脱敏（64k 字与 16k 字同量级），三模式主正文与思考/压缩流式区自动同享
       - 2026-10-06 导演失败真续跑：「从中断处继续」（含 E104 临时降级继续）经事件日志投影重建失败时刻的模型可见消息序列，已完成的 LLM 步骤与工具产出不再重烧，步数/token 预算计入前次尝试消耗；停止保留的半截正文合成进续跑上下文，模型从断句处继续；不可续跑（换模型端点/无日志等）自动回退整轮重跑
       - 2026-10-06 诊断页整改：暗门可再上锁+连点 2s 时间窗；版本号/Schema 号单源化（kAppVersion 桥+currentSchemaVersion，wiki 计数锁补 en/应用版本断言）；release 级别显示统一与失败计数取真值
+      - 2026-11-08 记忆与正文一致性修复批：切稿不串线（变体切换时记忆随所选正文同步，后续轮/已压缩轮拒绝切换）、关系按对象记忆（个人关系独立成条可回溯，群体关系整体维护，旧数据自动拆分迁移）、生成中单槽待发消息、世界书检索顺序与名额修复、免密钥嵌入服务、新导入角色默认降为常规重要度、自动携带资料收口（关键档案至多 10 份、自动资料池默认 20 份，常驻资料独立不受挤占）、检索零命中与未入索引可见性、长会话失败续跑不再丢失压缩摘要
 
     # 入口
     entryTitle: 怎么进入
@@ -4810,7 +5095,7 @@ help:
     backstageLabel: 幕后
     backstageDesc: 点幕后汇总行（或右侧箭头）展开逐步骤的工作卡
     verbsTitle: 幕后工作卡上的「台词」
-    verbsBody: 工作卡用舞台动词展示每一步在干什么：翻阅前情（找旧事）、搜索原文（用关键词找回历史原文）、回读原文（重看原文）、查证设定（核对事实）、重读主线（回顾摘要）、修订设定集（改设定）、归并设定（合并重复条目）、记入大事记（记事件）、记场记（记当前位置）、翻阅手记（查写作方法）、派出子代理（分派小任务）、请示导演（找你拍板）、落幕（交稿）。
+    verbsBody: 工作卡用舞台动词展示每一步在干什么：翻阅前情（找旧事）、搜索原文（用关键词找回历史原文）、回读原文（重看原文）、查证设定（核对事实）、浏览设定目录（查看实体条目与分布）、查记忆变更（查看已记录的事实流水）、重读主线（回顾摘要）、修订设定集（改设定）、归并设定（合并重复条目）、记入大事记（记事件）、记场记（记当前位置）、翻阅手记（查写作方法）、派出子代理（分派小任务）、精算数字（核对精确数值）、核对日期（核对显式日期）、请示导演（找你拍板）、落幕（交稿）、完成校准（结束周期记忆维护）。
     costTitle: 成本提示
     costBody: 输入框旁的小圆环显示当前上下文离自动压缩还有多远，点开可看窗口用量、缓存命中率和最近一轮请求消耗，还能手动立即压缩——前缀稳定时输入费用约打一折。
   directorLogWiki:
@@ -4827,12 +5112,12 @@ help:
     diagramRecoverDesc: 按日志还原进度，接着写
     recapTitle: 幕间回顾卡
     # 已给最新幕回顾卡加编辑入口，删「无需编辑」劝退表述
-    recapBody: 每隔一段剧情会出现一行「书脊」样式的回顾卡：第几幕、当前弧线、待兑现与已兑现的伏笔。它是剧情的里程碑，用来快速回望故事走到哪了；最新一幕的回顾卡展开后有「编辑」入口（弧线/叙事时间/伏笔全量清单），与 AI 记场记同一数据源，历史幕只读。另外每隔几轮（默认 8 轮，导演设置可调）会有一次「伏笔清点」：轮尾提醒未兑现清单，清点轮提交时终审提醒把一次关——划去已兑现或确认后才放行。
+    recapBody: 每隔一段剧情会出现一行「书脊」样式的回顾卡：第几幕、当前弧线、待兑现与已兑现的伏笔。它是剧情的里程碑，用来快速回望故事走到哪了；最新一幕的回顾卡展开后有「编辑」入口（弧线/叙事时间/伏笔全量清单），与 AI 记场记同一数据源，历史幕只读。另外，伏笔与剧情状态的定期巡检已整合进导演的记忆维护机制：任一记忆或场记连续 7 轮未更新时触发轻量缺口提醒（带 4 轮冷却）；每 50 轮在正文落幕后接力进入周期记忆校准阶段，核对未兑现伏笔、设定与大事记（该项由引擎自动调度，无需在导演设置手动调整清点间隔）。
 
   directorFailureWiki:
     title: 失败与重试
   directorFailure:
-    intro: 导演一轮要走很多步，任何一步都可能失败。失败不会破坏数据——记忆落库是整轮成功的奖励，中途失败什么都不会写坏。
+    intro: 导演一轮要走很多步，整轮失败时提交会回滚。单条事实变更写入失败会独立回退；收稿成功后会短暂提示未保存的数量，正文、成功事实和经历照常保存。
     # 主视觉
     diagramTitle: 失败时的样子
     diagramFailLabel: 失败步骤卡
@@ -4861,7 +5146,7 @@ help:
     watchBody: 监督模式开启后每次写入都弹确认卡；每个工具可独立设「允许/询问/禁用」三态（禁用的工具对导演不可见）。详见「监督模式：请示与审批」。
     contextTitle: 上下文与压缩
     # 上下文配置收敛：单一「上下文压缩阈值」旋钮 + 三线关系披露
-    contextBody: 输入区的小圆环显示上下文用量（满刻度=上下文压缩阈值），点开详情面板可看窗口用量/缓存命中率/最近一轮明细，对话足够长时可「立即压缩」；压缩摘要卡展开后可「撤销压缩」恢复归档对话。上下文只有一个旋钮「上下文压缩阈值」：历史占用到达生效窗口（模型窗口与窗口上限取小）的这一比例时，下一轮开始前自动压缩；百分比旁显生效 token 值，也可直接输 token 反推百分比。另有两道引擎内置保护不在设置面：轮内上下文到 85% 保命线强制收尾、单轮累计消耗按成本口径软着陆（与装了多少是两套账）。窗口上限在「高级：窗口上限」折叠里——0=自动用模型窗口，模型登记不准或要防 TPM 限流时才需要手动声明。
+    contextBody: 输入区的小圆环显示上下文用量（满刻度=上下文压缩阈值），点开详情面板可看窗口用量/缓存命中率/最近一轮明细，对话足够长时可「立即压缩」；压缩摘要卡展开后可「撤销压缩」恢复归档对话。上下文只有一个旋钮「上下文压缩阈值」：历史占用到达生效窗口（模型窗口与窗口上限取小）的这一比例时，下一轮开始前自动压缩；百分比旁显生效 token 值，也可直接输 token 反推百分比。另有两道引擎内置保护不在设置面：轮内上下文到 85% 保命线强制收尾、单轮累计消耗按成本口径软着陆（与装了多少是两套账）。窗口上限在「高级：窗口上限」折叠里——0=自动用模型窗口，模型登记不准或要防 TPM 限流时才需要手动声明。 工程上下文是单个导演会话的实验选项，默认关闭。展开本节可开启，开启后从事件账本装配；关闭时恢复常规正文装配。工程上下文会为输出留空间，用量详情显示实际触发线。
     suggestReplyTitle: 推荐回复
     suggestReplyBody: 输入框「推荐」按钮用的模型与参数都在「模型与生成」区段的推荐回复组：推荐模型（留空用导演主模型）、提示词、温度、生成上限、候选数量（一次生成几条）与单条最大字数（提示词层面控制单条长度）。
     memoryTitle: 记忆库入口
@@ -4877,7 +5162,7 @@ help:
     seed1Label: 导入
     seed1Desc: 设置 → 角色卡/世界书
     seed2Label: 应用
-    seed2Desc: 会话设置 → 角色卡/世界书区段（故事/导演同款）
+    seed2Desc: 故事与导演会话的「会话设置 → 角色卡/世界书」可应用资源，也可看到「已应用到本会话」的清单。
     seed3Label: 只读种子生效
     seed3Desc: 设定作为基线参与世界运转
     seed4Label: 与新事实共同生长
@@ -5239,7 +5524,7 @@ demo:
   steps:
     homeWizardEntry:
       title: 从导演向导开始
-      message: 点击首页的「向导引导」，我们将用真实的向导配置一个演示项目。
+      message: 点击首页的「导演模式创建向导」，为演示故事完成设置。
     wizardModel:
       title: 选择对话模型
       message: 这里列出的都是仿真模型：使用预先录制的演示内容，无需联网，也不消耗 API 额度。任选一个体验对应的故事，选中后点下方的「下一步」继续。

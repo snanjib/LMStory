@@ -336,7 +336,7 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
       // 异常（如 token 计数抛错）沿调用链落入 _runExtractPhase 的
       // catch-all，被标成 E013「关键词提取失败」（阶段与码双重错标）。
       // E010 的用户文案是中性的「生成失败」，承载本地异常不误导。
-      final messages = await builder.buildGenerateMessagesV2(
+      final assembly = await builder.buildGeneratePromptAssembly(
         userInput: round.userInput,
         history: round.history,
         sessionSystemPrompt: round.settings.systemPrompt,
@@ -360,6 +360,7 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
         // 中断续写注入（非 null = 续跑救援路径）
         continuationPrefix: round.continuationPrefix,
       );
+      final messages = assembly.messages;
 
       final request = LlmRequest(
         baseUrl: round.generatingNamingConfig.baseUrl,
@@ -383,6 +384,8 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
         // OpenAI 兼容流式端点默认不返回 usage；故事模式需要它来显示
         // prompt/cache token 与缓存命中率。
         includeUsage: true,
+        // 与 messages 同源：稳定 system 段块数，仅 Anthropic 适配器消费。
+        stableSystemPrefixCount: assembly.stableSystemPrefixCount,
         connectTimeout: round.connectTimeout,
         readTimeout: round.readTimeout,
       );
@@ -895,7 +898,7 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
     // state.phase 已是 reviewing，阶段与错误码双重错标。对齐 generating
     // 侧：本地异常按 E014「审查阶段失败」分类，失败栏指向正确阶段。
     try {
-      final messages = await builder.buildReviewMessagesV2(
+      final assembly = await builder.buildReviewPromptAssembly(
         userInput: round.userInput,
         generated: round.generatedText ?? '',
         retrievedMemories: round.scoredMemories ?? const [],
@@ -912,6 +915,7 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
         // 审查  修复：传入检索区预算比例，三区预算联动
         retrievalRatio: round.config.contextBudget.retrievalRatio,
       );
+      final messages = assembly.messages;
 
       final request = LlmRequest(
         baseUrl: round.reviewingNamingConfig.baseUrl,
@@ -931,6 +935,8 @@ extension IntermediateChatControllerPhases on IntermediateChatController {
         providerOptions: round.reviewingNamingConfig.providerOptions,
         // 与 generating 保持一致，确保 OpenAI 兼容端点返回缓存分项。
         includeUsage: true,
+        // 与 messages 同源：稳定 system 段块数，仅 Anthropic 适配器消费。
+        stableSystemPrefixCount: assembly.stableSystemPrefixCount,
         connectTimeout: round.connectTimeout,
         readTimeout: round.readTimeout,
       );

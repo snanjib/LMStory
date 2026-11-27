@@ -105,6 +105,14 @@ class DemoPreferences extends Preferences {
   }
 
   @override
+  Future<void> reload() async {}
+
+  @override
+  Preferences withKeyAliases(Map<String, String> aliases) {
+    throw UnsupportedError('Storage aliases are unavailable in a demo scope');
+  }
+
+  @override
   Future<bool> clear() async {
     _overlay.clear();
     return true;

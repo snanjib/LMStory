@@ -39,6 +39,13 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
   }) async {
     if (_streamRunner.isCancelled) return;
 
+    // MEM-06：检索链路失败（E104 / 检索异常）时附带记忆索引体检
+    //（fire-and-forget 记日志——不阻塞失败处理，不弹 UI；体检异常
+    // 在 _logMemoryIndexHealth 内全吞）
+    if (errorCode == 'E104' || error is MemoryRetrievalUnavailableException) {
+      unawaited(_logMemoryIndexHealth('round-failed:$errorCode'));
+    }
+
     // 上下文超限不进自动重试——与故事侧
     // intermediate_chat_controller_retry 同款口径（该处注释自称「导演侧同款
     // 口径」但本副本漏接）：超限重发同一载荷必然再超限，且自动重试会复位
@@ -104,15 +111,17 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
       //  诊断包：持久化失败上下文到 failure_logs 表（unawaited 不阻塞状态机）
       // 日志写入失败由 Repository 静默降级，不影响主流程
       unawaited(
-        _failureLogRepository.insertLog(
-          sessionId: state.session.sessionId,
-          mode: state.session.mode,
-          errorCategory: category.name,
-          errorCode: errorCode,
-          failedPhase: phase.name,
-          httpStatus: httpStatus,
-          errorMessage: message,
-          rawError: rawError,
+        _sessionOperations.runBackgroundWrite(
+          () => _failureLogRepository.insertLog(
+            sessionId: state.session.sessionId,
+            mode: state.session.mode,
+            errorCategory: category.name,
+            errorCode: errorCode,
+            failedPhase: phase.name,
+            httpStatus: httpStatus,
+            errorMessage: message,
+            rawError: rawError,
+          ),
         ),
       );
       // 2026-07-22 修复（问题 1-A）：不再清空 _round。
@@ -134,12 +143,13 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
     );
 
     final delay = _retryScheduler.retryDelay(errorCode);
-    if (delay > Duration.zero) {
-      await Future<void>.delayed(delay);
+    if (delay > Duration.zero && !_streamRunner.isCancelled) {
+      await _sessionOperations.waitForRetry(delay);
     }
 
     // 取消或状态已变（用户操作）则放弃重试
-    if (_streamRunner.isCancelled ||
+    if (!mounted ||
+        _streamRunner.isCancelled ||
         state.phase != retryPhase ||
         _round == null) {
       return;
@@ -186,31 +196,40 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
     RoundContext round, {
     DirectorRoundTuning? tuning,
     DirectorResumeContext? resume,
+    bool cleanupAttemptEvents = true,
   }) async {
-    // 同 turn 重跑前统一清理上一尝试的
-    // durable 事件（「同 turn 仅保留最新一组」语义从重生成/编辑重发推广
-    // 到自动重试/手动重试——此前这些入口不清理，失败重试会追加第二组
-    // bootstrap+turn 对，轨迹页步数与 token 双计、L3 请求重建里用户消息
-    // 与尾部注入出现两遍）。首次运行的全新 turn 无 >=N 事件，DELETE 为
-    // no-op；崩溃恢复遗留的孤儿事件也顺带收敛。
-    // 真续跑（resume != null）不清理：上次尝试的事件是唯一真实历史
-    // （不重放已完成步），续跑只追加新事件——防双计靠「不重发请求 +
-    // 不重写 bootstrap + 步号续起」，见 _buildDirectorResumeContext。
-    // 审查收官  口径：清理失败不阻断重跑（事件日志仅审计面）。
-    if (resume == null) {
-      try {
-        final frozenDeleted = await _agentEventLogRepository?.deleteTurnEvents(
-              state.session.sessionId,
-              round.turnNumber,
-            ) ??
-            false;
-        // 删到 systemFrozen 行时重置补写备忘（本轮 bootstrap 会重落）
-        if (frozenDeleted) _directorRunner.invalidateFrozenPrefixMemo();
-      } catch (e) {
-        _logger.warn('Rerun event log cleanup failed', detail: '$e');
-      }
-    }
+    // 故事回退已截断重生成和编辑重发的旧尝试。普通重试先清理残留。
+    // 真续跑在上次尝试后追加事件，保留已经完成的步骤。
     try {
+      if (cleanupAttemptEvents && resume == null) {
+        final engineeringOpen =
+            state.engineeringMode == EngineeringRuntimeMode.normalOpen;
+        try {
+          final frozenDeleted = await _truncateDirectorTurnEvents(
+            state.session.sessionId,
+            round.turnNumber,
+            regeneratingUserInput:
+                state.regenerateTurnNumber == null ? null : round.userInput,
+          );
+          if (frozenDeleted) _directorRunner.invalidateFrozenPrefixMemo();
+          if (engineeringOpen) {
+            await _engineeringCompaction?.invalidateActive(
+              state.session.sessionId,
+              'round-deleted',
+            );
+            await _agentEventLogRepository?.appendAll(state.session.sessionId, [
+              branchRebuildMarkerEvent(
+                reason: 'rerun',
+                turn: round.turnNumber,
+              ),
+            ]);
+          }
+        } catch (e) {
+          // 开启态直接从日志构建请求，日志清理失败时暂停发送。
+          if (engineeringOpen) rethrow;
+          _logger.warn('Rerun event log cleanup failed', detail: '$e');
+        }
+      }
       final network = await _configurationResolver.resolveNetworkConfig();
       final configuredTuning =
           tuning ?? DirectorRoundTuning.fromConfig(await _getConfig());
@@ -240,7 +259,9 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
   ///
   /// 若当前为"重新生成"流程（regenerateTurnNumber != null），重试时保留该标识，
   /// 重新走 persistRegeneratedRound 分支。普通发送场景重试走 persistRound 分支。
-  Future<void> retry() async {
+  Future<void> retry() => _runSessionOperation<void>(null, _retry);
+
+  Future<void> _retry() async {
     if (state.phase != IntermediatePhase.failed) return;
     final input = state.userInput;
     if (input == null || input.isEmpty) return;
@@ -274,7 +295,10 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
   ///
   /// 与 [retry] 的区别：retry 整轮重做（清空 _round 重新装配）；
   /// 本方法保留本轮已产出继续。
-  Future<void> continueWithFts5Only() async {
+  Future<void> continueWithFts5Only() =>
+      _runSessionOperation<void>(null, _continueWithFts5Only);
+
+  Future<void> _continueWithFts5Only() async {
     if (_round == null) return;
     if (state.phase != IntermediatePhase.failed) return;
     if (state.failureContext?.errorCode != 'E104') return;
@@ -305,9 +329,15 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
   /// 本方法会重新解析配置（用户可能通过会话设置修改了模型/温度等），
   /// 但保留已完成阶段的产出（generatedText/keywords/scoredMemories 等）。
   /// 配置解析失败时用旧配置兜底，不阻塞继续重试。
-  Future<void> continueFromFailed() async {
+  Future<void> continueFromFailed() =>
+      _runSessionOperation<void>(null, _continueFromFailed);
+
+  Future<void> _continueFromFailed() async {
     if (state.phase != IntermediatePhase.failed) return;
-    if (_round == null) return;
+    if (_round == null) {
+      await _retry();
+      return;
+    }
     final failureContext = state.failureContext;
     if (failureContext == null) return;
 
@@ -406,8 +436,31 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
       // ② 中断半截正文补 assistant（模型可见自己写过的断句）
       // ③ 若最终仍以 assistant 收尾，补一条 user 续跑指令
       //    （Gemini 拒绝以 model 轮结束的请求）
+      //
+      // 工程上下文模式（开启态）：投影基准与正常轮同源——纪元窗投影 +
+      // 冻结前缀前置（关闭态仍为全账本投影）。
+      AgentSurfaceProjection projectResumeSurface(
+        List<AgentDurableEvent> ledger,
+      ) {
+        if (state.engineeringMode == EngineeringRuntimeMode.normalOpen) {
+          final window = DirectorSurfaceV2.epochWindowProjection(ledger);
+          return AgentSurfaceProjection(
+            messages: List.unmodifiable(
+              DirectorSurfaceV2.assemble(
+                epochWindowMessages: window.messages,
+                frozenPrefix: DirectorSurfaceV2.latestFrozenPrefixOf(ledger),
+              ),
+            ),
+            coreIndex: window.coreIndex,
+            lastSeq: window.lastSeq,
+            contentGeneration: window.contentGeneration,
+          );
+        }
+        return deriveAgentSurface(ledger);
+      }
+
       final repairs = resumeRepairEvents(
-        projection: deriveAgentSurface(events),
+        projection: projectResumeSurface(events),
         textRepair: interruptedTextRepairEvent(turnEvents, turn: turn),
         turn: turn,
         toolPlaceholderTitle: t.advanced.process.interruptedToolPlaceholder,
@@ -416,7 +469,7 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
         await repo.appendAll(sessionId, repairs);
         events = await repo.readEvents(sessionId);
       }
-      final projection = deriveAgentSurface(events);
+      final projection = projectResumeSurface(events);
       if (projection.messages.isEmpty) return null;
 
       // 前序消耗统计：该轮主轮 step/end（步数/token）与 turn 书挡
@@ -444,12 +497,24 @@ extension AdvancedChatControllerRetry on AdvancedChatController {
               ? lastEndMs - firstBeginMs
               : 0;
 
+      // 上次尝试的生成身份（同 attempt 续）：取该轮主轮事件上最近的
+      // attemptId 盖戳（旧日志无盖戳 → null，续跑段起用新身份）。
+      String? resumedAttemptId;
+      for (final e in turnEvents.reversed) {
+        final attempt = e.data['attemptId'];
+        if (attempt is String && attempt.isNotEmpty) {
+          resumedAttemptId = attempt;
+          break;
+        }
+      }
+
       return DirectorResumeContext(
         surface: projection.messages,
         priorSteps: priorSteps,
         priorTotalTokens: priorTotalTokens,
         priorDurationMs: priorDurationMs,
         draft: draft,
+        attemptId: resumedAttemptId,
       );
     } catch (e) {
       _logger.warn(

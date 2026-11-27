@@ -26,7 +26,9 @@ import 'package:lmstory/features/memory/domain/repositories/experience_repositor
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/settings/presentation/pages/intermediate_settings_page.dart';
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/features/settings/presentation/widgets/context_budget_slider.dart';
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_model_picker_sheet.dart';
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_phase_models_section.dart';
@@ -343,6 +345,17 @@ class _IntermediateSessionSettingsSheetState
         ),
       );
     }
+  }
+
+  Future<String?> _ensureSessionIdForResource() async {
+    final provider = intermediateChatControllerProvider(widget.session);
+    final controller = ref.read(provider.notifier);
+    if (controller.isDraftSession) {
+      final saved = await controller.updateSession(ref.read(provider).session);
+      if (!mounted || !saved) return null;
+      setState(() => _session = ref.read(provider).session);
+    }
+    return ref.read(provider).session.sessionId;
   }
 
   /// null=跟随清算 + 惰性物化后，会话列
@@ -715,6 +728,9 @@ class _IntermediateSessionSettingsSheetState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(settingsNotifierProvider.select((s) => s.presets), (_, presets) {
+      setState(() => _presets = presets);
+    });
     final t = Translations.of(context);
     final colors = context.lm.palette;
     final controllerState =
@@ -787,8 +803,10 @@ class _IntermediateSessionSettingsSheetState
                           title: t.intermediate.chat.sessionSettings
                               .sectionResource,
                           child: SeedResourceSection(
-                            sessionId: _session.sessionId,
+                            sessionId: controllerState.session.sessionId,
                             enabled: !isGenerating,
+                            ensureSessionIdForApply:
+                                _ensureSessionIdForResource,
                           ),
                         ),
 
@@ -841,6 +859,7 @@ class _IntermediateSessionSettingsSheetState
                               colors,
                               isGenerating,
                               configLevel,
+                              controllerState.session,
                             ),
                           ),
                         ),
@@ -1501,19 +1520,41 @@ class _IntermediateSessionSettingsSheetState
     );
   }
 
-  /// 生成参数区的行列表（区内行级过滤）：思考预算行双模式可见，
-  /// 采样参数行仅进阶模式渲染。切回进阶模式六行原样回归。
+  (String?, String?) _samplingModelForPhase(ChatSession session, String phase) {
+    final (presetId, modelId) = session.phaseModels.forPhase(phase);
+    final (globalPresetId, globalModelId) =
+        _globalSnapshot.phaseModels?.forPhase(phase) ?? (null, null);
+    return (
+      (presetId?.isNotEmpty ?? false) ? presetId : globalPresetId,
+      (modelId?.isNotEmpty ?? false) ? modelId : globalModelId,
+    );
+  }
+
+  /// 采样参数只在进阶模式且有使用这些参数的模型时显示。
   List<Widget> _buildGenerationRows(
     Translations t,
     LmPalette colors,
     bool isGenerating,
     ConfigLevel level,
+    ChatSession session,
   ) {
+    final reviewEnabled =
+        session.reviewEnabledOverride ?? _globalSnapshot.reviewEnabled ?? false;
+    final sampling = samplingControlsForStory(
+      _presets,
+      generating: _samplingModelForPhase(session, 'generating'),
+      reviewing:
+          reviewEnabled ? _samplingModelForPhase(session, 'reviewing') : null,
+      extracting: _samplingModelForPhase(session, 'extracting'),
+      reasoningEffort:
+          session.reasoningEffort ?? _globalSnapshot.reasoningEffort,
+    );
     final rows = <Widget>[
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGenerationTemperature,
-        level,
-      ))
+      if (sampling.showsTemperatureAndTopP &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGenerationTemperature,
+            level,
+          ))
         IntermediateSliderField(
           label: t.intermediate.chat.sessionSettings.temperature,
           value: _session.temperature ?? _globalSnapshot.temperature ?? 0.8,
@@ -1536,10 +1577,11 @@ class _IntermediateSessionSettingsSheetState
           ),
           enabled: !isGenerating,
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGenerationTopP,
-        level,
-      ))
+      if (sampling.showsTemperatureAndTopP &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGenerationTopP,
+            level,
+          ))
         IntermediateSliderField(
           label: t.intermediate.chat.sessionSettings.topP,
           value: _session.topP ?? _globalSnapshot.topP ?? 0.95,
@@ -1574,10 +1616,11 @@ class _IntermediateSessionSettingsSheetState
           ),
           enabled: !isGenerating,
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGenerationPresencePenalty,
-        level,
-      ))
+      if (sampling.showsPenalties &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGenerationPresencePenalty,
+            level,
+          ))
         IntermediateSliderField(
           label: t.intermediate.chat.sessionSettings.presencePenalty,
           value: _session.presencePenalty ??
@@ -1600,10 +1643,11 @@ class _IntermediateSessionSettingsSheetState
           hint: t.intermediate.chat.sessionSettings.presencePenaltyHint,
           enabled: !isGenerating,
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.storyGenerationFrequencyPenalty,
-        level,
-      ))
+      if (sampling.showsPenalties &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.storyGenerationFrequencyPenalty,
+            level,
+          ))
         IntermediateSliderField(
           label: t.intermediate.chat.sessionSettings.frequencyPenalty,
           value: _session.frequencyPenalty ??

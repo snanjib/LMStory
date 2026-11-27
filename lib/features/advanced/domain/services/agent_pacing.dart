@@ -76,18 +76,24 @@ String pacingDirectiveFor(NarrativePacing tier) => switch (tier) {
 /// [characterInitHint] = turn1 开篇角色一次性提示（向导「初始化你的角色」
 /// 自由描述路径，runner 用 firstTurnCharacterInitHint 预构建；
 /// null = 未启用，整条省略）。
-/// [foreshadowSweepLine] = 伏笔定期清点提醒（清点轮由 runner 用
-/// foreshadowSweepReminderText 预构建；null = 非清点轮或无未兑现伏笔，
-/// 整条省略）。
+/// [maintenanceGapLine] = 轻量维护缺口提示（由 runner 用
+/// maintenanceGapReminderText 预构建；大周期轮不注入）。
+/// [isMajorReviewRound] = 本轮是否进入大周期双任务接力（true 时抑制小提示，
+/// 并在工作契约内温和告知交付正文后进入周期审查与维护）。
+/// [foreshadowSweepLine] = 兼容旧调用点的伏笔清点行。
 List<AgentMessage> surfaceTailMessages({
   required NarrativePacing pacing,
   required bool isFirstTurn,
   required Set<String> toolNames,
   bool importedDataPresent = false,
   String? characterInitHint,
+  String? maintenanceGapLine,
+  bool isMajorReviewRound = false,
   String? foreshadowSweepLine,
 }) {
   final hint = firstTurnCapabilityHint(toolNames);
+  final effectiveGapLine =
+      isMajorReviewRound ? null : (maintenanceGapLine ?? foreshadowSweepLine);
   return [
     // 开篇角色一次性提示（turn1 且启用才有；内容性指令置首）
     if (isFirstTurn && characterInitHint != null)
@@ -95,10 +101,17 @@ List<AgentMessage> surfaceTailMessages({
     //  deny 感知：spawn 未注册时能力提示整条省略（不空许诺）
     if (isFirstTurn && hint != null)
       AgentMessage.user(wrapWorkbenchReminder(hint)),
-    AgentMessage.user(wrapWorkbenchReminder(workbenchContractText(toolNames))),
-    // 伏笔清点提醒（清点轮才有；紧随工作契约，任务簿记类相邻）
-    if (foreshadowSweepLine != null)
-      AgentMessage.user(wrapWorkbenchReminder(foreshadowSweepLine)),
+    AgentMessage.user(
+      wrapWorkbenchReminder(
+        workbenchContractText(
+          toolNames,
+          isMajorReviewRound: isMajorReviewRound,
+        ),
+      ),
+    ),
+    // 维护缺口提示（非大周期轮且触发时才有；紧随工作契约，任务簿记类相邻）
+    if (effectiveGapLine != null)
+      AgentMessage.user(wrapWorkbenchReminder(effectiveGapLine)),
     AgentMessage.user(wrapWorkbenchReminder(kStyleIronRuleLine)),
     AgentMessage.user(wrapWorkbenchReminder(pacingDirectiveFor(pacing))),
     // 世界状态含导入资料时的尾部边界重申（recency 位补偿）

@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:lmstory/core/agent/agent_cancellation.dart';
 import 'package:lmstory/core/agent/agent_llm_gateway.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
+import 'package:lmstory/core/llm/tool_calling/tool_definition.dart';
 import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
 import 'package:lmstory/core/network/stream_post_native.dart';
@@ -56,7 +57,7 @@ void main() {
         responseStartTimeout: first,
         nonStreamingTimeout: total,
       );
-  LlmRemoteDataSource source(http.Client client) => LlmRemoteDataSource(
+  LlmRemoteDataSource source([http.Client? client]) => LlmRemoteDataSource(
         httpClient: HttpClient(),
         adapterFactory: LlmAdapterFactory(),
         chatClient: client,
@@ -185,6 +186,84 @@ void main() {
       identical(first, transportClient(const Duration(seconds: 10))),
       isFalse,
     );
+  });
+
+  test('Gemini 兼容端点接受导演流式请求的工具声明数组', () async {
+    final server = await io.HttpServer.bind(io.InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    late Uri requestUri;
+    late Map<String, dynamic> requestBody;
+    server.listen((request) async {
+      requestUri = request.uri;
+      final json = await utf8.decoder.bind(request).join();
+      requestBody = jsonDecode(json) as Map<String, dynamic>;
+      final response = request.response;
+      if (requestBody['tools'] is Map<String, dynamic>) {
+        response.statusCode = io.HttpStatus.badRequest;
+        response.headers.contentType = io.ContentType.json;
+        response.write(
+          '{"error":{"code":400,"message":"invalid request: json: cannot '
+          'unmarshal object into Go struct field gRequest.tools of type '
+          '[]Tool","status":"INVALID_ARGUMENT"}}',
+        );
+      } else {
+        response.headers.contentType = io.ContentType('text', 'event-stream');
+        response.write(
+          'data: {"candidates":[{"content":{"parts":[{"functionCall": '
+          '{"name":"search_story","args":{"query":"bridge"}}}]},'
+          '"finishReason":"STOP"}]}\n\n',
+        );
+      }
+      await response.close();
+    });
+
+    const tool = ToolDefinition(
+      name: 'search_story',
+      description: 'Search story history.',
+      parameters: {
+        'type': 'object',
+        'properties': {
+          'query': {'type': 'string'},
+        },
+        'required': ['query'],
+      },
+    );
+    final gateway = LlmServiceAgentGateway(llmService: source());
+    final result = await gateway.completeStep(
+      endpoint: AgentModelEndpoint(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        modelId: 'group/test-gemini-hydrogen',
+        protocol: 'geminiNative',
+      ),
+      request: const AgentStepRequest(
+        messages: [
+          {'role': 'user', 'content': 'Find the bridge.'},
+        ],
+        tools: [tool],
+        config: AgentCallConfig(),
+      ),
+      cancellation: AgentCancellationToken(),
+    );
+
+    expect(
+      requestUri.path,
+      '/v1beta/models/group/test-gemini-hydrogen:streamGenerateContent',
+    );
+    expect(requestUri.queryParameters, {'alt': 'sse'});
+    expect(requestBody['tools'], [
+      {
+        'functionDeclarations': [
+          {
+            'name': tool.name,
+            'description': tool.description,
+            'parameters': tool.parameters,
+          },
+        ],
+      },
+    ]);
+    final call = result.toolCalls.single;
+    expect(call.name, tool.name);
+    expect(call.arguments, {'query': 'bridge'});
   });
 
   test('原生流式先等待首数据再启动空闲计时', () async {

@@ -158,6 +158,8 @@ class DemoSessionHandover {
     }
     // 演示固定提示词草稿不入正式库
     session['draft_input'] = null;
+    session['director_pending_input'] = null;
+    session['director_queued_input'] = null;
 
     final memories = _asList(snapshot['experientialMemories']).map((m) {
       // 演示向量与维度元数据不进真实嵌入空间；文本/FTS 保留，

@@ -535,6 +535,8 @@ void main() {
 
       await tester.pumpWidget(wrap(stateOf('核对设定集')));
       await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('live-pulse-toggle')));
+      await tester.pump();
       expect(find.byType(ThinkingTailPreview), findsOneWidget);
       expect(find.byType(SelectableText), findsNothing);
       await tester.pumpWidget(wrap(stateOf('核对设定集里的人物关系')));

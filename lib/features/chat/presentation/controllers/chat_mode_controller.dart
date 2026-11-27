@@ -5,7 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/network/http_client.dart'
     show CancellationToken, CancelledException;
 import 'package:lmstory/core/network/retry_policy.dart';
+import 'package:lmstory/core/services/data_store_operation_guard.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/core/utils/secret_redactor.dart';
+import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
@@ -26,6 +29,7 @@ import 'package:lmstory/features/chat/domain/services/stream_handler.dart';
 import 'package:lmstory/features/diagnostics/domain/repositories/failure_log_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/stream_failure.dart';
 import 'package:lmstory/features/story_runtime/domain/services/session_title_generator.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:uuid/uuid.dart';
@@ -81,6 +85,11 @@ class ChatModeState {
     //（面板「—」+ 口径脚注）。
     this.lastCompletionTokens,
     this.lastCacheReadTokens,
+    this.lastPromptTokens,
+    this.lastUsageWarnings = const [],
+    this.contextEstimateTokens,
+    this.contextEstimateIsLocal = true,
+    this.contextEstimateAt,
     // 加载期标志，防止首次打开会话闪现空态
     this.isLoading = true,
     this.autoRetryNotice,
@@ -150,6 +159,42 @@ class ChatModeState {
   /// 最近一轮请求的缓存读 token（null = 端点未返回缓存分项）
   final int? lastCacheReadTokens;
 
+  /// 最近一轮主请求的完整输入 token（命中率分母/上下文占用锚点）
+  final int? lastPromptTokens;
+
+  /// 最近一轮请求的计量异常说明（字段冲突/非法样本等）。
+  ///
+  /// 原值仍保留在 [lastCacheReadTokens] 供诊断，但该样本不进入命中率
+  /// 展示与累计。
+  final List<String> lastUsageWarnings;
+
+  /// 最近一轮缓存命中率（缺输入面/缓存分项或存在计量异常 → null）
+  double? get lastCacheHitRatio => lastUsageWarnings.isNotEmpty
+      ? null
+      : LlmUsage.hitRateOf(
+          cacheReadTokens: lastCacheReadTokens,
+          inputTokens: lastPromptTokens,
+        );
+
+  /// 最近一轮分项是否因冲突/越界等异常不可比较
+  bool get lastCacheSampleInvalid =>
+      lastUsageWarnings.isNotEmpty ||
+      (lastCacheReadTokens != null &&
+          lastPromptTokens != null &&
+          lastCacheHitRatio == null);
+
+  /// 当前预计上下文 token（下一次主请求的预计输入；null = 无数据）
+  ///
+  /// 发送完成后取端点实报的完整输入；手动压缩后按材料差即时调整并降级为
+  /// 本地估算（UI 显示 ≈）。与「最近请求」分开，避免把本轮总消耗当占用。
+  final int? contextEstimateTokens;
+
+  /// [contextEstimateTokens] 是否为本地估算（false = 端点实报锚点）
+  final bool contextEstimateIsLocal;
+
+  /// [contextEstimateTokens] 的更新时刻（口径脚注展示）
+  final DateTime? contextEstimateAt;
+
   /// 历史消息是否仍在加载
   final bool isLoading;
 
@@ -182,6 +227,11 @@ class ChatModeState {
     Object? compactionTriggerTokens = _sentinel,
     Object? lastCompletionTokens = _sentinel,
     Object? lastCacheReadTokens = _sentinel,
+    Object? lastPromptTokens = _sentinel,
+    List<String>? lastUsageWarnings,
+    Object? contextEstimateTokens = _sentinel,
+    bool? contextEstimateIsLocal,
+    Object? contextEstimateAt = _sentinel,
     bool? isLoading,
     Object? autoRetryNotice = _sentinel,
   }) {
@@ -227,6 +277,18 @@ class ChatModeState {
       lastCacheReadTokens: identical(lastCacheReadTokens, _sentinel)
           ? this.lastCacheReadTokens
           : lastCacheReadTokens as int?,
+      lastPromptTokens: identical(lastPromptTokens, _sentinel)
+          ? this.lastPromptTokens
+          : lastPromptTokens as int?,
+      lastUsageWarnings: lastUsageWarnings ?? this.lastUsageWarnings,
+      contextEstimateTokens: identical(contextEstimateTokens, _sentinel)
+          ? this.contextEstimateTokens
+          : contextEstimateTokens as int?,
+      contextEstimateIsLocal:
+          contextEstimateIsLocal ?? this.contextEstimateIsLocal,
+      contextEstimateAt: identical(contextEstimateAt, _sentinel)
+          ? this.contextEstimateAt
+          : contextEstimateAt as DateTime?,
       isLoading: isLoading ?? this.isLoading,
       autoRetryNotice: autoRetryNotice == _sentinel
           ? this.autoRetryNotice
@@ -259,14 +321,18 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     required Logger logger,
     required FailureLogRepository failureLogRepository,
     required ChatSession session,
+    TokenCounter? tokenCounter,
     Duration? streamDeltaCoalesceInterval,
-  })  : _chatRepository = chatRepository,
+    DataStoreOperationGuard? operationGuard,
+  })  : _tokenCounter = tokenCounter ?? TokenCounter(),
+        _chatRepository = chatRepository,
         _presetRepository = presetRepository,
         _settingsRepository = settingsRepository,
         _compactionService = compactionService,
         _llmService = llmService,
         _logger = logger,
         _failureLogRepository = failureLogRepository,
+        _operationGuard = operationGuard ?? DataStoreOperationGuard(),
         _classifier = const SimpleFailureClassifier(),
         _uuid = const Uuid(),
         super(ChatModeState(session: session)) {
@@ -293,8 +359,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       deltaCoalesceInterval: streamDeltaCoalesceInterval,
     );
 
-    _loadMessages();
-    _resolveModelDisplayInfo();
+    _initialHistory = _loadMessages(refreshDisplay: true);
   }
 
   // ==================== 依赖 ====================
@@ -305,7 +370,15 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   final CompactionService _compactionService;
   final LlmService _llmService;
   final Logger _logger;
+  final DataStoreOperationGuard _operationGuard;
   final Uuid _uuid;
+  final TokenCounter _tokenCounter;
+  late final Future<void> _initialHistory;
+
+  /// 上下文预计刷新序号：本地计数为异步，完成时若已被更新的实报/材料
+  /// 刷新覆盖则丢弃（防止旧估算覆盖新一轮 usage 实报）。
+  int _contextEstimateSeq = 0;
+  int _modelDisplayRevision = 0;
 
   //  诊断包：失败日志仓储 + Simple 模式失败分类器
   final FailureLogRepository _failureLogRepository;
@@ -329,8 +402,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
 
   // ==================== 流式请求状态 ====================
 
-  CancellationToken? _currentCancelToken;
-  StreamSubscription<LlmStreamEvent>? _currentSubscription;
+  _ChatGeneration? _generation;
   String? _cachedApiKey;
 
   /// 后台中断标志（App 切到后台时设置）
@@ -361,6 +433,66 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 60 秒足以让用户感知到失败摘要卡片并决定下一步（修复 API Key / 手动重试 / 切换会话），
   /// 同时避免短时间内连续打 LLM API 浪费配额。
   static const _compactionFailureCooldown = Duration(seconds: 60);
+
+  bool get _isBusy =>
+      _generation != null ||
+      state.isSending ||
+      state.isStreaming ||
+      state.isCompressing;
+
+  Future<T> _runStoreWrite<T>(
+    T rejected,
+    Future<T> Function() action,
+  ) async {
+    final release = _operationGuard.tryBeginWrite();
+    if (release == null) return rejected;
+    try {
+      return await action();
+    } finally {
+      release();
+    }
+  }
+
+  Future<T> _runGeneration<T>(
+    T rejected,
+    Future<T> Function(_ChatGeneration) prepare,
+  ) async {
+    if (_isBusy) return rejected;
+    final release = _operationGuard.tryBeginWrite();
+    if (release == null) return rejected;
+
+    final generation = _ChatGeneration();
+    _generation = generation;
+    _backgroundInterrupted = false;
+    void finish() {
+      _generation = null;
+      release();
+      generation.settled.complete();
+    }
+
+    try {
+      // The first history snapshot can still be reading when the user sends.
+      await _initialHistory;
+      if (!mounted || generation.isCancelled) return rejected;
+      return await prepare(generation);
+    } finally {
+      if (generation.attempt.subscription != null) {
+        // 入口等待准备与订阅建立，占用继续覆盖收稿和订阅清理。
+        unawaited(generation.streamFinished.future.then((_) => finish()));
+      } else {
+        try {
+          if (generation.attempt.cancelToken.isCancelled) {
+            await _finishCancelledGeneration(
+              persistPartial: false,
+              rollback: generation.rollbackOnStop || _backgroundInterrupted,
+            );
+          }
+        } finally {
+          finish();
+        }
+      }
+    }
+  }
 
   // ==================== StreamHandler 回调 ====================
 
@@ -406,9 +538,18 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     // 行展示；端点未回 usage 为 null → 面板「—」+ 口径脚注）。此前
     // 聊天链路只落库 totalTokens（消息 tokensUsed），分解到不了面板。
     if (usage != null) {
+      final fullInput = usage.fullInputTokens;
+      // 实报优先：使在途的本地材料估算过期，避免完成时反向覆盖
+      _contextEstimateSeq++;
       state = state.copyWith(
         lastCompletionTokens: usage.completionTokens,
         lastCacheReadTokens: usage.cacheReadTokens,
+        lastUsageWarnings: usage.warnings,
+        // 最近请求完整输入（详情面板命中率分母）+ 当前预计锚点
+        lastPromptTokens: fullInput,
+        contextEstimateTokens: fullInput,
+        contextEstimateIsLocal: false,
+        contextEstimateAt: DateTime.now(),
       );
     }
     // （接写合并）：续写完成——新内容追加进被续写消息
@@ -420,7 +561,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     if (continuationTarget != null) {
       _continuationTarget = null;
       final continuation = finalMessage?.content ?? '';
-      if (continuation.isNotEmpty) {
+      if (finalMessage != null && continuation.isNotEmpty) {
         if (isBackground) {
           await _appendContinuationInBackgroundBranch(
             target: continuationTarget,
@@ -434,10 +575,10 @@ class ChatModeController extends StateNotifier<ChatModeState> {
           await _chatRepository.appendContinuation(
             continuationTarget.messageId,
             continuation,
-            tokensUsed: finalMessage?.tokensUsed,
+            tokensUsed: finalMessage.tokensUsed,
           );
           final messages = state.messages
-              .where((m) => m.messageId != finalMessage!.messageId)
+              .where((m) => m.messageId != finalMessage.messageId)
               .toList();
           final index = messages.indexWhere(
             (m) => m.messageId == continuationTarget.messageId,
@@ -446,8 +587,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
             messages[index] = messages[index].copyWith(
               content: (messages[index].content ?? '') + continuation,
               isContinued: true,
-              tokensUsed:
-                  finalMessage!.tokensUsed ?? messages[index].tokensUsed,
+              tokensUsed: finalMessage.tokensUsed ?? messages[index].tokensUsed,
             );
           }
           state = state.copyWith(messages: messages);
@@ -461,24 +601,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
               .toList(),
         );
       }
-      // 占位消息从未入库：无消息数/锚点变更（后台形态快照已因合并变化，
-      // 上方已刷新锚点）
-      _forkManager.clearPendingRollback();
-      await _currentSubscription?.cancel();
-      _currentSubscription = null;
-      _currentCancelToken = null;
-      state = state.copyWith(
-        isStreaming: false,
-        isThinking: false,
-        currentAssistantMessageId: null,
-        generatingAnchorUserMsgId: null,
-        isGeneratingInBackground: false,
-      );
-      unawaited(_autoNameSession());
-      return;
-    }
-
-    if (isBackground) {
+    } else if (isBackground) {
       // 后台模式：产物消息属于生成分支（此刻非活跃），走快照追加
       //（：此前直接 addMessage 落在当前查看分支的表尾，会被后续
       // 切分支/删除误并入当前分支快照，造成跨分支污染）
@@ -498,21 +621,20 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     // 清除 Fork 回滚信息（流式成功完成，无需回滚）
     _forkManager.clearPendingRollback();
 
-    await _currentSubscription?.cancel();
-    _currentSubscription = null;
-    _currentCancelToken = null;
+    if (!mounted) return;
 
-    state = state.copyWith(
-      isStreaming: false,
-      isThinking: false,
-      currentAssistantMessageId: null,
-      generatingAnchorUserMsgId: null,
-      // 后台/前台完成均收口清除（防陈旧 true 吞掉下一轮占位气泡）
-      isGeneratingInBackground: false,
-    );
+    // 新回复已落库 → 按当前有效材料重算「当前预计」（请求
+    // 实报输入不含刚生成的回复，不能原样冒充下一次输入）。
+    // The local estimate can finish after the stream and its write guard.
+    if (!isBackground) unawaited(_refreshContextEstimateFromMaterials());
 
     // 自动命名会话（异步执行，不阻塞 UI）
     unawaited(_autoNameSession());
+    if (state.autoRetryNotice != null && _lastFailureLogId > 0) {
+      final failureId = _lastFailureLogId;
+      _lastFailureLogId = -1;
+      await _failureLogRepository.markRecovered(failureId);
+    }
   }
 
   /// 续写在后台分支完成的接写合并
@@ -550,7 +672,10 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       );
     }
     if (!merged && finalMessage != null) {
-      await _persistBackgroundBranchMessage(finalMessage);
+      await _persistBackgroundBranchMessage(
+        finalMessage,
+        branch: (anchor: genAnchor, index: genBranch),
+      );
     }
   }
 
@@ -561,10 +686,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 对标 ChatBox getAllMessageList：UI 显示全部消息（含已被 CompactionPoint
   /// 压缩的旧消息），摘要横幅按 createdAt 自然插入消息流。
   /// API 请求时的过滤在 _buildMessagesForApi 中通过 getCompressedMessages 完成。
-  Future<void> _loadMessages() async {
+  Future<void> _loadMessages({bool refreshDisplay = false}) async {
     try {
       final result =
           await _messageManager.loadMessages(state.session.sessionId);
+      if (!mounted) return;
       state = state.copyWith(
         messages: result.messages,
         forkAnchors: result.anchors,
@@ -581,6 +707,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         error: e,
         overrideCategory: SimpleFailureClassifier.persist,
       );
+      if (!mounted) return;
       state = state.copyWith(
         isLoading: false,
         error: _classifier.formatPersisted(
@@ -592,6 +719,93 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     // chat 会话惰性物化——置于消息载入完成后（物化
     // await 链前置会翻转与 sendMessage 的竞态窗口（实测），三模式统一）
     await _materializeSnapshotColumnsIfNeeded();
+    if (!mounted) return;
+    if (refreshDisplay) {
+      // 用补齐后的会话设置在后台更新模型窗口和阈值。
+      unawaited(_resolveModelDisplayInfo());
+    } else {
+      await _refreshContextEstimateFromMaterials();
+    }
+  }
+
+  /// 以真实请求材料重算当前预计上下文（本地计数，标注 ≈）
+  ///
+  /// 与 `_buildMessagesForApi` 的输入面同源（系统提示 + 压缩后有效消息）；
+  /// 端点实报回来前这是最接近下一次请求的可用值。失败保持 null（「—」），
+  /// 不得回退到 `tokensUsed`（那是本轮总消耗，不是上下文占用）。
+  Future<void> _refreshContextEstimateFromMaterials() async {
+    final session = state.session;
+    final sessionId = session.sessionId;
+    final seq = ++_contextEstimateSeq;
+    try {
+      final settings =
+          (await _configurationResolver.resolveSettings(session)).settings;
+      final loaded = await _compactionService.getCompressedMessages(sessionId);
+      // 与请求装配同口径：先按 maxContextMessages 截断，再估算
+      final effective = _truncateContextMessages(
+        loaded,
+        settings.maxContextMessages,
+      );
+      final texts = <String>[
+        if (settings.systemPrompt.trim().isNotEmpty) settings.systemPrompt,
+        for (final message in effective)
+          if (message.content != null && message.content!.trim().isNotEmpty)
+            message.content!,
+      ];
+      // 异步期间已被新一轮实报或更新的材料刷新取代 → 丢弃过期结果
+      if (!mounted ||
+          state.session.sessionId != sessionId ||
+          seq != _contextEstimateSeq) {
+        return;
+      }
+      if (texts.isEmpty) {
+        // 材料被清空（删光消息）：不得残留上一次估算值
+        state = state.copyWith(
+          contextEstimateTokens: null,
+          contextEstimateIsLocal: true,
+          contextEstimateAt: DateTime.now(),
+        );
+        return;
+      }
+      final tokens = await _tokenCounter.countTokensForMessages(texts);
+      if (!mounted ||
+          state.session.sessionId != sessionId ||
+          seq != _contextEstimateSeq) {
+        return;
+      }
+      state = state.copyWith(
+        contextEstimateTokens: tokens,
+        contextEstimateIsLocal: true,
+        contextEstimateAt: DateTime.now(),
+      );
+    } catch (e) {
+      _logger.warn('Context estimate refresh failed', detail: '$e');
+    }
+  }
+
+  /// 按会话 maxContextMessages 截断上下文（请求装配与本地估算共用）
+  ///
+  /// 保留首条压缩摘要（若存在），其余按最近 N 条截取。
+  List<ChatMessage> _truncateContextMessages(
+    List<ChatMessage> contextMessages,
+    int? maxContextMessages,
+  ) {
+    if (maxContextMessages == null ||
+        maxContextMessages <= 0 ||
+        contextMessages.length <= maxContextMessages) {
+      return contextMessages;
+    }
+    final hasSummary =
+        contextMessages.isNotEmpty && contextMessages.first.isSummary;
+    if (hasSummary && maxContextMessages > 1) {
+      final summary = contextMessages.first;
+      final rest = contextMessages.skip(1).toList();
+      final keep = rest.length > maxContextMessages - 1
+          ? rest.sublist(rest.length - (maxContextMessages - 1))
+          : rest;
+      return [summary, ...keep];
+    }
+    return contextMessages.sublist(contextMessages.length - maxContextMessages);
   }
 
   /// 刷新 Fork 锚点（快照模型下消息无需过滤）
@@ -607,10 +821,17 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// [CompactionService.shouldCompact] 同公式同值；压缩阈值走会话级 >
   /// broadcastChat 全局默认的既有解析链。
   Future<void> _resolveModelDisplayInfo() async {
-    final displayInfo = await _configurationResolver.resolveModelDisplayInfo(
-      state.session,
-    );
-    final settings = await _resolveSettings();
+    final session = state.session;
+    final revision = ++_modelDisplayRevision;
+    final displayInfo =
+        await _configurationResolver.resolveModelDisplayInfo(session);
+    final settings =
+        (await _configurationResolver.resolveSettings(session)).settings;
+    if (!mounted ||
+        revision != _modelDisplayRevision ||
+        state.session.sessionId != session.sessionId) {
+      return;
+    }
     state = state.copyWith(
       currentModelName: displayInfo.modelName,
       currentProviderName: displayInfo.providerName,
@@ -620,6 +841,9 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         threshold: settings.compactionThreshold,
       ),
     );
+    // 模型/压缩阈值变化会改变请求装配与满刻度 → 重算当前预计，
+    // 不沿用旧模型下的估算值
+    unawaited(_refreshContextEstimateFromMaterials());
   }
 
   // ==================== 会话管理 ====================
@@ -633,7 +857,10 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// "会话成立的标志是发第一条消息或会话配置变更"。
   /// 草稿期间首次修改配置时立即物化为真实会话，物化时快照所有字段
   /// （不只 modelId/presetId），实现"快照而非引用"语义。
-  Future<void> updateSession(ChatSession updated) async {
+  Future<void> updateSession(ChatSession updated) =>
+      _runStoreWrite<void>(null, () => _updateSession(updated));
+
+  Future<void> _updateSession(ChatSession updated) async {
     if (isDraftSession) {
       // 草稿会话期间首次修改配置 → 触发物化
       await _materializeDraftSessionWith(updated);
@@ -694,8 +921,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         session.autoCompaction == null ||
         session.compactionThreshold == null;
     if (!needsMaterialize) return;
+    final release = _operationGuard.tryBeginWrite();
+    if (release == null) return;
     try {
       final snapshot = await _configurationResolver.snapshotSimpleDefaults();
+      if (!mounted) return;
       // await 期间用户可能已编辑会话列
       // （极速打开设置改模型）——重取最新会话为合并基线，物化只填充
       // 仍为 null 的列，防止用「开头捕获的旧 null 基线」覆盖用户刚写的值。
@@ -714,7 +944,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
             current.compactionThreshold ?? snapshot.compactionThreshold,
       );
       final persisted = await _chatRepository.updateSession(updated);
-      state = state.copyWith(session: persisted);
+      if (mounted) state = state.copyWith(session: persisted);
       _logger.info(
         'Legacy chat session snapshot materialized',
         detail: 'sessionId=${current.sessionId}',
@@ -724,6 +954,8 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         'Legacy chat session snapshot materialization skipped',
         detail: '$e',
       );
+    } finally {
+      release();
     }
   }
 
@@ -781,11 +1013,8 @@ class ChatModeController extends StateNotifier<ChatModeState> {
 
   // ==================== 消息发送 ====================
 
-  /// 草稿会话发送预检：的
-  /// 「先验配置再物化」逻辑抽为公开方法——输入区在清空输入**之前**调用，
-  /// 返回 false 时错误横幅已落、输入原地保留（此前先清空再拒绝，长文
-  /// 输入与附件蒸发不可恢复）。非草稿会话恒通过。
-  Future<bool> precheckDraftSend() async {
+  /// 草稿会话发送前检查配置，失败时保留输入并提示配置问题。
+  Future<bool> _precheckDraftSend() async {
     if (!isDraftSession) return true;
     final preSettings = await _resolveSettings();
     final preApiKey = _cachedApiKey;
@@ -818,25 +1047,29 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   ///
   /// 压缩在用户消息前触发，确保摘要横幅显示在用户消息之前，
   /// 顺序为：摘要 → 用户消息 → AI回复。
-  Future<void> sendMessage(
+  ///
+  /// 返回 true 表示已写入用户消息。调用方可以据此清空输入。
+  Future<bool> sendMessage(
     String content, {
     List<MessageAttachment>? attachments,
-  }) async {
-    if (state.isSending) return;
-    //  修复：自动压缩进行中不允许发送——压缩与生成并发
-    // 会引发 _loadMessages 刷新与消息序抖动（此前只查 isSending）。
-    if (state.isCompressing) return;
+  }) =>
+      _runGeneration(
+        false,
+        (generation) => _prepareSend(generation, content, attachments),
+      );
 
+  Future<bool> _prepareSend(
+    _ChatGeneration generation,
+    String content,
+    List<MessageAttachment>? attachments,
+  ) async {
     state = state.copyWith(isSending: true, error: null);
-
+    var accepted = false;
     try {
       // 草稿场景先验配置再物化——无预设/模型/Key
       // 时不再创建真实会话并落库用户消息，否则新手反复尝试会累积一串
       // 空「新对话」。真实会话保持原行为（错误由 _sendToApi 全口径处理）。
-      // （：逻辑抽为 precheckDraftSend，输入区发送前先行调用。）
-      if (!await precheckDraftSend()) {
-        return;
-      }
+      if (!await _precheckDraftSend() || generation.isCancelled) return false;
 
       // 草稿会话检查：首次发送消息时创建真实会话
       if (isDraftSession) {
@@ -886,6 +1119,8 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         }
       }
 
+      if (generation.isCancelled) return false;
+
       // 若存在引用文本，格式化为 markdown 引用块拼接到用户输入前
       final quote = state.quoteText;
       var actualContent = content;
@@ -905,6 +1140,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       );
 
       await _chatRepository.addMessage(userMessage);
+      accepted = true;
       await _chatRepository.updateSessionLastActive(state.session.sessionId);
 
       final messages = List<ChatMessage>.from(state.messages)..add(userMessage);
@@ -917,7 +1153,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         quoteText: null, // 发送后清除引用
       );
 
-      await _sendToApi(userMessage);
+      if (!generation.isCancelled) await _sendToApi(generation, userMessage);
     } catch (e, stackTrace) {
       _logger.error(
         'Failed to send message',
@@ -936,20 +1172,22 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         ),
       );
     }
+    return accepted;
   }
 
   /// 发送到 API
   ///
   /// [branchIndex] 为本次生成的助手消息所属分支索引。
   Future<void> _sendToApi(
+    _ChatGeneration generation,
     ChatMessage userMessage, {
     int branchIndex = 0,
     ChatMessage? continueFrom,
   }) async {
     // 续写目标一次定值（普通发送/重生成/编辑重发不传 → null 清空）
     _continuationTarget = continueFrom;
-    _currentCancelToken = CancellationToken();
-    _backgroundInterrupted = false;
+    final attempt = generation.attempt;
+    if (attempt.cancelToken.isCancelled) return;
     _streamHandler.initStream(
       userMessage: userMessage,
       branchIndex: branchIndex,
@@ -958,6 +1196,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
 
     try {
       final settings = await _resolveSettings();
+      if (attempt.cancelToken.isCancelled) return;
 
       // 无预设时提前报错（S001 config）
       if (settings.presetId.isEmpty) {
@@ -1053,28 +1292,21 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         providerOptions: preset.providerOptions,
         connectTimeout: connectTimeout,
         readTimeout: readTimeout,
-        cancelToken: _currentCancelToken,
+        cancelToken: attempt.cancelToken,
       );
+      if (attempt.cancelToken.isCancelled) return;
 
       // 自动重试快照（零首字节失败时整轮重发同一请求；新发送重置计数）
       _autoRetry.reset();
       _lastStreamRequest = request;
       _lastStreamUserMessage = userMessage;
       _lastStreamBranchIndex = branchIndex;
-      _currentSubscription = _llmService.streamChat(request).listen(
-        (event) {
-          _handleLlmStreamEvent(event, userMessage);
-        },
-        onError: (Object error, StackTrace stackTrace) {
-          _handleStreamError(error, stackTrace);
-        },
-        onDone: _finishStreaming,
-      );
+      _listenToStream(generation, attempt, request, userMessage);
     } catch (e, stackTrace) {
+      if (attempt.cancelToken.isCancelled) return;
       _logger.error(
         'API request failed',
-        detail: '$e',
-        error: e,
+        detail: redactDiagnosticText('$e'),
         stackTrace: stackTrace,
       );
       // 持久化错误到助手消息（保留新分支显示错误，不回滚）
@@ -1082,6 +1314,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       final display = _classifier.formatPersisted(
         context.errorCategory,
         context.errorCode,
+        rawError: context.rawError,
       );
       await _persistErrorToMessage(display);
       _forkManager.clearPendingRollback();
@@ -1091,11 +1324,89 @@ class ChatModeController extends StateNotifier<ChatModeState> {
 
   // ==================== LLM 流式事件处理（委托给 StreamHandler） ====================
 
+  void _listenToStream(
+    _ChatGeneration generation,
+    _ChatStreamAttempt attempt,
+    LlmRequest request,
+    ChatMessage userMessage,
+  ) {
+    attempt.subscription = _llmService.streamChat(request).listen(
+      (event) {
+        if (identical(generation.attempt, attempt) && !attempt.isFinishing) {
+          _handleLlmStreamEvent(generation, attempt, event, userMessage);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        _finishAttempt(
+          generation,
+          attempt,
+          () => _handleStreamError(generation, attempt, error, stackTrace),
+        );
+      },
+      onDone: () {
+        _finishAttempt(
+          generation,
+          attempt,
+          () => _finishStreaming(generation),
+        );
+      },
+    );
+    generation.attempt = attempt;
+  }
+
+  void _finishAttempt(
+    _ChatGeneration generation,
+    _ChatStreamAttempt attempt,
+    Future<void> Function() finish,
+  ) {
+    if (attempt.isFinishing || !identical(generation.attempt, attempt)) return;
+    attempt.isFinishing = true;
+    unawaited(_completeAttempt(generation, attempt, finish));
+  }
+
+  Future<void> _completeAttempt(
+    _ChatGeneration generation,
+    _ChatStreamAttempt attempt,
+    Future<void> Function() finish,
+  ) async {
+    try {
+      await finish();
+    } catch (error, stackTrace) {
+      _logger.error(
+        'Failed to finish chat stream',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _forkManager.clearPendingRollback();
+    } finally {
+      // 重试可能已关闭旧订阅并接管本轮生成。
+      if (identical(generation.attempt, attempt)) {
+        try {
+          await attempt.cancelSubscription();
+        } catch (error, stackTrace) {
+          _logger.error(
+            'Failed to close chat stream subscription',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        } finally {
+          try {
+            if (mounted && state.isStreaming) _finalizeStream();
+          } finally {
+            generation.streamFinished.complete();
+          }
+        }
+      }
+    }
+  }
+
   /// 处理 LlmStreamEvent
-  Future<void> _handleLlmStreamEvent(
+  void _handleLlmStreamEvent(
+    _ChatGeneration generation,
+    _ChatStreamAttempt attempt,
     LlmStreamEvent event,
     ChatMessage userMessage,
-  ) async {
+  ) {
     if (event is LlmTextDelta) {
       _streamHandler.handleTextDelta(
         event.content,
@@ -1118,7 +1429,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
         currentAssistantMessageId: state.currentAssistantMessageId,
       );
     } else if (event is LlmStreamDone) {
-      await _finishStreaming(usage: event.usage);
+      _finishAttempt(
+        generation,
+        attempt,
+        () => _finishStreaming(generation, usage: event.usage),
+      );
     } else if (event is LlmStreamError) {
       // 错误路径先冲刷 32ms 合帧缓冲——否则落库的
       // 半截/错误卡比屏幕少最后 ≤32ms 增量，且迟到 timer 会在清态后继续
@@ -1126,65 +1441,31 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       _streamHandler.flushPendingDeltas();
       _logger.warn(
         'LLM stream error',
-        detail: '${event.code}: ${event.message}',
+        detail: redactDiagnosticText('${event.code}: ${event.message}'),
       );
-      // 2026-07-29 修复：之前硬编码 overrideCategory: network，导致 400 参数
-      // 验证错误等也被分类为 S002 network。改为构造异常对象传给 error 参数，
-      // 让 classifyError 从错误信息中解析 HTTP 状态码并按语义分类：
-      // - 400/4xx → config（S001，参数验证错误）
-      // - 401/403 → auth（S003）
-      // - 429 → rateLimit（S004）
-      // - 5xx → server（S005）
-      // - 无状态码 → network（S002，真正的网络连接问题）
-      final streamError = Exception('${event.code}: ${event.message}');
-      final context = await _recordError(
-        error: streamError,
-        overrideRawError: '${event.code}: ${event.message}',
+      final streamError = StreamErrorException(
+        event.message,
+        code: event.code,
+        retryAfter: event.retryAfter,
       );
-      // 自动重试薄壳（批 E / P5）：零首字节 + 可重试类别 → 重发同一请求
-      final retryDelay = await _planStreamAutoRetry(context.errorCategory);
-      if (retryDelay != null) {
-        await _resendLastStream(retryDelay);
-        return;
-      }
-      final display = _classifier.formatPersisted(
-        context.errorCategory,
-        context.errorCode,
-        rawError: context.rawError,
+      _finishAttempt(
+        generation,
+        attempt,
+        () => _persistStreamFailure(generation, attempt, streamError),
       );
-      await _persistErrorToMessage(display);
-      // currentUserMessage 置空标记本轮流已收口（错误事件后流还会
-      // onDone，finishStreaming 据此静默返回，不再二次投递完成回调）
-      _forkManager.clearPendingRollback();
-      _finalizeStream();
     }
   }
 
-  /// 流终点统一清态 helper。
-  ///
-  /// 收口 _sendToApi 三早退/catch 落库、LlmStreamError、_handleStreamError
-  /// 两分支共七个「离开流式生命周期」的开口——此前各开口逐字段手写
-  /// 清理，新增标志位时漏一即残留（的 isThinking 即此类回归）。
-  /// 统一清：流处理器影子态、busy/思考/当前助手锚点/后台生成标志。
-  /// [clearError] 供取消路径显式清空既有 error（copyWith 为 sentinel
-  /// 模式，显式传 null 才清空）。
-  ///
-  /// 不并入（各路径口径不同，留在调用点）：错误持久化；Fork 处理
-  /// （取消=回滚、错误=清计划、早退=不动）；`_continuationTarget`
-  /// （fire-and-forget 的 persist 尾巴仍会消费，早清会截断续写快照归属）；
-  /// 订阅与令牌强清理（cancelSending/recoverIfStuck 的超集路径不经此）。
+  /// 清除流式状态。取消路径可按原有交互清除错误提示。
   void _finalizeStream({bool clearError = false}) {
+    _backgroundInterrupted = false;
     _streamHandler.state.isViewingOtherBranch = false;
     _streamHandler.state.backgroundAssistantMessage = null;
     _streamHandler.state.currentUserMessage = null;
     _streamHandler.state.generatingAnchorUserMsgId = null;
-    // 批 F / P8：流正常收口时占位行还在 = 自动重试最终成功——
-    // 回写 recovered（这条失败被自动重试救回了）
-    if (state.autoRetryNotice != null && _lastFailureLogId > 0) {
-      unawaited(_failureLogRepository.markRecovered(_lastFailureLogId));
-      _lastFailureLogId = -1;
-    }
+    _continuationTarget = null;
     state = state.copyWith(
+      isSending: false,
       isStreaming: false,
       isThinking: false,
       currentAssistantMessageId: null,
@@ -1197,7 +1478,18 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   }
 
   /// 完成流式响应
-  Future<void> _finishStreaming({LlmUsage? usage}) async {
+  Future<void> _finishStreaming(
+    _ChatGeneration generation, {
+    LlmUsage? usage,
+  }) async {
+    if (generation.isCancelled) {
+      await _finishCancelledGeneration(
+        persistPartial: _forkManager.pendingForkRollback == null,
+        rollback: generation.rollbackOnStop || _backgroundInterrupted,
+        clearError: true,
+      );
+      return;
+    }
     await _streamHandler.finishStreaming(
       usage: usage,
       currentMessages: state.messages,
@@ -1206,60 +1498,69 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   }
 
   /// 处理流错误
-  Future<void> _handleStreamError(Object error, StackTrace stackTrace) async {
+  Future<void> _handleStreamError(
+    _ChatGeneration generation,
+    _ChatStreamAttempt attempt,
+    Object error,
+    StackTrace stackTrace,
+  ) async {
     // 错误路径先冲刷合帧缓冲（同 LlmStreamError 分支口径）
     _streamHandler.flushPendingDeltas();
     _logger.error(
       'Stream error',
-      detail: '$error',
-      error: error,
+      detail: redactDiagnosticText('$error'),
       stackTrace: stackTrace,
     );
-    if (error is CancelledException) {
-      // 用户主动取消（后台中断等令牌取消路径）：回滚 Fork 操作（恢复旧
-      // 分支），不持久化错误。半截回复先落库（：与用户主动停止
-      // 同口径，部分内容不再随刷新丢失）；Fork 回滚场景跳过（分支将被
-      // 回滚，落库会孤儿）。
-      final isForkRollback = _forkManager.pendingForkRollback != null;
-      if (!isForkRollback) {
-        _persistPartialAssistantMessage();
-        // 后台分支形态的半截内容同样落库（此前随缓冲清空蒸发）
-        _persistPartialBackgroundMessage();
-      }
-      // 续写目标兜底清空（无内容的续写停止已由 persist 消费或本就为空）
-      _continuationTarget = null;
-      await _rollbackForkIfNeeded();
-      // 思考期流错误若不清 isThinking，假忙残留
-      // 到下一轮首字——已由 _finalizeStream 统一收口。
-      _finalizeStream(clearError: true);
-    } else {
-      // API 失败：持久化错误到助手消息，不回滚分支（保留新分支显示错误）
-      // 续写失败回落旧的独立气泡形态（错误信息随占位消息落库）
-      _continuationTarget = null;
-      final context = await _recordError(error: error);
-      // 自动重试薄壳（批 E / P5）：零首字节 + 可重试类别 → 重发同一请求
-      final retryDelay = await _planStreamAutoRetry(context.errorCategory);
-      if (retryDelay != null) {
-        await _resendLastStream(retryDelay);
-        return;
-      }
-      final display = _classifier.formatPersisted(
-        context.errorCategory,
-        context.errorCode,
+    if (error is CancelledException || attempt.cancelToken.isCancelled) {
+      await _finishCancelledGeneration(
+        persistPartial: _forkManager.pendingForkRollback == null,
+        rollback: true,
+        clearError: true,
       );
-      await _persistErrorToMessage(display);
-      _forkManager.clearPendingRollback();
-      _finalizeStream();
+      return;
     }
+    await _persistStreamFailure(generation, attempt, error);
+  }
+
+  Future<void> _persistStreamFailure(
+    _ChatGeneration generation,
+    _ChatStreamAttempt attempt,
+    Object error,
+  ) async {
+    final context = await _recordError(error: error);
+    final retryDelay = await _planStreamAutoRetry(context.errorCategory);
+    if (retryDelay != null &&
+        await _resendLastStream(generation, attempt, retryDelay)) {
+      return;
+    }
+    if (attempt.cancelToken.isCancelled) {
+      await _finishCancelledGeneration(
+        persistPartial: _forkManager.pendingForkRollback == null,
+        rollback: generation.rollbackOnStop || _backgroundInterrupted,
+        clearError: true,
+      );
+      return;
+    }
+    final display = _classifier.formatPersisted(
+      context.errorCategory,
+      context.errorCode,
+      rawError: context.rawError,
+    );
+    // 保留新分支和错误信息。续写出错时沿用独立的错误消息。
+    _continuationTarget = null;
+    await _persistErrorToMessage(display);
+    _forkManager.clearPendingRollback();
   }
 
   /// 自动重试规划（P5/P8，批 E）：可重试且零首字节 → 等待延迟；否则 null。
   ///
-  /// **零首字节约束**：半截正文已进消息列表，整轮重发需清消息（复杂且
-  /// 易错）——有内容的流中断落现状 error 由用户处置；免费站典型病
-  /// （429/5xx/空响应/格式坏/早期断流）恰都发生在首字节之前。
+  /// 收到正文或思考内容后保留已收到的片段，把错误交给用户处置。
   Future<Duration?> _planStreamAutoRetry(String errorCategory) async {
-    if (_streamHandler.state.firstTokenLatency != null) return null;
+    final streamState = _streamHandler.state;
+    if (streamState.firstTokenLatency != null ||
+        streamState.thinkingStartTime != null) {
+      return null;
+    }
     final request = _lastStreamRequest;
     if (request == null || _lastStreamUserMessage == null) return null;
     final network = (await _settingsRepository.getResolvedConfig()).network;
@@ -1275,20 +1576,30 @@ class ChatModeController extends StateNotifier<ChatModeState> {
 
   /// 重发快照请求（等待期可被用户停止打断；重试期间维持生成态——
   /// 等待行渲染批 F 接入，本方法只负责重发）
-  Future<void> _resendLastStream(Duration delay) async {
+  Future<bool> _resendLastStream(
+    _ChatGeneration generation,
+    _ChatStreamAttempt attempt,
+    Duration delay,
+  ) async {
     final request = _lastStreamRequest;
     final userMessage = _lastStreamUserMessage;
-    if (request == null || userMessage == null) return;
+    if (request == null || userMessage == null) return false;
+    final token = attempt.cancelToken;
     if (delay > Duration.zero) {
-      final token = _currentCancelToken;
       final interrupted = Completer<void>();
-      token?.bind(interrupted.complete);
-      await Future.any<void>([
-        Future<void>.delayed(delay),
-        interrupted.future,
-      ]);
+      final interrupt = interrupted.complete;
+      final timer = Timer(delay, interrupt);
+      token.bind(interrupt);
+      try {
+        await interrupted.future;
+      } finally {
+        timer.cancel();
+        token.unbind(interrupt);
+      }
     }
-    if (_currentCancelToken?.isCancelled ?? false) return;
+    if (token.isCancelled) return false;
+    await attempt.cancelSubscription();
+    if (token.isCancelled) return false;
     _logger.warn(
       'Simple auto retry resending',
       detail: 'attempt=${_autoRetry.used}, delay=${delay.inMilliseconds}ms',
@@ -1298,24 +1609,20 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     state = state.copyWith(
       autoRetryNotice: '${_autoRetry.used}',
     );
-    // 新令牌重发（旧令牌已随旧流结束；复用会取消新流）
-    _currentCancelToken = CancellationToken();
+    if (token.isCancelled) return false;
+    final next = _ChatStreamAttempt();
     _streamHandler.initStream(
       userMessage: userMessage,
       branchIndex: _lastStreamBranchIndex,
       modelName: _streamHandler.state.currentModelName,
     );
-    _currentSubscription = _llmService
-        .streamChat(request.copyWith(cancelToken: _currentCancelToken))
-        .listen(
-      (event) {
-        _handleLlmStreamEvent(event, userMessage);
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        _handleStreamError(error, stackTrace);
-      },
-      onDone: _finishStreaming,
+    _listenToStream(
+      generation,
+      next,
+      request.copyWith(cancelToken: next.cancelToken),
+      userMessage,
     );
+    return true;
   }
 
   // ==================== 错误处理（诊断包） ====================
@@ -1338,15 +1645,16 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   }) async {
     String category;
     int? httpStatus;
-    String? rawError;
+    var rawError = overrideRawError == null
+        ? null
+        : redactDiagnosticText(overrideRawError);
     if (error != null) {
       final result = _classifier.classifyError(error);
       category = overrideCategory ?? result.category;
       httpStatus = result.httpStatus;
-      rawError = overrideRawError ?? result.rawError;
+      rawError ??= result.rawError;
     } else {
       category = overrideCategory ?? SimpleFailureClassifier.unknown;
-      rawError = overrideRawError;
     }
     final errorCode =
         overrideErrorCode ?? _classifier.errorCodeFromCategory(category);
@@ -1357,21 +1665,19 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       rawError: rawError,
     );
 
-    // 持久化到 failure_logs（unawaited 不阻塞主流程；Repository 静默降级）；
-    // 记 id 供自动重试成功后回写 recovered（批 F / P8）
-    unawaited(
-      _failureLogRepository
-          .insertLog(
-            sessionId: state.session.sessionId,
-            mode: ChatMode.chat,
-            errorCategory: category,
-            errorCode: errorCode,
-            httpStatus: httpStatus,
-            errorMessage: _classifier.resolveMessage(category),
-            rawError: rawError,
-          )
-          .then((entry) => _lastFailureLogId = entry.id),
-    );
+    // 初始化加载也可报错，诊断写入需要独立于生成的保护。
+    await _runStoreWrite<void>(null, () async {
+      final entry = await _failureLogRepository.insertLog(
+        sessionId: state.session.sessionId,
+        mode: ChatMode.chat,
+        errorCategory: category,
+        errorCode: errorCode,
+        httpStatus: httpStatus,
+        errorMessage: _classifier.resolveMessage(category),
+        rawError: rawError,
+      );
+      _lastFailureLogId = entry.id;
+    });
 
     return context;
   }
@@ -1442,14 +1748,22 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 半截——属于生成分支，而该分支此刻以快照形式存在。优先写入该分支
   /// 快照尾部；无法定位（普通发送无锚点/嵌套锚点等边缘）时回退
   /// addMessage 保数据（与旧行为一致，至少不丢）。
-  Future<void> _persistBackgroundBranchMessage(ChatMessage message) async {
-    final genAnchor = _streamHandler.state.generatingAnchorUserMsgId;
-    final genBranch = _streamHandler.state.currentBranchIndex;
+  Future<void> _persistBackgroundBranchMessage(
+    ChatMessage message, {
+    ({String? anchor, int index})? branch,
+  }) async {
+    final target = branch ??
+        (
+          anchor: _streamHandler.state.generatingAnchorUserMsgId,
+          index: _streamHandler.state.currentBranchIndex,
+        );
+    final genAnchor = target.anchor;
+    final genBranch = target.index;
     try {
       var stored = false;
       if (genAnchor != null && genAnchor.isNotEmpty && genBranch >= 0) {
         stored = await _chatRepository.appendMessageToBranchSnapshot(
-          sessionId: state.session.sessionId,
+          sessionId: message.sessionId,
           anchorUserMsgId: genAnchor,
           branchIndex: genBranch,
           message: message,
@@ -1464,8 +1778,8 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       if (!stored) {
         await _chatRepository.addMessage(message);
       }
-      await _chatRepository.updateSessionLastActive(state.session.sessionId);
-      await _updateMessageCount();
+      await _chatRepository.updateSessionLastActive(message.sessionId);
+      await _updateMessageCount(message.sessionId);
     } catch (e, stackTrace) {
       _logger.error(
         'Failed to persist background branch message',
@@ -1490,7 +1804,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 无「已中断·续写」徽标）。ChatBox 参照（chatbox
   /// stores/session/generation.ts）：其续写本身即新消息、停止时半截
   /// 原样持久化——内核是「停止不丢内容」，与合并语义不冲突。
-  void _persistPartialBackgroundMessage() {
+  Future<void> _persistPartialBackgroundMessage() async {
     if (!_streamHandler.state.isViewingOtherBranch) return;
     final bg = _streamHandler.state.backgroundAssistantMessage;
     if (bg == null) return;
@@ -1500,22 +1814,22 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     final target = _continuationTarget;
     if (target != null && content.isNotEmpty) {
       _continuationTarget = null;
-      unawaited(
-        _appendContinuationInBackgroundBranch(
-          target: target,
-          continuation: content,
-          finalMessage: bg,
-        ),
+      await _appendContinuationInBackgroundBranch(
+        target: target,
+        continuation: content,
+        finalMessage: bg,
       );
       return;
     }
-    unawaited(_persistBackgroundBranchMessage(bg));
+    await _persistBackgroundBranchMessage(bg);
   }
 
   /// 更新消息计数
-  Future<void> _updateMessageCount() async {
-    final count =
-        await _messageManager.updateMessageCount(state.session.sessionId);
+  Future<void> _updateMessageCount([String? sessionId]) async {
+    final count = await _messageManager.updateMessageCount(
+      sessionId ?? state.session.sessionId,
+    );
+    if (!mounted) return;
     state = state.copyWith(
       session: state.session.copyWith(messageCount: count),
     );
@@ -1526,43 +1840,64 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 取消发送
   ///
   /// [persistPartial] 为 true 时（用户主动停止的正常发送流），已累积的
-  /// 半截回复先落库再清状态——此前部分内容仅存内存，任何 _loadMessages
+  /// 半截回复会写回当前生成分支——此前部分内容仅存内存，任何 _loadMessages
   /// （删消息/切分支/重开 App）即消失，且「继续生成」看不到半截内容，
   /// 实际退化为整篇重复生成。
   /// Fork 回滚场景（重新生成/编辑重发中停止）传 false：新分支将被回滚，
   /// 落库会造成孤儿消息。
   void cancelSending({bool persistPartial = true}) {
-    //  流式节流：停止前先冲贴合帧缓冲——待合帧的尾段增量必须先落进
-    // state.messages，半截回复落库才能取到完整内容
-    _streamHandler.flushPendingDeltas();
-    if (persistPartial) {
-      _persistPartialAssistantMessage();
-      // 后台模式下 currentAssistantMessageId==null，上面的方法
-      // 早退——半截内容在 state.reset() 前补落库（快照归属语义）
-      _persistPartialBackgroundMessage();
+    final generation = _generation;
+    if (generation != null) {
+      _requestStop(generation, persistPartial: persistPartial, rollback: false);
     }
-    _currentCancelToken?.cancel();
-    _currentSubscription?.cancel();
-    _currentSubscription = null;
-    _currentCancelToken = null;
+  }
+
+  void _requestStop(
+    _ChatGeneration generation, {
+    required bool persistPartial,
+    required bool rollback,
+  }) {
+    generation.rollbackOnStop = rollback || generation.rollbackOnStop;
+    final attempt = generation.attempt;
+    if (attempt.subscription != null) {
+      _finishAttempt(
+        generation,
+        attempt,
+        () => _finishCancelledGeneration(
+          persistPartial: persistPartial,
+          rollback: rollback,
+        ),
+      );
+    }
+    attempt.cancelToken.cancel();
+  }
+
+  Future<void> _finishCancelledGeneration({
+    required bool persistPartial,
+    required bool rollback,
+    bool clearError = false,
+  }) async {
+    _streamHandler.flushPendingDeltas();
+    // 清除流式状态前先取出半截回复与生成分支。
+    final writes = [
+      if (persistPartial) _persistPartialAssistantMessage(),
+      if (persistPartial) _persistPartialBackgroundMessage(),
+    ];
     _streamHandler.state.reset();
     _cachedApiKey = null;
-
-    state = state.copyWith(
-      isStreaming: false,
-      isSending: false,
-      isThinking: false,
-      currentAssistantMessageId: null,
-      generatingAnchorUserMsgId: null,
-      isGeneratingInBackground: false,
-    );
+    if (mounted) _finalizeStream(clearError: clearError);
+    await Future.wait(writes);
+    if (rollback && mounted) {
+      await _rollbackForkIfNeeded();
+      await _refreshForkAnchors();
+    }
   }
 
   /// 把流式中的半截回复落库（停止/中断时调用）
   ///
   /// 无累积内容（首 token 前）或消息不在列表中时静默跳过；
   /// 持久化失败仅记日志（与 persistAssistantMessage 同口径，不阻塞取消）。
-  void _persistPartialAssistantMessage() {
+  Future<void> _persistPartialAssistantMessage() async {
     final id = state.currentAssistantMessageId;
     if (id == null) return;
     final index = state.messages.indexWhere((m) => m.messageId == id);
@@ -1575,40 +1910,36 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     // 续写中途停止——半截续写段同样并入被续写消息
     // （单气泡不破，内容不丢）；徽标随 appendContinuation 落库。
     final target = _continuationTarget;
-    if (target != null && (partial.content ?? '').isNotEmpty) {
-      _continuationTarget = null;
+    try {
       final continuation = partial.content ?? '';
-      unawaited(
-        _chatRepository
-            .appendContinuation(target.messageId, continuation)
-            .then((_) {
-          final messages =
-              state.messages.where((m) => m.messageId != id).toList();
-          final idx = messages.indexWhere(
-            (m) => m.messageId == target.messageId,
+      if (target != null && continuation.isNotEmpty) {
+        _continuationTarget = null;
+        await _chatRepository.appendContinuation(
+          target.messageId,
+          continuation,
+        );
+        if (!mounted) return;
+        final messages =
+            state.messages.where((m) => m.messageId != id).toList();
+        final idx = messages.indexWhere((m) => m.messageId == target.messageId);
+        if (idx != -1) {
+          messages[idx] = messages[idx].copyWith(
+            content: (messages[idx].content ?? '') + continuation,
+            isContinued: true,
           );
-          if (idx != -1) {
-            messages[idx] = messages[idx].copyWith(
-              content: (messages[idx].content ?? '') + continuation,
-              isContinued: true,
-            );
-          }
-          state = state.copyWith(messages: messages);
-        }).catchError((Object e) {
-          _logger.error('Failed to append partial continuation', detail: '$e');
-        }),
+        }
+        state = state.copyWith(messages: messages);
+      } else {
+        await _messageManager.persistAssistantMessage(partial);
+        await _updateMessageCount(partial.sessionId);
+      }
+    } catch (error, stackTrace) {
+      _logger.error(
+        'Failed to persist partial message',
+        error: error,
+        stackTrace: stackTrace,
       );
-      return;
     }
-
-    unawaited(
-      _messageManager
-          .persistAssistantMessage(partial)
-          .then((_) => _updateMessageCount())
-          .catchError((Object e) {
-        _logger.error('Failed to persist partial message', detail: '$e');
-      }),
-    );
   }
 
   /// App 切到后台时主动中断生成（由 `MainLayout._handleAppPaused` 调用）。
@@ -1620,55 +1951,26 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 如果 resumed 时 `_handleStreamError` 尚未完成（async），isStreaming 仍为
   /// true，`recoverIfStuck` 通过此标志也能检测到并恢复。
   void onBackgroundInterrupt() {
-    // 守卫：不在流式状态则无需中断，直接跳过
-    if (!state.isStreaming) return;
+    final generation = _generation;
+    if (!state.isStreaming || generation == null) return;
     _backgroundInterrupted = true;
-    _currentCancelToken?.cancel();
+    generation.attempt.cancelToken.cancel();
   }
 
   /// 检测并恢复卡死状态（App 从后台恢复时调用）。
   ///
-  /// 场景：App 切后台时 OS 暂停网络 → readTimeout 误杀流 → 流死但
-  /// isStreaming 仍为 true。切回前台时检测到 `_currentSubscription == null`
-  /// 但 isStreaming=true → 清理到可发送状态。
-  ///
   /// 返回 true 表示发生了恢复（调用方应提示用户"后台生成已中断"）。
   bool recoverIfStuck() {
-    if (_backgroundInterrupted ||
-        (state.isStreaming && _currentSubscription == null)) {
-      _backgroundInterrupted = false;
-      // 清理前先冲贴合帧缓冲（同 cancelSending）
-      _streamHandler.flushPendingDeltas();
-      // 前台半截回复与后台缓冲同口径补落库——
-      // 移动端 paused→resume 时序下（事件循环冻结，CancelledException
-      // 排队未投递），本方法先于 _handleStreamError 执行并 cancel 订阅
-      // 压制了其落库路径，前台半截此前直接丢失。Fork 回滚挂起时跳过
-      // （新分支将被回滚，落库会孤儿，与 _handleStreamError 同口径）。
-      if (_forkManager.pendingForkRollback == null) {
-        _persistPartialAssistantMessage();
-        _persistPartialBackgroundMessage();
-      }
-      _continuationTarget = null;
-      // 先取消订阅再清 controller 态——订阅 cancel 后未投递的
-      // onError/onDone 不再触发 _handleStreamError 与下方清态竞态
-      _currentCancelToken = null;
-      _currentSubscription?.cancel();
-      _currentSubscription = null;
-      _cachedApiKey = null;
-      // 与 cancelSending 同口径：重置流式状态（含后台模式标志，否则残留
-      // 的 isViewingOtherBranch 会让下一轮 delta 误入后台缓冲）
-      _streamHandler.state.reset();
-      state = state.copyWith(
-        isStreaming: false,
-        isSending: false,
-        isThinking: false,
-        currentAssistantMessageId: null,
-        generatingAnchorUserMsgId: null,
-        isGeneratingInBackground: false,
-      );
-      return true;
-    }
-    return false;
+    final generation = _generation;
+    if (!_backgroundInterrupted || generation == null) return false;
+
+    _backgroundInterrupted = false;
+    _requestStop(
+      generation,
+      persistPartial: _forkManager.pendingForkRollback == null,
+      rollback: true,
+    );
+    return true;
   }
 
   /// 取消发送并回滚 Fork（用于用户主动终止重新生成/编辑重发的场景）
@@ -1682,15 +1984,14 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 2. _rollbackForkIfNeeded() - 回滚分支记录，从快照恢复旧分支消息
   /// 3. _refreshForkAnchors() - 刷新分支锚点，更新分支导航按钮
   Future<void> cancelSendingWithRollback() async {
-    // 仅在真有 Fork 回滚挂起时（重新生成/
-    // 编辑重发中停止）半截回复不落库——新分支将被撤销，落库会造成孤儿消息。
-    // 正常发送/续写中停止必须落库（B' 承诺的"停止→半截气泡保留→继续生成
-    // 接写"场景，此前被此处无条件 persistPartial:false 抵消，回归测试又只
-    // 测了 cancelSending 直调路径而未覆盖 UI 接线）。
-    final hasPendingRollback = _forkManager.pendingForkRollback != null;
-    cancelSending(persistPartial: !hasPendingRollback);
-    await _rollbackForkIfNeeded();
-    await _refreshForkAnchors();
+    final generation = _generation;
+    if (generation == null) return;
+    _requestStop(
+      generation,
+      persistPartial: _forkManager.pendingForkRollback == null,
+      rollback: true,
+    );
+    await generation.settled.future;
   }
 
   // ==================== Fork 操作（委托给 ForkManager） ====================
@@ -1701,11 +2002,16 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 1. 委托 ForkManager 创建新分支并保存旧分支快照
   /// 2. 截断消息列表到锚点用户消息
   /// 3. 发送 API 请求生成新回复
-  Future<void> regenerateInNewFork(String assistantMessageId) async {
-    if (state.isSending || state.isStreaming || state.isCompressing) return;
+  Future<void> regenerateInNewFork(String assistantMessageId) =>
+      _runGeneration<void>(
+        null,
+        (generation) => _prepareRegeneration(generation, assistantMessageId),
+      );
 
-    cancelSending();
-
+  Future<void> _prepareRegeneration(
+    _ChatGeneration generation,
+    String assistantMessageId,
+  ) async {
     final result = await _forkManager.regenerateInNewFork(
       sessionId: state.session.sessionId,
       assistantMessageId: assistantMessageId,
@@ -1718,13 +2024,17 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     }
 
     // 检查 Fork 是否在 await 期间被回滚（用户点了终止按钮）
-    if (_forkManager.pendingForkRollback == null) return;
+    if (generation.isCancelled || _forkManager.pendingForkRollback == null) {
+      return;
+    }
 
     // 立即刷新 Fork 锚点，让分支导航在生成过程中就显示（可切换到旧分支）
     await _refreshForkAnchors();
 
     // 再次检查：refreshForkAnchors 的 await 期间是否被回滚
-    if (_forkManager.pendingForkRollback == null) return;
+    if (generation.isCancelled || _forkManager.pendingForkRollback == null) {
+      return;
+    }
 
     state = state.copyWith(
       messages: result.truncatedMessages,
@@ -1738,7 +2048,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       error: null,
     );
 
-    await _sendToApi(result.userMessage, branchIndex: result.newBranchIndex);
+    await _sendToApi(
+      generation,
+      result.userMessage,
+      branchIndex: result.newBranchIndex,
+    );
   }
 
   /// 续写接写合并：「继续生成」的目标半截消息。
@@ -1761,9 +2075,10 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 锚点后有半截 assistant 回复时走接写合并——API
   /// 上下文把半截+续写指令合并为单条，完成后新内容追加进被续写消息
   /// （单气泡+徽标）；无半截（如清空后）回落旧的两气泡形态。
-  Future<void> continueGenerating() async {
-    if (state.isSending || state.isCompressing || state.isStreaming) return;
+  Future<void> continueGenerating() =>
+      _runGeneration<void>(null, _prepareContinuation);
 
+  Future<void> _prepareContinuation(_ChatGeneration generation) async {
     ChatMessage? anchor;
     var anchorIndex = -1;
     for (var i = state.messages.length - 1; i >= 0; i--) {
@@ -1799,7 +2114,12 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       isGeneratingInBackground: false,
       error: null,
     );
-    await _sendToApi(anchor, branchIndex: branchIndex, continueFrom: half);
+    await _sendToApi(
+      generation,
+      anchor,
+      branchIndex: branchIndex,
+      continueFrom: half,
+    );
   }
 
   /// 编辑用户消息并重新发送（在新分支中生成）
@@ -1811,11 +2131,21 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   Future<void> editAndResendInNewFork(
     String userMessageId,
     String newContent,
+  ) =>
+      _runGeneration<void>(
+        null,
+        (generation) => _prepareEditAndResend(
+          generation,
+          userMessageId,
+          newContent,
+        ),
+      );
+
+  Future<void> _prepareEditAndResend(
+    _ChatGeneration generation,
+    String userMessageId,
+    String newContent,
   ) async {
-    if (state.isSending || state.isStreaming || state.isCompressing) return;
-
-    cancelSending();
-
     final result = await _forkManager.editAndResendInNewFork(
       sessionId: state.session.sessionId,
       userMessageId: userMessageId,
@@ -1829,13 +2159,17 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     }
 
     // 检查 Fork 是否在 await 期间被回滚（用户点了终止按钮）
-    if (_forkManager.pendingForkRollback == null) return;
+    if (generation.isCancelled || _forkManager.pendingForkRollback == null) {
+      return;
+    }
 
     // 立即刷新 Fork 锚点，让分支导航在生成过程中就显示（可切换到旧分支）
     await _refreshForkAnchors();
 
     // 再次检查：refreshForkAnchors 的 await 期间是否被回滚
-    if (_forkManager.pendingForkRollback == null) return;
+    if (generation.isCancelled || _forkManager.pendingForkRollback == null) {
+      return;
+    }
 
     state = state.copyWith(
       messages: result.truncatedMessages,
@@ -1847,7 +2181,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       error: null,
     );
 
-    await _sendToApi(result.userMessage, branchIndex: result.newBranchIndex);
+    await _sendToApi(
+      generation,
+      result.userMessage,
+      branchIndex: result.newBranchIndex,
+    );
   }
 
   /// 切换 Fork 分支（循环切换）
@@ -1861,10 +2199,19 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   Future<void> switchFork(
     String anchorUserMsgId,
     ForkSwitchDirection direction,
+  ) =>
+      _runStoreWrite<void>(null, () => _switchFork(anchorUserMsgId, direction));
+
+  Future<void> _switchFork(
+    String anchorUserMsgId,
+    ForkSwitchDirection direction,
   ) async {
     // 压缩窗口内禁止切换分支——快照交换会与
     // 正在流式落库的压缩 boundary/摘要交错，破坏  的压缩点一致性
-    if (state.isCompressing) return;
+    final isFinishing = _generation?.attempt.isFinishing ?? false;
+    if (state.isCompressing || isFinishing) {
+      return;
+    }
     // 流式生成期间切换分支：进入后台模式
     if (state.isStreaming && !_streamHandler.state.isViewingOtherBranch) {
       _streamHandler.enterBackgroundMode(
@@ -1969,8 +2316,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   ///
   /// 快照模型下，删除助手消息会同时删除其尾部消息，
   /// 并通过 removeForkBranchWithSnapshot 维护分支记录。
-  Future<void> deleteMessage(String messageId) async {
-    if (state.isSending || state.isStreaming || state.isCompressing) return;
+  Future<void> deleteMessage(String messageId) =>
+      _runStoreWrite<void>(null, () => _deleteMessage(messageId));
+
+  Future<void> _deleteMessage(String messageId) async {
+    if (_isBusy) return;
 
     final result = await _messageManager.deleteMessage(
       sessionId: state.session.sessionId,
@@ -1982,6 +2332,9 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     if (result.needReload) {
       await _loadMessages();
       await _updateMessageCount();
+    } else {
+      // 无重载路径也要刷新主数字，避免删除后仍显示删除前旧值
+      await _refreshContextEstimateFromMaterials();
     }
   }
 
@@ -1989,8 +2342,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   ///
   /// 删除摘要消息 + 关联的 CompactionPoint，使原始消息恢复到上下文中。
   /// 这是压缩操作的"反悔"机制：删除摘要后，被压缩的旧消息重新可见且参与上下文。
-  Future<void> deleteSummary(String messageId) async {
-    if (state.isSending || state.isStreaming || state.isCompressing) return;
+  Future<void> deleteSummary(String messageId) =>
+      _runStoreWrite<void>(null, () => _deleteSummary(messageId));
+
+  Future<void> _deleteSummary(String messageId) async {
+    if (_isBusy) return;
 
     final success = await _messageManager.deleteSummary(
       sessionId: state.session.sessionId,
@@ -2009,8 +2365,11 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 编辑摘要内容（对标 ChatBox SummaryMessage handleEdit）
   ///
   /// 用户可手动修正摘要内容。仅更新消息文本，不影响 CompactionPoint。
-  Future<void> editSummary(String messageId, String newContent) async {
-    if (state.isSending || state.isStreaming || state.isCompressing) return;
+  Future<void> editSummary(String messageId, String newContent) =>
+      _runStoreWrite<void>(null, () => _editSummary(messageId, newContent));
+
+  Future<void> _editSummary(String messageId, String newContent) async {
+    if (_isBusy) return;
 
     final success = await _messageManager.editSummaryContent(
       messageId,
@@ -2063,7 +2422,13 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 仅编辑消息内容（不重新发送，对标 ChatBox "Save"）
   ///
   /// 原地更新消息内容，不创建新分支。
-  Future<void> editMessageContent(String messageId, String newContent) async {
+  Future<void> editMessageContent(String messageId, String newContent) =>
+      _runStoreWrite<void>(
+        null,
+        () => _editMessageContent(messageId, newContent),
+      );
+
+  Future<void> _editMessageContent(String messageId, String newContent) async {
     await _messageManager.editMessageContent(messageId, newContent);
     final messages = state.messages.map((m) {
       if (m.messageId == messageId) return m.copyWith(content: newContent);
@@ -2090,8 +2455,10 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// - 取消正在进行的流式请求
   /// - 清除所有流式相关内部字段
   /// - 清空 state 中的消息、分支锚点、错误等
-  Future<void> clearMessages() async {
-    if (state.isSending || state.isStreaming || state.isCompressing) return;
+  Future<void> clearMessages() => _runStoreWrite<void>(null, _clearMessages);
+
+  Future<void> _clearMessages() async {
+    if (_isBusy) return;
     try {
       // 草稿会话未入库，跳过数据库操作
       if (!isDraftSession) {
@@ -2115,10 +2482,6 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       }
 
       // 完全重置所有内部字段
-      _currentCancelToken?.cancel();
-      await _currentSubscription?.cancel();
-      _currentSubscription = null;
-      _currentCancelToken = null;
       _cachedApiKey = null;
       _streamHandler.state.reset();
 
@@ -2159,11 +2522,12 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// 与自动压缩复用同一条流式路径，确保 UI 展示一致的流式生成过程。
   ///
   /// 返回 [CompressResult]，UI 层据此决定是否弹标题更新对话框。
-  Future<CompressResult> compressHistory() async {
+  Future<CompressResult> compressHistory() =>
+      _runStoreWrite(CompressResult.busy, _compressIfEnoughMessages);
+
+  Future<CompressResult> _compressIfEnoughMessages() async {
     // 防抖锁：压缩中/发送中/流式中 直接返回
-    if (state.isCompressing || state.isSending || state.isStreaming) {
-      return CompressResult.busy;
-    }
+    if (_isBusy) return CompressResult.busy;
     if (state.messages.where((m) => !m.isSummary).length < 2) {
       return CompressResult.insufficient;
     }
@@ -2197,6 +2561,8 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     // 本轮压缩的取消令牌（cancelCompaction 触发流中止）
     final cancelToken = CancellationToken();
     _compactionCancelToken = cancelToken;
+    Timer? dbWriteTimer;
+    Future<void>? pendingDbWrite;
 
     try {
       // 获取当前有效上下文（含旧摘要，对标 ChatBox）
@@ -2234,13 +2600,14 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       // state（打字效果）仍逐 delta 更新；DB 写回解耦合帧——流式摘要动辄
       // 数百 delta，此前每 delta 一次 UPDATE 既放大 IO 又延长事务占用。
       // onComplete/onError 前显式冲刷（flushNow），最终内容必落库。
-      Timer? dbWriteTimer;
       Future<void> flushDbWrite() async {
         dbWriteTimer?.cancel();
         dbWriteTimer = null;
+        final content = buffer.toString();
+        await pendingDbWrite;
         await _chatRepository.updateMessageContent(
           placeholderId,
-          buffer.toString(),
+          content,
         );
       }
 
@@ -2264,7 +2631,15 @@ class ChatModeController extends StateNotifier<ChatModeState> {
           // DB：100ms 合帧写回（尾段由 onComplete/onError 前的 flushNow 兜底）
           dbWriteTimer ??= Timer(const Duration(milliseconds: 100), () {
             // lm-motion-exempt: DB 写盘去抖（持久化节流）
-            unawaited(flushDbWrite());
+            pendingDbWrite = flushDbWrite().catchError(
+              (Object error, StackTrace stackTrace) {
+                _logger.error(
+                  'Failed to update partial summary',
+                  error: error,
+                  stackTrace: stackTrace,
+                );
+              },
+            );
           });
         },
         onComplete: (fullSummary, tokensUsed) async {
@@ -2309,6 +2684,7 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       // 流已收尾（onComplete/onError 已冲刷），撤销残留计时器
       dbWriteTimer?.cancel();
       dbWriteTimer = null;
+      await pendingDbWrite;
 
       if (failed) {
         return CompressResult.failed;
@@ -2358,11 +2734,15 @@ class ChatModeController extends StateNotifier<ChatModeState> {
       );
       return CompressResult.failed;
     } finally {
+      dbWriteTimer?.cancel();
+      await pendingDbWrite;
       _compactionCancelToken = null;
-      state = state.copyWith(
-        isCompressing: false,
-        currentCompactionSummaryId: null,
-      );
+      if (mounted) {
+        state = state.copyWith(
+          isCompressing: false,
+          currentCompactionSummaryId: null,
+        );
+      }
     }
   }
 
@@ -2376,25 +2756,32 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   ///
   /// 失败摘要消息无关联的 CompactionPoint，deleteSummary 内部的
   /// deleteCompactionPointBySummaryId 是 no-op，安全。
-  Future<CompressResult> retryCompaction(String failedMessageId) async {
+  Future<CompressResult> retryCompaction(String failedMessageId) =>
+      _runStoreWrite(
+        CompressResult.busy,
+        () => _retryCompaction(failedMessageId),
+      );
+
+  Future<CompressResult> _retryCompaction(String failedMessageId) async {
     // 入口先查忙再删失败卡——此前先
     // deleteFailedSummary（无守卫）再进 compressHistory 的防抖锁：
     // 生成中点重试会先删掉失败卡并把 state.messages 用 DB 快照整替
     // （内存中未落库的流式气泡被清出屏幕），最后才拿到 busy 且无提示。
     // 与 compressHistory 入口同口径拦截。
-    if (state.isSending || state.isStreaming || state.isCompressing) {
-      return CompressResult.busy;
-    }
+    if (_isBusy) return CompressResult.busy;
     // deleteFailedSummary 内部已 _loadMessages，
     // 去掉此前的显式重载（同操作双重全量读库+两帧列表重建）
-    await deleteFailedSummary(failedMessageId);
-    return compressHistory();
+    await _deleteFailedSummary(failedMessageId);
+    return _compressIfEnoughMessages();
   }
 
   /// 删除失败的摘要消息（用户点失败卡片的关闭按钮）
   ///
   /// 失败摘要无 CompactionPoint，直接 deleteMessage 即可。
-  Future<void> deleteFailedSummary(String messageId) async {
+  Future<void> deleteFailedSummary(String messageId) =>
+      _runStoreWrite<void>(null, () => _deleteFailedSummary(messageId));
+
+  Future<void> _deleteFailedSummary(String messageId) async {
     await _chatRepository.deleteMessage(messageId);
     await _loadMessages();
   }
@@ -2449,24 +2836,10 @@ class ChatModeController extends StateNotifier<ChatModeState> {
     //   避免摘要被丢弃导致历史上下文断层。
     // - 若无摘要（未触发压缩），直接取最后 N 条。
     // - N <= 0 时不截断；N >= 已有消息数时不截断。
-    if (maxContextMessages != null &&
-        maxContextMessages > 0 &&
-        contextMessages.length > maxContextMessages) {
-      final hasSummary =
-          contextMessages.isNotEmpty && contextMessages.first.isSummary;
-      if (hasSummary && maxContextMessages > 1) {
-        final summary = contextMessages.first;
-        final rest = contextMessages.skip(1).toList();
-        final keep = rest.length > maxContextMessages - 1
-            ? rest.sublist(rest.length - (maxContextMessages - 1))
-            : rest;
-        contextMessages = [summary, ...keep];
-      } else {
-        contextMessages = contextMessages.sublist(
-          contextMessages.length - maxContextMessages,
-        );
-      }
-    }
+    contextMessages = _truncateContextMessages(
+      contextMessages,
+      maxContextMessages,
+    );
 
     for (final message in contextMessages) {
       // 跳过无内容的消息（如纯思考消息）
@@ -2594,7 +2967,10 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   /// - 取前 4 条非 system 消息，每条截取前 100 字符
   /// - 调用 LLM 生成简短标题（最多 10 个字）
   /// - 失败时回退到截取第一条用户消息前 20 字符
-  Future<bool> _autoNameSession({bool force = false}) async {
+  Future<bool> _autoNameSession({bool force = false}) =>
+      _runStoreWrite(false, () => _nameSession(force: force));
+
+  Future<bool> _nameSession({required bool force}) async {
     try {
       final title = state.session.title;
       // 仅对默认标题或空标题的会话自动命名（force=true 时绕过此检查）。
@@ -2755,6 +3131,27 @@ class ChatModeController extends StateNotifier<ChatModeState> {
   @override
   void dispose() {
     cancelSending();
+    cancelCompaction();
     super.dispose();
+  }
+}
+
+final class _ChatGeneration {
+  // 订阅结束后还要等准备路径退出，再释放存储占用。
+  final streamFinished = Completer<void>();
+  final settled = Completer<void>();
+  _ChatStreamAttempt attempt = _ChatStreamAttempt();
+  bool rollbackOnStop = false;
+
+  bool get isCancelled => attempt.cancelToken.isCancelled;
+}
+
+final class _ChatStreamAttempt {
+  final cancelToken = CancellationToken();
+  StreamSubscription<LlmStreamEvent>? subscription;
+  bool isFinishing = false;
+
+  Future<void> cancelSubscription() async {
+    await subscription?.cancel();
   }
 }

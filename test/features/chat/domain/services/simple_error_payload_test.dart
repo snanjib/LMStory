@@ -48,6 +48,16 @@ void main() {
       expect(SimpleErrorPayload.tryDecode('lmerr:"plain string"'), isNull);
     });
 
+    test('malformed optional fields leave the valid message readable', () {
+      final decoded = SimpleErrorPayload.tryDecode(
+        'lmerr:{"message":"Try again","code":9,"suggestion":false,"detail":[]}',
+      );
+      expect(decoded?.message, 'Try again');
+      expect(decoded?.code, isNull);
+      expect(decoded?.suggestion, isNull);
+      expect(decoded?.detail, isNull);
+    });
+
     test('formatPersisted 与 buildErrorPayload 同源（分类取值+detail 截断）', () {
       const classifier = SimpleFailureClassifier();
       final persisted = classifier.formatPersisted(

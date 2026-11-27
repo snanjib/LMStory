@@ -15,7 +15,7 @@ import 'package:lmstory/features/settings/domain/services/data_management_servic
 /// 2. 滚动保留最近 2 份（自动备份 3 份窗口互不挤占）
 /// 3. 自动备份的 _rollingTrim 不得删快照，也不得删用户手放的外来 .json
 ///
-/// 4. 空库不快照（无物可保护，避免堆积无意义文件）
+/// 4. 快照由导入服务决定，管理器可为零会话的设备写文件
 /// 5. 快照失败向上抛（fail-closed，由导入链中止——与 runIfNeeded 的
 ///   「失败仅记日志」不同口径）
 void main() {
@@ -68,8 +68,7 @@ void main() {
   test('快照写入 pre_import 前缀文件，内容为 v3 全量导出（不含 Key）', () async {
     final file = await manager.createPreImportSnapshot();
 
-    expect(file, isNotNull);
-    expect(file!.path, contains(AutoBackupManager.preImportFileNamePrefix));
+    expect(file.path, contains(AutoBackupManager.preImportFileNamePrefix));
     expect(
       dataService.lastExportOptions?.includeApiKeys,
       isFalse,
@@ -81,7 +80,6 @@ void main() {
   test('原子写——目录内不留 .tmp 残留且内容完整可解析', () async {
     final file = await manager.createPreImportSnapshot();
 
-    expect(file, isNotNull);
     final backupsDir = Directory(
       '${tempDir.path}${Platform.pathSeparator}backups',
     );
@@ -92,13 +90,28 @@ void main() {
         .toList();
     expect(tmpLeftovers, isEmpty, reason: 'temp+rename 落定后不得残留 .tmp');
     // 内容完整（rename 前已 flush，非半截 JSON）
-    expect(jsonDecode(file!.readAsStringSync()), isA<Map<String, dynamic>>());
+    expect(jsonDecode(file.readAsStringSync()), isA<Map<String, dynamic>>());
   });
 
-  test('空库不快照', () async {
+  test('零会话仍可保护独立配置和资产', () async {
     chatRepo.sessions = [];
     final file = await manager.createPreImportSnapshot();
-    expect(file, isNull);
+    expect(file.existsSync(), isTrue);
+    expect((await manager.listPreImportSnapshots()).single.path, file.path);
+  });
+
+  test('同秒连续快照有独立路径', () async {
+    final first = await manager.createPreImportSnapshot();
+    final second = await manager.createPreImportSnapshot();
+    expect(first.path, isNot(second.path));
+    expect(await manager.listPreImportSnapshots(), hasLength(2));
+  });
+
+  test('校验失败的导出内容不会进入恢复列表', () async {
+    final first = await manager.createPreImportSnapshot();
+    dataService.exportContent = '{"version": 3, "preferences": "invalid"}';
+    await expectLater(manager.createPreImportSnapshot(), throwsFormatException);
+    expect((await manager.listPreImportSnapshots()).single.path, first.path);
   });
 
   test('快照失败向上抛（fail-closed，交由导入链中止）', () async {
@@ -233,12 +246,25 @@ void main() {
 class _RecordingDataManagementService implements DataManagementService {
   DataExportOptions? lastExportOptions;
   Exception? exportError;
+  String exportContent = '''
+{
+  "version": 3,
+  "exportedAt": "2026-09-04T12:00:00",
+  "sessions": [],
+  "preferences": {},
+  "presets": [],
+  "characterCards": [],
+  "worldbooks": [],
+  "userTemplates": [],
+  "agentEvents": []
+}
+''';
 
   @override
   Future<String> exportFullBackup(DataExportOptions options) async {
     if (exportError != null) throw exportError!;
     lastExportOptions = options;
-    return '{"version":3,"sessions":[]}';
+    return exportContent;
   }
 
   @override

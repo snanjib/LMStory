@@ -41,7 +41,7 @@ void main() {
     );
   }
 
-  test('全量注册：13 工具齐备（含条件工具 read_skill/ask_user/spawn）', () {
+  test('全量注册：18 工具齐备（含条件工具 read_skill/ask_user/spawn）', () {
     final tools = buildAgentTools(deps(onSpawnFactory: (_) {}));
     expect(
       tools.map((t) => t.name).toSet(),
@@ -49,9 +49,13 @@ void main() {
         'search_story',
         'search_story_text',
         'read_story',
+        'list_facts',
         'query_facts',
+        'query_memory_changes',
         'read_compact_summary',
         'read_skill',
+        'calc_eval',
+        'calc_date',
         'update_facts',
         'merge_entities',
         'update_story_anchor',
@@ -59,6 +63,7 @@ void main() {
         'spawn',
         'ask_user',
         'finish_round',
+        'finish_maintenance',
       },
     );
   });
@@ -71,7 +76,7 @@ void main() {
     final names = tools.map((t) => t.name).toSet();
     expect(names, isNot(contains('spawn')));
     expect(names, isNot(contains('update_facts')));
-    expect(names.length, 11);
+    expect(names.length, 16);
   });
 
   test('子代理交集：spawn 工厂收到的只读集已剔除 deny 工具', () {
@@ -86,6 +91,7 @@ void main() {
     expect(subagentNames, isNot(contains('read_story')));
     expect(subagentNames, isNot(contains('search_story_text')));
     expect(subagentNames, isNot(contains('query_facts')));
+    expect(subagentNames, contains('list_facts'));
     expect(subagentNames, contains('search_story'));
     expect(subagentNames, contains('read_compact_summary'));
     expect(subagentNames, contains('read_skill'));

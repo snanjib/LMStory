@@ -59,6 +59,7 @@ void main() {
             'reason': 'completed',
             'steps': 2,
             'promptTokens': 2200,
+            'totalInputTokens': 4000,
             'completionTokens': 400,
             'totalTokens': 2600,
             'cacheReadTokens': 1800,
@@ -116,23 +117,25 @@ void main() {
       expect(stats.cacheReadTokens, 1800);
       expect(stats.cacheCreationTokens, 50);
 
-      // 命中率趋势：轮 1 有 cache（1800/(1800+2200)），轮 2 无上报
+      // 命中率趋势：轮 1 有完整输入面+cache → 1800/4000
       expect(stats.cacheTrend, hasLength(2));
       expect(stats.cacheTrend[0].turn, 1);
       expect(stats.cacheTrend[0].hitRate, closeTo(1800 / 4000, 1e-9));
       expect(
         stats.cacheTrend[1].hitRate,
-        closeTo(0 / 600, 1e-9),
-        reason: '轮 2 turn/end 缺 cache 键按 0 计，base=600>0 → 0%',
+        isNull,
+        reason: '轮 2 缺 cache 分项 → 样本不可比，不得计成 0 命中',
       );
-      // 会话加权命中率 = 1800 / (1800+2200+600)
+      // 会话加权命中率只累计可比样本：1800 / 4000
       expect(
         stats.weightedCacheHitRate,
-        closeTo(1800 / 4600, 1e-9),
+        closeTo(1800 / 4000, 1e-9),
       );
+      expect(stats.cacheSampleTurns, 1);
+      expect(stats.cacheCoveredInputTokens, 4000);
     });
 
-    test('旧日志兼容：step/end 与 turn/end 全缺 cache 键 → 分项为 0、趋势点 0%', () {
+    test('旧日志兼容：缺 cache 键/完整输入面 → 分项为 0，命中率降级为 null', () {
       final events = [
         _event(AgentEventTypes.stepEnd, {'stepIndex': 0}, turn: 1),
         _event(
@@ -144,13 +147,35 @@ void main() {
           },
           turn: 1,
         ),
+        _event(AgentEventTypes.stepEnd, {'stepIndex': 0}, turn: 2),
+        // 仅缺 totalInputTokens（旧日志）但 cache 键存在 → 仍不可比
+        _event(
+          AgentEventTypes.turnEnd,
+          {
+            'reason': 'completed',
+            'steps': 1,
+            'promptTokens': 200,
+            'cacheReadTokens': 150,
+          },
+          turn: 2,
+        ),
       ];
 
       final stats = agentSessionStatsFrom(events);
-      expect(stats.cacheReadTokens, 0);
+      expect(stats.cacheReadTokens, 150);
       expect(stats.cacheCreationTokens, 0);
-      expect(stats.cacheTrend.single.hitRate, 0.0);
-      expect(stats.weightedCacheHitRate, 0.0);
+      expect(
+        stats.cacheTrend.first.hitRate,
+        isNull,
+        reason: '缺 cache 分项 → 不得当成 0 命中',
+      );
+      expect(
+        stats.cacheTrend[1].hitRate,
+        isNull,
+        reason: '缺完整输入面 → 不得用 prompt 冒充分母',
+      );
+      expect(stats.weightedCacheHitRate, isNull);
+      expect(stats.cacheSampleTurns, 0);
     });
 
     test('崩溃恢复形态：有 step 无 turn/end 的残轮也计入步数分布', () {

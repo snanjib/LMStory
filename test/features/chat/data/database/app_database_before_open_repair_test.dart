@@ -39,7 +39,7 @@ void main() {
           expect(dropped, 1, reason: '测试前置：story_anchor 列应存在');
           raw.execute('ALTER TABLE chat_sessions DROP COLUMN story_anchor');
           final version = raw.select('PRAGMA user_version').first.values.first;
-          expect(version, 54, reason: '测试前置：版本号保持当前 schema（onUpgrade 不会再跑）');
+          expect(version, AppDatabase.currentSchemaVersion, reason: '测试前置：版本号保持当前 schema（onUpgrade 不会再跑）');
         },
       );
 

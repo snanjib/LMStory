@@ -134,7 +134,7 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   Future<void> _loadRecentSessionsCore() async {
     final chatRepo = ref.read<ChatRepository>(chatRepositoryProvider);
-    final sessions = await chatRepo.getAllSessions();
+    final sessions = await chatRepo.getHomeSessions();
     // 检测是否有任何 API Key 配置（任一 preset 的 apiKey 非空即视为已配置）
     final presetRepo = ref.read(apiPresetRepositoryProvider);
     final settingsRepo = ref.read(settingsRepositoryProvider);
@@ -149,17 +149,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
     if (mounted) {
       setState(() {
-        final stories = sessions
-            .where(
-              (session) =>
-                  session.mode == ChatMode.intermediate ||
-                  session.mode == ChatMode.advanced,
-            )
-            .toList()
-          ..sort((a, b) => b.lastActiveAt.compareTo(a.lastActiveAt));
-        _continuingStory = stories.isEmpty ? null : stories.first;
-        // Keep the recent list separate from the featured narrative session.
-        _recentSessions = sessions.take(5).toList();
+        _continuingStory = sessions.latestStory;
+        _recentSessions = sessions.recent;
         _isLoading = false;
         _loadFailed = false;
         _hasAnyApiKey = hasKey;
@@ -231,8 +222,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 widget.onDirectorWizard != null;
             final extraBannersHeight =
                 (!_hasAnyApiKey ? 96.0 : 0.0) + (wizardAvailable ? 80.0 : 0.0);
-            final minHeightForStory =
-                (520.0 + extraBannersHeight) * textScale;
+            final minHeightForStory = (520.0 + extraBannersHeight) * textScale;
             final showStory = !_isLoading &&
                 !_loadFailed &&
                 _continuingStory != null &&
@@ -240,20 +230,21 @@ class _HomePageState extends ConsumerState<HomePage> {
             final compactLayout = showStory ||
                 constraints.maxHeight < LmLayout.homeCompactHeight * textScale;
             final featured = showStory ? _continuingStory : null;
-            final storyCardCompact =
-                constraints.maxHeight < (720.0 + extraBannersHeight) * textScale;
+            final storyCardCompact = constraints.maxHeight <
+                (720.0 + extraBannersHeight) * textScale;
 
             // 极限短屏兜底：当非弹性元素总高度超过视口时，高度下界保护以允许纵向滑动，
             // 杜绝 RenderFlex 底部溢出。
-            final minFixedRequired = (
-                80.0 +
-                (!_hasAnyApiKey ? 88.0 : 0.0) +
-                (featured != null ? (storyCardCompact ? 96.0 : 270.0) : 0.0) +
-                (compactLayout ? 60.0 : 72.0) +
-                (wizardAvailable ? 72.0 : 0.0) +
-                56.0 +
-                105.0
-            ) * textScale;
+            final minFixedRequired = (80.0 +
+                    (!_hasAnyApiKey ? 88.0 : 0.0) +
+                    (featured != null
+                        ? (storyCardCompact ? 96.0 : 270.0)
+                        : 0.0) +
+                    (compactLayout ? 60.0 : 72.0) +
+                    (wizardAvailable ? 72.0 : 0.0) +
+                    56.0 +
+                    105.0) *
+                textScale;
             return RefreshIndicator(
               onRefresh: _loadRecentSessions,
               child: RepaintBoundary(

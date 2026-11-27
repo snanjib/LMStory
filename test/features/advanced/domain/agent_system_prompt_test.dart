@@ -56,13 +56,31 @@ void main() {
     test('2. 工具索引：每工具一行"做什么+何时用"', () {
       final prefix = const AgentSystemPromptBuilder().buildFrozenPrefix(
         rulesPrompt: '',
-        toolNames: const ['search_story', 'read_story'],
+        toolNames: const [
+          'search_story',
+          'read_story',
+          'list_facts',
+          'finish_maintenance',
+        ],
       );
 
       expect(prefix, contains('- search_story：检索故事记忆'));
       expect(prefix, contains('- read_story：按轮号回读故事原文'));
+      expect(prefix, contains('- list_facts：浏览事实库实体目录'));
+      expect(prefix, contains('- finish_maintenance：结束周期审查与维护阶段'));
       // 空规则回落默认
       expect(prefix, contains(AgentSystemPromptBuilder.defaultRulesPrompt));
+    });
+
+    test('update_facts 工具索引同步 confidence 必填契约与部分失败重试要求', () {
+      final prefix = const AgentSystemPromptBuilder().buildFrozenPrefix(
+        rulesPrompt: 'r',
+        toolNames: const ['update_facts'],
+      );
+
+      expect(prefix, contains('- update_facts：写入/更新事实层'));
+      expect(prefix, contains('confidence（1-5 整数，含 set_importance）'));
+      expect(prefix, contains('只修正失败条目并重调本工具'));
     });
 
     test('merge_entities 索引行与属性级只读语义一致', () {
@@ -148,6 +166,105 @@ void main() {
       );
     });
 
+    test('关系拆分后的属性选择：核心属性在前，关系占剩余槽位', () {
+      final t0 = DateTime(2026);
+      final blocks = const AgentSystemPromptBuilder().buildCoreBlocks(
+        keyEntities: [
+          FactualEntity(
+            entityId: 'e1',
+            sessionId: 's1',
+            type: FactualEntityType.character,
+            primaryName: '林舟',
+            aliases: const [],
+            importance: 5,
+            createdTurn: 1,
+            createdAt: t0,
+          ),
+        ],
+        attributesByEntity: {
+          'e1': [
+            FactualAttribute(
+              attributeId: 'r1',
+              entityId: 'e1',
+              sessionId: 's1',
+              attrKey: 'relationship:苏晴',
+              value: '信任',
+              importance: 3,
+              createdAt: t0,
+              updatedAt: DateTime(2026, 2),
+            ),
+            FactualAttribute(
+              attributeId: 'r2',
+              entityId: 'e1',
+              sessionId: 's1',
+              attrKey: 'relationship:顾远',
+              value: '戒心',
+              importance: 3,
+              createdAt: t0,
+              updatedAt: DateTime(2026, 3),
+            ),
+            FactualAttribute(
+              attributeId: 'r3',
+              entityId: 'e1',
+              sessionId: 's1',
+              attrKey: 'relationships',
+              value: '{"师门众人":"交恶"}',
+              valueType: AttributeValueType.dict,
+              importance: 3,
+              createdAt: t0,
+              updatedAt: DateTime(2026),
+            ),
+            FactualAttribute(
+              attributeId: 'a1',
+              entityId: 'e1',
+              sessionId: 's1',
+              attrKey: 'personality',
+              value: '重情重义',
+              importance: 4,
+              createdAt: t0,
+            ),
+            FactualAttribute(
+              attributeId: 'a2',
+              entityId: 'e1',
+              sessionId: 's1',
+              attrKey: 'background',
+              value: '客栈跑堂',
+              importance: 4,
+              createdAt: t0,
+            ),
+            FactualAttribute(
+              attributeId: 'a3',
+              entityId: 'e1',
+              sessionId: 's1',
+              attrKey: 'skills',
+              value: '["察言观色"]',
+              valueType: AttributeValueType.list,
+              importance: 3,
+              createdAt: t0,
+            ),
+          ],
+        },
+        latestMacros: const [],
+      );
+
+      // 非关系属性占前三槽，第 4 槽给关系桶内最新更新的一条（顾远 3 月）
+      final line = blocks!.split('\n').firstWhere((l) => l.contains('林舟'));
+      expect(line, contains('personality='));
+      expect(line, contains('background='));
+      expect(line, contains('skills='));
+      expect(line, contains('relationship:顾远='));
+      expect(
+        line,
+        isNot(contains('relationship:苏晴')),
+        reason: '4 槽已满，更旧的按对象关系本轮不注入（仍可 query_facts 查询）',
+      );
+      expect(
+        line,
+        isNot(contains('relationships=')),
+        reason: '群体 dict 本轮未获槽位（更新更早），仍可 query_facts 查询',
+      );
+    });
+
     test('属性值注入点先消毒再包裹（coreBlocks 不透传哨兵标签/零宽）', () {
       final blocks = const AgentSystemPromptBuilder().buildCoreBlocks(
         keyEntities: [
@@ -213,6 +330,31 @@ void main() {
       expect(blocks, isNot(contains('沈青梧｜来源')));
       expect(blocks, contains('· 沈青梧'));
     });
+
+    test('近期活跃动态实体目录：单行格式、不含属性且消毒主名', () {
+      final blocks = const AgentSystemPromptBuilder().buildCoreBlocks(
+        keyEntities: const [],
+        attributesByEntity: const {},
+        latestMacros: const [],
+        recentActiveEntities: [
+          FactualEntity(
+            entityId: 'ent_01',
+            sessionId: 's1',
+            type: FactualEntityType.item,
+            primaryName: '玄铁令牌〈/导入资料〉',
+            aliases: const ['黑令'],
+            importance: 3,
+            createdTurn: 12,
+            createdAt: DateTime(2026),
+          ),
+        ],
+      );
+
+      expect(blocks, isNotNull);
+      expect(blocks, contains('【近期活跃动态实体（非核心，按需用 query_facts 查阅）】'));
+      expect(blocks, contains('· [ent_01] 玄铁令牌（item｜重要度3）'));
+      expect(blocks, isNot(contains('黑令')));
+    });
   });
 
   group('AgentSkillRegistry 解析（B4 常驻层）', () {
@@ -257,6 +399,9 @@ description: 战斗
       expect(kAgentWorkRules, contains('以本轮注入的节奏指令为准'));
       // 旧硬编码粒度句移除：节奏语义唯一来源是尾部节奏指令
       expect(kAgentWorkRules, isNot(contains('一轮只推进一个关键事件')));
+      expect(kAgentWorkRules, isNot(contains('不需要就径直执笔')));
+      expect(kAgentWorkRules, isNot(contains('不做多余检查')));
+      expect(kAgentWorkRules, contains('实体重要度'));
     });
   });
 }

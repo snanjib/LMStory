@@ -1,9 +1,14 @@
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
+import 'package:lmstory/features/memory/domain/entities/facts_projection_note.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
+import 'package:lmstory/features/memory/domain/repositories/factual_repository.dart';
 import 'package:lmstory/features/memory/domain/services/attribute_schema.dart';
+import 'package:lmstory/features/memory/domain/services/facts_delta_target.dart';
+
+export 'package:lmstory/features/memory/domain/entities/facts_projection_note.dart';
 
 /// 事实层 delta 干跑投影器（2026-10-15 监督审批前后对比，批 A）
 ///
@@ -26,36 +31,6 @@ enum FactsProjectionOutcome {
 
   /// 转写为其他动作（rewrittenDelta 携带转写后的 delta，需再投影一层）
   converted,
-}
-
-/// 判定原因（机器可读；UI 文案由展示层映射）
-enum FactsProjectionNote {
-  missingFields,
-  unknownEntityType,
-  entityMissing,
-  nameIsIdentity,
-  attrKeyNotWhitelisted,
-  valueTooLong,
-  tooFrequent,
-  valueUnchangedBaseline,
-  valueUnchanged,
-  confidenceGate,
-  listRejectsUpdate,
-  baselineSingleRedirect,
-  appendOnSingleConvertsUpdate,
-  duplicateExact,
-  duplicateSimilar,
-  noMutableList,
-  valueNotInList,
-  aliasEmpty,
-  aliasTooLong,
-  aliasSameAsPrimary,
-  aliasExists,
-  aliasLimit,
-  alreadyArchived,
-  sameNameConvertsUpdate,
-  sameNameConvertsAlias,
-  createsAttrRow,
 }
 
 /// 单实体别名条数软上限（只读语义 2.0）
@@ -164,6 +139,7 @@ abstract final class FactsDeltaProjectionEvaluator {
           entityId: delta.entityId,
           value: delta.value,
           confidence: delta.confidence,
+          skipFrequencyGuard: delta.skipFrequencyGuard,
         ),
         normalizedAttrKey: attrKey,
       );
@@ -180,8 +156,10 @@ abstract final class FactsDeltaProjectionEvaluator {
       return skipped(FactsProjectionNote.valueTooLong);
     }
 
-    // 更新频率限制（整理型写入豁免）
-    if (!delta.isCuration && recentUpdates >= config.maxUpdatesPer3Turns) {
+    // 更新频率限制（整理型写入与维护阶段豁免）
+    if (!delta.isCuration &&
+        !delta.skipFrequencyGuard &&
+        recentUpdates >= config.maxUpdatesPer3Turns) {
       return skipped(FactsProjectionNote.tooFrequent);
     }
 
@@ -292,6 +270,7 @@ abstract final class FactsDeltaProjectionEvaluator {
             reason: delta.reason,
             confidence: delta.confidence,
             isCuration: delta.isCuration,
+            skipFrequencyGuard: delta.skipFrequencyGuard,
           ),
           normalizedAttrKey: attrKey,
         );
@@ -307,6 +286,12 @@ abstract final class FactsDeltaProjectionEvaluator {
       );
       if (baselineSingle) {
         return converted(FactsProjectionNote.baselineSingleRedirect);
+      }
+      // schema 判定为 dict 的键（如 relationships）不允许经 append 新建
+      // list 错型行——此类键只能 update 整体维护或走按对象独立键
+      if (AttributeSchema.valueTypeOf(entity.type, attrKey) ==
+          AttributeValueType.dict) {
+        return skipped(FactsProjectionNote.dictKeyCreatesList);
       }
       // 无任何属性行 → 新建 list 属性
       return FactsDeltaProjection(
@@ -325,16 +310,19 @@ abstract final class FactsDeltaProjectionEvaluator {
       return converted(FactsProjectionNote.appendOnSingleConvertsUpdate);
     }
 
-    final list = attr.listValue;
-
-    // 精确去重
-    if (list.contains(delta.value)) {
-      return skipped(FactsProjectionNote.duplicateExact);
+    // dict 行拒绝 append：dict 的 listValue 恒为空表，继续追加会用单元素
+    // list 整体覆盖 dict 内容（真实数据丢失），一律跳过留痕
+    if (attr.valueType == AttributeValueType.dict) {
+      return skipped(FactsProjectionNote.dictRejectsAppend);
     }
 
-    // 语义相似度去重（编辑距离/包含关系，不调 embedding）
-    if (isSemanticallySimilarValue(delta.value!, list)) {
-      return skipped(FactsProjectionNote.duplicateSimilar);
+    final list = attr.listValue;
+
+    // 精确去重：完全相同、或仅首尾空白不同。不做编辑距离/包含等可能
+    // 改变含义的近似判重（近义重复优先保信息）
+    final trimmedNew = delta.value!.trim();
+    if (list.any((v) => v == delta.value || v.trim() == trimmedNew)) {
+      return skipped(FactsProjectionNote.duplicateExact);
     }
 
     return FactsDeltaProjection(
@@ -531,6 +519,7 @@ abstract final class FactsDeltaProjectionEvaluator {
             value: delta.value,
             reason: delta.reason,
             confidence: delta.confidence,
+            skipFrequencyGuard: delta.skipFrequencyGuard,
           ),
           normalizedAttrKey: attrKey,
         );
@@ -571,6 +560,235 @@ abstract final class FactsDeltaProjectionEvaluator {
     );
   }
 
+  /// set_importance 判定
+  ///
+  /// 同时放行 auto 与 worldbook/card 导入实体；重要度范围限定 `1..5`，
+  /// 目标值与当前相等时跳过。
+  static FactsDeltaProjection evaluateSetImportance({
+    required FactsDelta delta,
+    FactualEntity? entity,
+  }) {
+    final label = entity?.primaryName ?? delta.primaryName ?? '';
+    FactsDeltaProjection skipped(FactsProjectionNote note) =>
+        FactsDeltaProjection(
+          source: delta,
+          effectiveAction: FactAction.setImportance,
+          outcome: FactsProjectionOutcome.skipped,
+          entityLabel: label,
+          note: note,
+        );
+
+    if (delta.entityId == null || delta.importance == null) {
+      return skipped(FactsProjectionNote.missingFields);
+    }
+    if (entity == null) return skipped(FactsProjectionNote.entityMissing);
+    if (delta.importance! < 1 || delta.importance! > 5) {
+      return skipped(FactsProjectionNote.importanceOutOfRange);
+    }
+    if (delta.importance == entity.importance) {
+      return skipped(FactsProjectionNote.valueUnchanged);
+    }
+
+    return FactsDeltaProjection(
+      source: delta,
+      effectiveAction: FactAction.setImportance,
+      outcome: FactsProjectionOutcome.applied,
+      entityLabel: label,
+      before: '${entity.importance}',
+      after: '${delta.importance}',
+    );
+  }
+
+  /// 供暂存预检与审批层复用的异步投影入口（与 FactApplier 落库同源）。
+  ///
+  /// 依次解析目标实体、读取属性行（含 relationship 对象名归一）与最近 3 轮
+  /// 更新计数，并沿转写链求值至终态。
+  static Future<FactsDeltaProjection> preflightDelta({
+    required FactualRepository repository,
+    required String sessionId,
+    required FactsDelta delta,
+    required FactualConfig config,
+    required int turnNumber,
+    int maxDepth = 3,
+  }) async {
+    if (delta.action != FactAction.createEntity &&
+        delta.entityId == null &&
+        (delta.primaryName?.trim().isNotEmpty ?? false)) {
+      final missingRequired = switch (delta.action) {
+        FactAction.updateAttr ||
+        FactAction.appendList ||
+        FactAction.removeFromList =>
+          delta.attrKey == null || delta.value == null,
+        FactAction.addAlias => delta.value == null,
+        FactAction.setImportance => delta.importance == null,
+        FactAction.archiveEntity || FactAction.createEntity => false,
+      };
+      if (missingRequired) {
+        return FactsDeltaProjection(
+          source: delta,
+          effectiveAction: delta.action,
+          outcome: FactsProjectionOutcome.skipped,
+          entityLabel: delta.primaryName!.trim(),
+          note: FactsProjectionNote.missingFields,
+        );
+      }
+    }
+
+    var current = await resolveDeltaEntityId(
+          repository,
+          sessionId,
+          delta,
+        ) ??
+        delta;
+    if (current.action != FactAction.createEntity &&
+        current.entityId == null &&
+        (current.primaryName?.trim().isNotEmpty ?? false)) {
+      return FactsDeltaProjection(
+        source: delta,
+        effectiveAction: current.action,
+        outcome: FactsProjectionOutcome.skipped,
+        entityLabel: current.primaryName!.trim(),
+        note: FactsProjectionNote.entityMissing,
+      );
+    }
+
+    for (var depth = 0; depth < maxDepth; depth++) {
+      final entityId = current.entityId;
+      final loaded =
+          entityId == null ? null : await repository.getEntityById(entityId);
+      final entity =
+          loaded != null && loaded.sessionId == sessionId ? loaded : null;
+      final attrRows = await _preflightAttrRows(
+        repository: repository,
+        sessionId: sessionId,
+        delta: current,
+        entity: entity,
+      );
+      final recentUpdates = (current.action == FactAction.updateAttr &&
+              !current.isCuration &&
+              !current.skipFrequencyGuard &&
+              current.entityId != null)
+          ? await repository.countRecentUpdates(
+              current.entityId!,
+              fromTurn: turnNumber - 2,
+            )
+          : 0;
+
+      final verdict = switch (current.action) {
+        FactAction.updateAttr => evaluateUpdateAttr(
+            delta: current,
+            config: config,
+            entity: entity,
+            attrRows: attrRows,
+            recentUpdates: recentUpdates,
+          ),
+        FactAction.appendList => evaluateAppendList(
+            delta: current,
+            config: config,
+            entity: entity,
+            attrRows: attrRows,
+            recentUpdates: recentUpdates,
+          ),
+        FactAction.removeFromList => evaluateRemoveFromList(
+            delta: current,
+            entity: entity,
+            attrRows: attrRows,
+          ),
+        FactAction.addAlias => evaluateAddAlias(
+            delta: current,
+            config: config,
+            entity: entity,
+          ),
+        FactAction.archiveEntity => evaluateArchiveEntity(
+            delta: current,
+            entity: entity,
+          ),
+        FactAction.createEntity => evaluateCreateEntity(
+            delta: current,
+            config: config,
+            sameNameEntity: current.primaryName == null
+                ? null
+                : await _firstByName(
+                    repository,
+                    sessionId,
+                    current.primaryName!,
+                  ),
+          ),
+        FactAction.setImportance => evaluateSetImportance(
+            delta: current,
+            entity: entity,
+          ),
+      };
+
+      final rewritten = verdict.rewrittenDelta;
+      if (verdict.outcome != FactsProjectionOutcome.converted ||
+          rewritten == null) {
+        return verdict;
+      }
+      current = rewritten;
+    }
+
+    return FactsDeltaProjection(
+      source: delta,
+      effectiveAction: current.action,
+      outcome: FactsProjectionOutcome.skipped,
+      entityLabel: current.primaryName ?? delta.primaryName ?? '',
+      note: FactsProjectionNote.missingFields,
+    );
+  }
+
+  static Future<List<FactualAttribute>> _preflightAttrRows({
+    required FactualRepository repository,
+    required String sessionId,
+    required FactsDelta delta,
+    required FactualEntity? entity,
+  }) async {
+    if (entity == null || delta.entityId == null || delta.attrKey == null) {
+      return const [];
+    }
+    var attrKey = AttributeSchema.normalizeAttrKey(entity.type, delta.attrKey!);
+    final relationshipObject = AttributeSchema.relationshipObjectOf(attrKey);
+    if (relationshipObject != null) {
+      attrKey = await _canonicalizeRelationshipKey(
+        repository,
+        sessionId,
+        relationshipObject,
+      );
+    }
+    final rows = await repository.getAttributesByKey(delta.entityId!, attrKey);
+    return rows.where((r) => r.sessionId == sessionId).toList();
+  }
+
+  static Future<String> _canonicalizeRelationshipKey(
+    FactualRepository repository,
+    String sessionId,
+    String relationshipObject,
+  ) async {
+    try {
+      final matches = await repository.findByName(
+        sessionId,
+        [relationshipObject],
+      );
+      if (matches.length == 1) {
+        return AttributeSchema.buildRelationshipAttrKey(
+          matches.first.primaryName,
+        );
+      }
+    } catch (_) {
+      // 名字解析失败保留原键，与落库侧一致
+    }
+    return AttributeSchema.buildRelationshipAttrKey(relationshipObject);
+  }
+
+  static Future<FactualEntity?> _firstByName(
+    FactualRepository repository,
+    String sessionId,
+    String name,
+  ) async {
+    final matches = await repository.findByName(sessionId, [name]);
+    return matches.isEmpty ? null : matches.first;
+  }
+
   /// 取同 (entityId, attrKey) 属性行中的可写 auto 行（无则 null）
   ///
   /// DOC-15 §8.1 方案 A：同 attrKey 可并存「只读基线（source=card）+
@@ -591,41 +809,5 @@ abstract final class FactsDeltaProjectionEvaluator {
   }
 }
 
-/// 语义相似度判定（DOC-11 §7.4.4）：编辑距离 <= 2 或包含关系，
-/// **不调 embedding API**。append_list 去重用（FactApplier 与投影器同源）。
-bool isSemanticallySimilarValue(String newValue, List<String> existing) {
-  for (final v in existing) {
-    if (_editDistance(newValue, v) <= 2) return true;
-    if (v.contains(newValue) || newValue.contains(v)) return true;
-  }
-  return false;
-}
-
-/// Levenshtein 编辑距离
-int _editDistance(String a, String b) {
-  if (a == b) return 0;
-  if (a.isEmpty) return b.length;
-  if (b.isEmpty) return a.length;
-
-  final matrix = List.generate(
-    a.length + 1,
-    (_) => List.filled(b.length + 1, 0),
-  );
-  for (var i = 0; i <= a.length; i++) {
-    matrix[i][0] = i;
-  }
-  for (var j = 0; j <= b.length; j++) {
-    matrix[0][j] = j;
-  }
-  for (var i = 1; i <= a.length; i++) {
-    for (var j = 1; j <= b.length; j++) {
-      final cost = a[i - 1] == b[j - 1] ? 0 : 1;
-      matrix[i][j] = [
-        matrix[i - 1][j] + 1, // 删除
-        matrix[i][j - 1] + 1, // 插入
-        matrix[i - 1][j - 1] + cost, // 替换
-      ].reduce((x, y) => x < y ? x : y);
-    }
-  }
-  return matrix[a.length][b.length];
-}
+/// append_list 去重仅做精确/首尾空白判等：编辑距离与包含关系判重会吞掉
+/// 「火球术 vs 冰球术」这类不同值，近义重复优先保信息，不做模糊判重。

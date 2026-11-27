@@ -329,6 +329,10 @@ class GeminiSseParser {
       promptTokens: prompt,
       completionTokens: completion,
       totalTokens: total,
+      // promptTokenCount 已含 cachedContentTokenCount（完整输入）
+      totalInputTokens: prompt,
+      cacheReadTokens: usageMetadata['cachedContentTokenCount'] as int?,
+      reasoningTokens: usageMetadata['thoughtsTokenCount'] as int?,
     );
   }
 }

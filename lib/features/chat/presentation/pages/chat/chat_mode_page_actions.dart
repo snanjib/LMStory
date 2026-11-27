@@ -37,23 +37,71 @@ extension _ChatModePageActions on _ChatModePageState {
     );
   }
 
-  int _lastContextTokens(List<ChatMessage> messages) {
-    for (var i = messages.length - 1; i >= 0; i--) {
-      final m = messages[i];
-      if (m.tokensUsed != null) {
-        return m.tokensUsed!;
-      }
-    }
-    return 0;
+  /// 当前预计上下文（含未发送草稿）
+  ///
+  /// 旧实现取最近消息的 `tokensUsed`——那是该轮**总消耗**（输入+输出），
+  /// 不是上下文占用。现在以控制器按真实装配材料计算的预计值为准；
+  /// 无数据时返回 null（面板/圆环显示「—」，不以 0 冒充）。
+  int? _currentContextTokens(ChatModeState state) {
+    final estimate = state.contextEstimateTokens;
+    if (estimate == null) return null;
+    return estimate + _tokenCount;
   }
 
-  void _handleSend(String text, List<MessageAttachment> attachments) {
-    ref
-        .read(chatModeControllerProvider(widget.session).notifier)
+  Future<bool> _handleSend(
+    String text,
+    List<MessageAttachment> attachments,
+  ) async {
+    final session = widget.session;
+    final draftText = _inputController.text;
+    final repository = ref.read(chatRepositoryProvider);
+    final guard = ref.read(dataStoreOperationGuardProvider);
+    final accepted = await ref
+        .read(chatModeControllerProvider(session).notifier)
         .sendMessage(text, attachments: attachments);
-    // 已发送即不再是草稿（清窄列；Map 由切走分支维护）
-    _persistDraftColumn(widget.session.sessionId, '');
-    _forceToBottomWithSettle();
+    if (!accepted) {
+      if (mounted && widget.session == session && guard.isOverwriting) {
+        _showOverwriteInProgress();
+      }
+      return false;
+    }
+    if (mounted) {
+      if (widget.session == session) {
+        if (_inputController.text == draftText) {
+          _draftDebounce?.cancel();
+          _inputDrafts[session.sessionId] = '';
+          _setDraftText('');
+        }
+        _forceToBottomWithSettle();
+      } else if (_inputDrafts[session.sessionId] == draftText) {
+        _inputDrafts[session.sessionId] = '';
+      }
+    }
+    if (draftText.isNotEmpty) {
+      final release = guard.tryBeginWrite();
+      if (release != null) {
+        try {
+          await repository.clearSessionDraftIfMatches(
+            session.sessionId,
+            draftText,
+          );
+        } catch (_) {
+          // 草稿清理失败不改变已落库的发送回执。
+        } finally {
+          release();
+        }
+      }
+    }
+    return true;
+  }
+
+  void _showOverwriteInProgress() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(t.common.backupOverwriteInProgress),
+      ),
+    );
   }
 
   void _handleCancel() {

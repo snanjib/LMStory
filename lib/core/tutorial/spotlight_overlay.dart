@@ -63,7 +63,9 @@ class _SpotlightOverlayHostState extends ConsumerState<SpotlightOverlayHost>
       return true;
     }
     final controller = ref.read(tutorialControllerProvider);
-    if (controller != null && controller.active && !controller.exitRequestOpen) {
+    if (controller != null &&
+        controller.active &&
+        !controller.exitRequestOpen) {
       controller.requestExit();
       return true;
     }
@@ -181,7 +183,7 @@ class _SpotlightLayer extends StatelessWidget {
   static const double _holePadding = 8;
   static const double _bubbleMaxWidth = 320;
   static const double _screenMargin = 16;
-  static const double _bubbleTopClamp = 140;
+  static const double _bubbleGap = 12;
 
   @override
   Widget build(BuildContext context) {
@@ -243,13 +245,12 @@ class _SpotlightLayer extends StatelessWidget {
             child: _WaitingCard(onExit: controller.requestExit),
           )
         else
-          _positionedBubble(context, step, targetRect, screenSize),
+          _positionedBubble(step, targetRect, screenSize),
       ],
     );
   }
 
   Widget _positionedBubble(
-    BuildContext context,
     TutorialStep step,
     Rect? targetRect,
     Size screenSize,
@@ -280,20 +281,30 @@ class _SpotlightLayer extends StatelessWidget {
       );
     }
 
-    final spaceBelow = screenSize.height - targetRect.bottom;
-    final below = spaceBelow >= 180 || spaceBelow >= targetRect.top;
-    final top = below
-        ? targetRect.bottom + 12
-        : (targetRect.top - 190).clamp(_screenMargin, double.infinity);
-    final left = (targetRect.center.dx - _bubbleMaxWidth / 2).clamp(
+    final screenBottom = screenSize.height - _screenMargin;
+    final aboveBottom =
+        (targetRect.top - _bubbleGap).clamp(_screenMargin, screenBottom);
+    final belowTop =
+        (targetRect.bottom + _bubbleGap).clamp(_screenMargin, screenBottom);
+    final below = screenBottom - belowTop >= aboveBottom - _screenMargin;
+    final width =
+        (screenSize.width - 2 * _screenMargin).clamp(0.0, _bubbleMaxWidth);
+    final left = (targetRect.center.dx - width / 2).clamp(
       _screenMargin,
-      (screenSize.width - _bubbleMaxWidth - _screenMargin)
-          .clamp(_screenMargin, double.infinity),
+      screenSize.width - width - _screenMargin,
     );
+
+    // Bound the bubble to one side of the target so wrapped guidance and
+    // larger text can scroll without covering the highlighted action.
     return Positioned(
-      top: top.clamp(_screenMargin, screenSize.height - _bubbleTopClamp),
+      top: below ? belowTop : _screenMargin,
+      bottom: below ? _screenMargin : screenSize.height - aboveBottom,
       left: left,
-      child: bubble,
+      width: width,
+      child: Align(
+        alignment: below ? Alignment.topCenter : Alignment.bottomCenter,
+        child: bubble,
+      ),
     );
   }
 }

@@ -1,8 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/agent/agent_tool.dart';
 import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/director_round_runner.dart';
+import 'package:lmstory/features/advanced/presentation/utils/agent_approval_labels.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_tool_card.dart';
+import 'package:lmstory/features/memory/domain/entities/facts_projection_note.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 工具名 → 消费方文案映射的完备性锁
@@ -36,13 +39,18 @@ void main() {
     'search_story_text',
     'read_story',
     'query_facts',
+    'list_facts',
+    'query_memory_changes',
     'read_compact_summary',
     'update_facts',
     'merge_entities',
     'update_story_anchor',
     'record_event_memory',
     'finish_round',
+    'finish_maintenance',
     'read_skill',
+    'calc_eval',
+    'calc_date',
     'spawn',
     'ask_user',
   };
@@ -101,5 +109,16 @@ void main() {
     );
     expect(summary, contains('庄园'));
     expect(summary, isNot(contains('{')));
+  });
+
+  test('importanceOutOfRange 审批提示映射到 i18n 文案', () {
+    final t = LocaleSettings.instance.currentTranslations;
+    const change = AgentApprovalChange(
+      kind: ApprovalChangeKind.updateAttr,
+      entityName: '林澈',
+      details: ApprovalFactNotes([FactsProjectionNote.importanceOutOfRange]),
+    );
+    final row = formatApprovalChange(change, t);
+    expect(row.note, t.advanced.approval.noteImportanceOutOfRange);
   });
 }

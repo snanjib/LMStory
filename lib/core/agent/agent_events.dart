@@ -188,6 +188,7 @@ class AgentToolExecutionFinished extends AgentRunEvent {
     required this.isError,
     required this.duration,
     this.synthetic = false,
+    this.metadata,
     super.at,
   });
 
@@ -203,6 +204,9 @@ class AgentToolExecutionFinished extends AgentRunEvent {
 
   /// true = 中断/循环保护补齐的占位结果（并非真实执行）
   final bool synthetic;
+
+  /// 工具结果元数据（检索证据等——durable sink 随 tool/result 事件落账）
+  final Map<String, dynamic>? metadata;
 }
 
 /// step 结束（含 usage）
@@ -213,8 +217,10 @@ class AgentStepFinished extends AgentRunEvent {
     required this.promptTokens,
     required this.completionTokens,
     required this.totalTokens,
+    this.totalInputTokens,
     this.cacheReadTokens,
     this.cacheCreationTokens,
+    this.usageWarnings = const [],
     super.at,
   });
 
@@ -224,10 +230,18 @@ class AgentStepFinished extends AgentRunEvent {
   final int? completionTokens;
   final int? totalTokens;
 
+  /// 完整输入面（Anthropic = input + cache read/creation；OpenAI/Gemini
+  /// 的 prompt 已含缓存）。缓存命中率/上下文占用一律用它做分母。
+  final int? totalInputTokens;
+
   /// 缓存命中分项（：进 durable 事件日志，聚合卡与旧会话回填用；
   /// null = 端点未上报缓存信息）
   final int? cacheReadTokens;
   final int? cacheCreationTokens;
+
+  /// 计量异常说明（字段冲突等）：随事件持久化用于诊断，
+  /// 且该样本的命中率不得作为无标识的精确比例。
+  final List<String> usageWarnings;
 }
 
 // ==================== 注入消息事件====================
@@ -333,6 +347,24 @@ class AgentSurfaceReplaced extends AgentRunEvent {
   /// 即整面替换）
   final int replaceStart;
   final int replaceEnd;
+}
+
+/// 表面守卫触发（log-only 留痕：投影与内存工作面漂移等装配一致性疑点）
+///
+/// 守卫 fail-closed：触发即停轮（不静默回退任一侧），事件随 durable
+/// 日志落账供审计。kind 见各触发点。
+class AgentSurfaceGuardTripped extends AgentRunEvent {
+  AgentSurfaceGuardTripped({
+    required this.kind,
+    this.detail,
+    super.at,
+  });
+
+  /// 触发类别（如 'projection-drift'）
+  final String kind;
+
+  /// 诊断明细（首个失配位置/长度差等）
+  final String? detail;
 }
 
 /// 轮结束

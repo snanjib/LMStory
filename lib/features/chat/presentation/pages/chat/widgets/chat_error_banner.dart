@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lmstory/core/theme/simple/simple_spacing.dart';
 import 'package:lmstory/core/theme/simple/simple_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
+import 'package:lmstory/features/chat/domain/services/simple_failure_classifier.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 页面内联错误横幅（自 chat_mode_page.dart 拆出，逻辑原样搬运）。
@@ -25,6 +26,23 @@ class ChatErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
+    final labels = Translations.of(context).chat.failure;
+    final payload = SimpleErrorPayload.tryDecode(message);
+    final code = payload?.code;
+    final String display;
+    if (payload != null) {
+      final summary = code == null || code.isEmpty
+          ? payload.message
+          : labels.displayFormat(message: payload.message, code: code);
+      display = [
+        summary,
+        if (payload.suggestion case final suggestion?) suggestion,
+      ].join('\n');
+    } else {
+      display = message.startsWith(SimpleErrorPayload.prefix)
+          ? labels.messages.unknown
+          : message;
+    }
     return Material(
       color: colors.error.withValues(alpha: 0.1),
       child: Padding(
@@ -42,12 +60,12 @@ class ChatErrorBanner extends StatelessWidget {
             const SizedBox(width: SimpleSpacing.sSm),
             Expanded(
               child: Text(
-                message,
+                display,
                 style: SimpleTextStyles.caption.copyWith(
                   color: colors.error,
                 ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
+                maxLines: payload == null ? 3 : null,
+                overflow: payload == null ? TextOverflow.ellipsis : null,
               ),
             ),
             IconButton(
@@ -55,7 +73,7 @@ class ChatErrorBanner extends StatelessWidget {
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              tooltip: t.chat.failure.dismissBanner,
+              tooltip: labels.dismissBanner,
               onPressed: onDismiss,
             ),
           ],

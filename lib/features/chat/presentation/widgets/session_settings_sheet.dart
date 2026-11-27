@@ -23,7 +23,9 @@ import 'package:lmstory/features/chat/presentation/pages/chat/chat_mode_page.dar
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/settings/presentation/pages/chat_settings_page.dart';
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/features/settings/presentation/widgets/default_model_picker_sheet.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
 import 'package:lmstory/features/templates/domain/repositories/template_repository.dart';
@@ -272,7 +274,7 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
       chatModeControllerProvider(widget.session),
       (previous, next) {
         if (!mounted) return;
-        if (previous?.session != next.session) {
+        if (!identical(previous?.session, next.session)) {
           setState(() => _session = next.session);
         }
       },
@@ -288,6 +290,18 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
     // （与删除、全局设置链接两个非配置项）；采样参数/上下文/流式字段
     // 仅进阶模式渲染。过滤只动展示层，被隐藏字段已有用户值继续生效。
     final level = ref.watch(configLevelProvider);
+    ref.listen(settingsNotifierProvider.select((s) => s.presets), (_, presets) {
+      setState(() => _presets = presets);
+    });
+    final sampling = samplingControlsForModel(
+      _presets,
+      (
+        _session.presetId ?? _globalSnapshot.presetId,
+        _session.modelId ?? _globalSnapshot.modelId,
+      ),
+      reasoningEffort:
+          _session.reasoningEffort ?? _globalSnapshot.reasoningEffort,
+    );
 
     return Material(
       // 琉璃下面层让位 GlassBottomSheet 工厂；经典保持原槽位零变化。
@@ -353,17 +367,19 @@ class _SessionSettingsSheetState extends ConsumerState<SessionSettingsSheet> {
                       _buildModelCard(t, colors),
                       const SizedBox(height: SimpleSpacing.sLg),
                       _buildSystemPrompt(t, colors),
-                      if (ConfigVisibility.of(
-                        ConfigVisibilityKeys.chatPanelTemperature,
-                        level,
-                      )) ...[
+                      if (sampling.showsTemperatureAndTopP &&
+                          ConfigVisibility.of(
+                            ConfigVisibilityKeys.chatPanelTemperature,
+                            level,
+                          )) ...[
                         const SizedBox(height: SimpleSpacing.sLg),
                         _buildTemperatureSlider(t, colors),
                       ],
-                      if (ConfigVisibility.of(
-                        ConfigVisibilityKeys.chatPanelTopP,
-                        level,
-                      )) ...[
+                      if (sampling.showsTemperatureAndTopP &&
+                          ConfigVisibility.of(
+                            ConfigVisibilityKeys.chatPanelTopP,
+                            level,
+                          )) ...[
                         const SizedBox(height: SimpleSpacing.sLg),
                         _buildTopPSlider(t, colors),
                       ],

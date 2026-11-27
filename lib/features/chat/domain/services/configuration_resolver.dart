@@ -470,7 +470,7 @@ class ConfigurationResolver {
     } catch (e) {
       _logger.warn(
         'Failed to load API key for preset $presetId',
-        detail: '$e',
+        detail: 'errorType=${e.runtimeType}',
       );
     }
 
@@ -625,7 +625,10 @@ class ConfigurationResolver {
         auxiliaryTemperature: await _resolveAuxiliaryTemperature(),
       );
     } catch (e) {
-      _logger.error('Resolve title naming config failed', detail: '$e');
+      _logger.error(
+        'Resolve title naming config failed',
+        detail: 'errorType=${e.runtimeType}',
+      );
       return null;
     }
   }
@@ -811,6 +814,7 @@ class ConfigurationResolver {
       recentMinRatioOverride: session.recentMinRatioOverride,
       retrievalRatioOverride: session.retrievalRatioOverride,
       compactionTriggerRatioOverride: session.compactionTriggerRatioOverride,
+      engineeringContextEnabled: session.engineeringContextEnabled,
     );
 
     return (settings: settings, apiKey: null);
@@ -828,20 +832,17 @@ class ConfigurationResolver {
       final config = await _settingsRepository.getResolvedConfig();
       final advanced = config.advanced;
 
-      final sessionPresetId = session.phaseModels.generatingPresetId;
-      final sessionModelId = session.phaseModels.generatingModelId;
-      final presetId = (sessionPresetId != null && sessionPresetId.isNotEmpty)
-          ? sessionPresetId
-          : advanced.generatingPresetId;
-      final modelId = (sessionModelId != null && sessionModelId.isNotEmpty)
-          ? sessionModelId
-          : advanced.generatingModelId;
-      if (presetId.isEmpty || modelId.isEmpty) return null;
+      final (presetId, modelId) = directorGeneratingModels(
+        session.phaseModels,
+        defaultPresetId: advanced.generatingPresetId,
+        defaultModelId: advanced.generatingModelId,
+      ).forPhase('generating');
+      if (presetId == null || modelId == null) return null;
 
-      final (apiKey, effectivePresetId) = await _resolveApiKey(presetId);
+      final apiKey = await _settingsRepository.getApiKey(presetId);
       if (apiKey == null || apiKey.isEmpty) return null;
 
-      final preset = await _presetRepository.getPreset(effectivePresetId);
+      final preset = await _presetRepository.getPreset(presetId);
       final maxOutputTokens = preset.cachedModels
           .where((model) => model.modelId == modelId)
           .firstOrNull
@@ -851,7 +852,7 @@ class ConfigurationResolver {
         baseUrl: preset.baseUrl,
         apiKey: apiKey,
         modelId: modelId,
-        presetId: effectivePresetId,
+        presetId: presetId,
         protocol: preset.protocol,
         providerOptions: preset.providerOptions,
         maxOutputTokens: maxOutputTokens,
@@ -860,10 +861,25 @@ class ConfigurationResolver {
     } catch (e) {
       _logger.error(
         'Resolve advanced generating naming config failed',
-        detail: '$e',
+        detail: 'errorType=${e.runtimeType}',
       );
       return null;
     }
+  }
+
+  /// Model selection shared by the session UI, snapshot and request resolver.
+  static SessionPhaseModels directorGeneratingModels(
+    SessionPhaseModels overrides, {
+    String? defaultPresetId,
+    String? defaultModelId,
+  }) {
+    String? configured(String? id) => id == null || id.isEmpty ? null : id;
+    return SessionPhaseModels(
+      generatingPresetId: configured(overrides.generatingPresetId) ??
+          configured(defaultPresetId),
+      generatingModelId:
+          configured(overrides.generatingModelId) ?? configured(defaultModelId),
+    );
   }
 
   /// 解析中级模式指定阶段的 NamingConfig（分步骤模型配置）
@@ -1115,7 +1131,7 @@ class ConfigurationResolver {
     } catch (e) {
       _logger.error(
         'Resolve advanced suggest reply naming config failed',
-        detail: '$e',
+        detail: 'errorType=${e.runtimeType}',
       );
       return resolveAdvancedGeneratingNamingConfig(session);
     }
@@ -1152,7 +1168,10 @@ class ConfigurationResolver {
   /// 返回 null 的情形（均降级为 FTS5 兜底，DOC-09A-1 §3.7）：
   /// - 未配置 embedding preset 或 model（空串）
   /// - preset 不存在（已被删除）
-  /// - 该 preset 无 API Key
+  ///
+  /// apiKey 为空/缺失不判 null：正常构造配置并尝试匿名请求（本地部署/
+  /// 免鉴权供应商），鉴权失败按现有失败/降级策略处理——传输层仅在
+  /// Key 非空时携带 Authorization。
   ///
   /// embedding 模型与聊天模型独立：用户可为 embedding 配置不同供应商
   /// （如聊天用 DeepSeek，embedding 用 OpenAI text-embedding-3-small）。
@@ -1167,7 +1186,6 @@ class ConfigurationResolver {
 
       final preset = await _presetRepository.getPreset(presetId);
       final apiKey = await _settingsRepository.getApiKey(presetId);
-      if (apiKey == null || apiKey.isEmpty) return null;
 
       return EmbeddingApiConfig(
         model: modelId,
@@ -1186,6 +1204,8 @@ class ConfigurationResolver {
   ///
   /// 与 [resolveEmbeddingConfig] 同构但来源为 advanced.embedding*——
   /// 导演不再寄生 intermediate.embedding*（"两个产品"零依赖）。
+  /// null 语义同构：仅「未配置」与「preset 不存在」两种；apiKey 为空/
+  /// 缺失时正常构造配置尝试匿名请求（见 [resolveEmbeddingConfig]）。
   Future<EmbeddingApiConfig?> resolveAdvancedEmbeddingConfig() async {
     try {
       final config = await _settingsRepository.getResolvedConfig();
@@ -1196,7 +1216,6 @@ class ConfigurationResolver {
 
       final preset = await _presetRepository.getPreset(presetId);
       final apiKey = await _settingsRepository.getApiKey(presetId);
-      if (apiKey == null || apiKey.isEmpty) return null;
 
       return EmbeddingApiConfig(
         model: modelId,
@@ -1433,13 +1452,10 @@ class ConfigurationResolver {
           ? ReasoningEffort.fromString(generation.reasoningEffort)
           : null;
 
-      final phaseModels = SessionPhaseModels(
-        generatingPresetId: advanced.generatingPresetId.isEmpty
-            ? null
-            : advanced.generatingPresetId,
-        generatingModelId: advanced.generatingModelId.isEmpty
-            ? null
-            : advanced.generatingModelId,
+      final phaseModels = directorGeneratingModels(
+        const SessionPhaseModels.empty(),
+        defaultPresetId: advanced.generatingPresetId,
+        defaultModelId: advanced.generatingModelId,
       );
 
       return GlobalDefaultsSnapshot(

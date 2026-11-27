@@ -11,12 +11,15 @@ import 'package:lmstory/features/chat/data/database/tables/chat_session_branches
 import 'package:lmstory/features/chat/data/database/tables/chat_sessions_table.dart';
 import 'package:lmstory/features/chat/data/database/tables/compaction_points_table.dart';
 import 'package:lmstory/features/chat/data/database/tables/message_variants_table.dart';
+import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/diagnostics/data/database/tables/failure_logs_table.dart';
 import 'package:lmstory/features/memory/data/database/embedding_dimensions_backfill.dart';
 import 'package:lmstory/features/memory/data/database/tables/experiential_memories_table.dart';
 import 'package:lmstory/features/memory/data/database/tables/factual_attributes_table.dart';
 import 'package:lmstory/features/memory/data/database/tables/factual_entities_table.dart';
 import 'package:lmstory/features/memory/data/database/tables/factual_memory_history_table.dart';
+import 'package:lmstory/features/memory/data/database/tables/factual_relationship_migration_backup_table.dart';
+import 'package:lmstory/features/memory/data/migrations/relationship_split_migration.dart';
 import 'package:lmstory/features/resource_library/data/database/tables/character_cards_table.dart';
 import 'package:lmstory/features/resource_library/data/database/tables/worldbooks_table.dart';
 import 'package:lmstory/features/settings/data/database/tables/api_presets_table.dart';
@@ -114,6 +117,7 @@ part 'app_database.g.dart';
 ///      'auto'=轮管线产物 / 'manual'=记忆库手动新增。deleteExperienceByTurns
 ///      只删 auto 行——手动记忆不再被「重生成/删除本轮」按 turn 窗静默吞删；
 ///      DEFAULT('auto') 对存量行无感（存量手动行不可追溯，仍按 auto 处理））
+/// v56: experiential_memories.has_verified_source_turn（单轮来源证据）。
 ///
 /// 迁移策略（user_rules #3 + 用户明确要求：升级不丢数据，只扩展表结构）：
 /// - onCreate：m.createAll() + _createIndexes() + _createV16Tables() +
@@ -133,6 +137,7 @@ part 'app_database.g.dart';
     FactualEntitiesTable,
     FactualAttributesTable,
     FactualMemoryHistoryTable,
+    FactualRelationshipMigrationBackupTable,
     ApiPresetsTable,
     TemplatesTable,
     FailureLogsTable,
@@ -146,6 +151,8 @@ part 'app_database.g.dart';
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
+  AppDatabase.connect(super.e);
+
   AppDatabase.forTesting(super.e);
 
   /// schema 修复日志（修复：ALTER 失败不再静默）
@@ -155,8 +162,7 @@ class AppDatabase extends _$AppDatabase {
   ///
   /// UI 显示面（Wiki 版本记录等）经此静态常量取值，不各自手写数字；
   /// test/features/help/wiki_counts_lock_test.dart 对账本值与文案参数。
-  static const int currentSchemaVersion =
-      54; // 54：failure_logs.outcome（recovered 标记）
+  static const int currentSchemaVersion = 57;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -170,9 +176,7 @@ class AppDatabase extends _$AppDatabase {
           await _createFactualIndexes();
         },
         onUpgrade: (m, from, to) async {
-          // 降级打开（新版本库被旧应用打开）显式拒绝
-          // 写版本号——repairSchema 的版本写入已按 from<to 守卫，此处先
-          // 记日志明示，避免静默把迁移轨迹抹回旧版本。
+          // 新版本库被旧应用打开时记录版本差异。
           if (from > to) {
             _repairLogger.warn(
               'Database downgraded open: from=$from > to=$to '
@@ -187,7 +191,6 @@ class AppDatabase extends _$AppDatabase {
           //     [repairSchema] 内部会自动移除这些约束降级为 nullable）
           // 3. CREATE INDEX IF NOT EXISTS：重建索引
           // 4. 重建 FTS5 虚拟表（如果不存在）
-          // 5. PRAGMA user_version：更新 schemaVersion 到最新
           //
           // 历史上曾使用 DROP + 重建策略（2026-07-25 之前），导致用户升级后
           // 已有的会话、消息、API 配置等数据全部丢失，已被废弃。
@@ -216,6 +219,16 @@ class AppDatabase extends _$AppDatabase {
           // Table 类未迁数据——跳跃/逐版升级后旧列值孤儿化，会话级步骤模型
           // 与审查开关静默回落全局。须后于 repairSchema（新列先补齐才有落位）。
           await _migrateSessionColumnRenames();
+          // v55：关系属性拆分迁移（幂等数据迁移，逐行备份+审计留痕；
+          // 备份表由 repairSchema 纯增量创建，此处只做数据面）。
+          // 显式包事务：迁移中途崩溃整体回滚（user_version 由 drift 在
+          // onUpgrade 成功后才写），下次启动重跑收敛；行级容错见迁移类
+          // 注释（坏行保留+待确认标记，不阻塞升级）。
+          if (from < 55) {
+            await transaction(() async {
+              await RelationshipSplitMigration(this).run();
+            });
+          }
         },
         beforeOpen: (details) async {
           // 升级路径的 repairSchema 失败
@@ -257,6 +270,18 @@ class AppDatabase extends _$AppDatabase {
 
   /// 创建所有索引（对齐 DOC-02 Section 6.4）
   Future<void> _createIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_session_recent '
+      'ON chat_sessions (last_active_at DESC, id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_session_latest_story '
+      'ON chat_sessions ($storyActivityOrder) WHERE $storyModeFilter',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_msg_session_latest '
+      'ON chat_messages (session_id, id DESC)',
+    );
     // chat_messages 索引
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_msg_session_created '
@@ -298,6 +323,16 @@ class AppDatabase extends _$AppDatabase {
     // v7: api_presets + templates 索引
     await _createV7Indexes();
   }
+
+  static const storyModeFilter =
+      "mode IN ('${ChatMode.intermediate}', '${ChatMode.advanced}')";
+
+  // The featured story was ordered by DateTime.compareTo. Drift stores ISO
+  // text with local offsets. Normalize whole seconds separately so SQLite's
+  // datetime functions cannot round the original microseconds away.
+  static const storyActivityOrder = 'datetime(substr(last_active_at, 1, 19) || '
+      "ltrim(substr(last_active_at, 20), '.0123456789')) DESC, "
+      "CAST('0' || substr(last_active_at, 20) AS REAL) DESC, id";
 
   /// 创建 v7 新增表的索引
   Future<void> _createV7Indexes() async {
@@ -552,6 +587,9 @@ class AppDatabase extends _$AppDatabase {
       // 变体表一并 DROP+重建——「清除所有数据」
       // 此前不 DROP 不重建，正文/思考/锚快照原样残留（名实矛盾）。
       await customStatement('DROP TABLE IF EXISTS message_variants');
+      await customStatement(
+        'DROP TABLE IF EXISTS factual_relationship_migration_backup',
+      );
       await customStatement('DROP TABLE IF EXISTS factual_memory_history');
       await customStatement('DROP TABLE IF EXISTS factual_attributes');
       await customStatement('DROP TABLE IF EXISTS factual_entities');
@@ -603,7 +641,8 @@ class AppDatabase extends _$AppDatabase {
   /// 2. ALTER TABLE ADD COLUMN：补齐已存在表缺失的列
   /// 3. CREATE INDEX IF NOT EXISTS：重建索引（已存在会跳过）
   /// 4. 重建 FTS5 虚拟表（如果不存在）
-  /// 5. PRAGMA user_version：更新 schemaVersion 到最新
+  ///
+  /// 版本号由 Drift 在开库迁移回调成功返回后写入。
   ///
   /// **不修改**已有列的类型/约束（纯增量）。
   /// **不删除**任何数据。
@@ -654,9 +693,7 @@ class AppDatabase extends _$AppDatabase {
               // 某些列可能因约束冲突无法添加（如已有数据违反 NOT NULL）。
               //  修复：不再静默吞掉——记录错误并计入结果，
               // 由调用方（升级路径/修复表结构 UI）向用户暴露半迁移状态。
-              // 注意：升级路径的 user_version 由 drift 在 onUpgrade 完成后
-              // 统一写回，组件内跳过 PRAGMA 无法阻止；可见化 + 幂等重试
-              // （repairSchema 方向无关，下次启动自动重试失败列）是可达的修复。
+              // beforeOpen 会在后续开库时重试失败列。
               failedColumns.add('$tableName.${column.name}');
               _repairLogger.error(
                 'ALTER TABLE failed during schema repair',
@@ -675,16 +712,6 @@ class AppDatabase extends _$AppDatabase {
       // 3.5 FTS 形状校验：v16-20 旧形状 memories_fts 在
       // IF NOT EXISTS 建表策略下永不自愈——形状不符即 DROP 重建+回填
       await _ensureMemoriesFtsShape();
-
-      // 4. 更新 schemaVersion（：只在当前版本落后时写——旧实现无条件
-      // 强写，未来 v47 库被当前 v46 应用打开时版本号被抹回 46，污染迁移
-      // 轨迹；降级打开时保持原版本号原样，仅做自愈修复）
-      final currentVersionRow = await customSelect('PRAGMA user_version').get();
-      final currentVersion =
-          currentVersionRow.first.data['user_version'] as int? ?? 0;
-      if (currentVersion < schemaVersion) {
-        await customStatement('PRAGMA user_version = $schemaVersion');
-      }
     });
 
     return SchemaRepairResult(

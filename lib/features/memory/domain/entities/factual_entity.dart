@@ -32,7 +32,11 @@ enum FactualEntityType {
   /// 从数据库字符串解析
   ///
   /// 保留向后兼容：pet/npc -> character, rule -> lore
-  static FactualEntityType fromString(String value) {
+  static FactualEntityType fromString(String value) =>
+      tryFromString(value) ?? FactualEntityType.character;
+
+  /// Resolves stored names and known legacy aliases without guessing a type.
+  static FactualEntityType? tryFromString(String? value) {
     switch (value) {
       case 'character':
       case 'pet':
@@ -50,7 +54,7 @@ enum FactualEntityType {
       case 'misc':
         return FactualEntityType.misc;
       default:
-        return FactualEntityType.character;
+        return null;
     }
   }
 
@@ -181,6 +185,28 @@ class FactualEntity {
 
   /// 是否为关键实体（importance >= 4）
   bool get isKeyEntity => importance >= 4;
+
+  /// 关键实体注入优先级比较（DEC-06 消费层统一排序口径）
+  ///
+  /// 排序规则：importance DESC → 活跃度新者在前（updatedAt 优先，
+  /// 其次 updatedTurn——活跃实体优先，不能仅按创建早晚长期占位）
+  /// → entityId 升序稳定兜底（同分同活跃度时结果确定）。
+  ///
+  /// 消费方：FactContextBuilder.buildFactBlock / buildKnownEntitiesBlock、
+  /// 导演 assembleDirectorCoreBlocks——三处取数共用同一排序，
+  /// 与 keyEntityAutoCap 配套截断，保证故事模式与导演模式「同一批
+  /// 关键档案」入选口径一致。仓储查询层（factual_repository_impl）
+  /// 不感知此排序。
+  static int compareInjectionPriority(FactualEntity a, FactualEntity b) {
+    final byImportance = b.importance.compareTo(a.importance);
+    if (byImportance != 0) return byImportance;
+    final updatedMsA = a.updatedAt?.millisecondsSinceEpoch ?? 0;
+    final updatedMsB = b.updatedAt?.millisecondsSinceEpoch ?? 0;
+    if (updatedMsA != updatedMsB) return updatedMsB.compareTo(updatedMsA);
+    final byUpdatedTurn = (b.updatedTurn ?? 0).compareTo(a.updatedTurn ?? 0);
+    if (byUpdatedTurn != 0) return byUpdatedTurn;
+    return a.entityId.compareTo(b.entityId);
+  }
 
   /// 用于 UI 展示的简要描述
   ///

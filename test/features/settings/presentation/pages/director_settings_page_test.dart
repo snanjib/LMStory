@@ -117,6 +117,13 @@ void main() {
       expect(find.text('温度'), findsWidgets);
       expect(find.text('单次生成上限'), findsWidgets);
       expect(find.text('推荐回复'), findsOneWidget);
+      // 工具权限控制组展示 finish_maintenance 且只读组含 list_facts（展开只读组可查）
+      expect(find.text('finish_maintenance'), findsOneWidget);
+      expect(find.text('完成周期审查与维护'), findsOneWidget);
+      await tester.tap(find.text('只读'));
+      await tester.pumpAndSettle();
+      expect(find.text('list_facts'), findsOneWidget);
+      expect(find.text('浏览动态实体目录与统计分布'), findsOneWidget);
     });
 
     testWidgets('4. 简单模式仅规则区可交互，切换不触碰隐藏区折叠记录', (tester) async {

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/features/chat/domain/services/simple_failure_classifier.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/stream_failure.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// Simple 模式失败分类器单测（.5，DOC-09B §9 扩展）
@@ -272,6 +273,76 @@ void main() {
 
       expect(result.rawError, contains('short'));
       expect(result.rawError!.length, lessThan(2000));
+    });
+  });
+
+  group('classifyError - typed stream failures', () {
+    test('uses the transport status for authentication failures', () {
+      final result = classifier.classifyError(
+        const StreamErrorException(
+          'Stream interrupted: AppHttpException: '
+          'SSE request failed with status 403 | Response: Forbidden',
+          code: 'AUTH',
+        ),
+      );
+      expect(result.category, SimpleFailureClassifier.auth);
+      expect(result.httpStatus, 403);
+    });
+
+    test('understands authentication semantics without a transport status', () {
+      final result = classifier.classifyError(
+        const StreamErrorException('Invalid credentials', code: 'AUTH'),
+      );
+      expect(result.category, SimpleFailureClassifier.auth);
+      expect(result.httpStatus, isNull);
+    });
+
+    test('keeps temporary server failures eligible for the retry policy', () {
+      final result = classifier.classifyError(
+        const StreamErrorException(
+          'Stream interrupted: AppHttpException: '
+          'SSE request failed with status 503 | Response: Please retry',
+          code: 'SERVER',
+        ),
+      );
+      expect(result.category, SimpleFailureClassifier.server);
+      expect(result.httpStatus, 503);
+    });
+
+    test('does not treat a response message as an HTTP status', () {
+      final result = classifier.classifyError(
+        const StreamErrorException(
+          'Provider: an upstream request returned status 401',
+          code: 'BAD_REQUEST',
+        ),
+      );
+      expect(result.category, SimpleFailureClassifier.config);
+      expect(result.httpStatus, isNull);
+    });
+
+    test('uses the transport status before diagnostics in the response', () {
+      final result = classifier.classifyError(
+        const StreamErrorException(
+          'Gemini stream interrupted: AppHttpException: '
+          'SSE request failed with status 503 | Response: '
+          'Upstream rejected with status 401',
+          code: 'SERVER',
+        ),
+      );
+      expect(result.category, SimpleFailureClassifier.server);
+      expect(result.httpStatus, 503);
+    });
+
+    test('model unavailability still takes precedence over a bad request', () {
+      final result = classifier.classifyError(
+        const StreamErrorException(
+          'Stream interrupted: AppHttpException: '
+          'SSE request failed with status 400 | Response: Model is unavailable',
+          code: 'BAD_REQUEST',
+        ),
+      );
+      expect(result.category, SimpleFailureClassifier.server);
+      expect(result.httpStatus, 400);
     });
   });
 

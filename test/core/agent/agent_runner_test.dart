@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/agent/agent_budget.dart';
 import 'package:lmstory/core/agent/agent_cancellation.dart';
@@ -6,7 +8,9 @@ import 'package:lmstory/core/agent/agent_llm_gateway.dart';
 import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/agent/agent_runner.dart';
 import 'package:lmstory/core/agent/agent_tool.dart';
+import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
 import 'package:lmstory/core/agent/doom_loop_detector.dart';
+import 'package:lmstory/core/llm/tool_calling/tool_choice.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_event_bus.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_system_prompt.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
@@ -39,11 +43,12 @@ class _ScriptedGateway implements AgentLlmGateway {
   }
 }
 
-/// 失败 N 次后成功的网关（重试验证）
+/// 失败 N 次后成功的网关（重试验证；HAR-03 起逐次记录请求）
 class _FlakyGateway implements AgentLlmGateway {
   _FlakyGateway({required this.failures, required this.thenResponse});
   final int failures;
   final AgentStepResponse thenResponse;
+  final List<AgentStepRequest> requests = [];
   int attempts = 0;
 
   @override
@@ -56,6 +61,7 @@ class _FlakyGateway implements AgentLlmGateway {
     void Function(String toolCallId, String toolName, String delta)?
         onToolArgDelta,
   }) async {
+    requests.add(request);
     attempts++;
     if (attempts <= failures) {
       throw const AgentLlmException('network down', code: '503');
@@ -63,6 +69,10 @@ class _FlakyGateway implements AgentLlmGateway {
     return thenResponse;
   }
 }
+
+/// 工具定义指纹（HAR-03/HAR-05：跨请求 tools 恒等断言用）
+String _toolsFingerprint(AgentStepRequest request) =>
+    jsonEncode([for (final t in request.tools) t.toRequestBody()]);
 
 /// 首次抛 429+Retry-After，之后成功（重试等待可视化验证）
 class _RateLimitedGateway implements AgentLlmGateway {
@@ -275,6 +285,7 @@ AgentTurnSpec _spec(
   AgentCallConfig callConfig = const AgentCallConfig(),
   AgentOverflowCompactor? overflowCompactor,
   AgentResumeSeed? resumeSeed,
+  AgentToolPipeline? pipeline,
 }) {
   return AgentTurnSpec(
     sessionId: 'test',
@@ -295,6 +306,7 @@ AgentTurnSpec _spec(
     callConfig: callConfig,
     overflowCompactor: overflowCompactor,
     resumeSeed: resumeSeed,
+    pipeline: pipeline,
   );
 }
 
@@ -611,9 +623,18 @@ void main() {
       expect(result.reason, AgentStopReason.completed);
       expect(result.steps, 4);
       expect(gateway.requests, hasLength(4));
-      // 最后一次请求：工具已停用（空工具列表）+ 尾部有通牒消息
+      // HAR-05 软着陆保形：末请求 tools 键保留且与之前请求相等
+      // （不再清空——空数组经网关转 null 省略 tools 键，该步全前缀
+      // 缓存 miss），改以 toolChoice=none 停用工具；尾部有通牒消息
       //（：role=user + workbench-reminder 包裹，不再走裸 system）
-      expect(gateway.requests.last.tools, isEmpty);
+      expect(gateway.requests.last.tools, isNotEmpty);
+      expect(
+        _toolsFingerprint(gateway.requests.last),
+        _toolsFingerprint(gateway.requests.first),
+        reason: '软着陆步 tools 定义与工具步完全一致（前缀缓存命中）',
+      );
+      expect(gateway.requests.last.toolChoice, ToolChoice.none);
+      expect(gateway.requests.first.toolChoice, isNull);
       final lastMessages = gateway.requests.last.messages;
       expect(
         lastMessages.any(
@@ -704,7 +725,13 @@ void main() {
       // 模型配合收尾 → 正常完成，正文不因预算耗尽蒸发
       expect(result.reason, AgentStopReason.completed);
       expect(result.steps, 3);
-      expect(gateway.requests[2].tools, isEmpty);
+      // HAR-05：通牒后的收尾请求保形（tools 相等 + toolChoice none）
+      expect(gateway.requests[2].tools, isNotEmpty);
+      expect(
+        _toolsFingerprint(gateway.requests[2]),
+        _toolsFingerprint(gateway.requests[0]),
+      );
+      expect(gateway.requests[2].toolChoice, ToolChoice.none);
     });
 
     test('B6：软着陆后仍不收尾 → budgetTokens 停轮（硬停语义守门）', () async {
@@ -1358,8 +1385,13 @@ void main() {
 
       expect(result.reason, AgentStopReason.completed);
       expect(result.lastAssistantText, '预算到顶前的收尾正文。');
-      // 第三个请求已停工具（纯文本收尾通道）
-      expect(gateway.requests[2].tools, isEmpty);
+      // HAR-05：第三个请求保形停工具（tools 相等 + toolChoice none）
+      expect(gateway.requests[2].tools, isNotEmpty);
+      expect(
+        _toolsFingerprint(gateway.requests[2]),
+        _toolsFingerprint(gateway.requests[0]),
+      );
+      expect(gateway.requests[2].toolChoice, ToolChoice.none);
       expect(
         sink.of<AgentInjectedMessageEvent>().single.kind,
         AgentInjectedMessageKinds.budgetFinalNotice,
@@ -1414,9 +1446,14 @@ void main() {
 
       expect(result.reason, AgentStopReason.completed);
       expect(result.lastAssistantText, '余量触发的收尾正文。');
-      // 触发线由窗口推得（900 ≥ 850），注入即发生：第二个请求停工具
+      // 触发线由窗口推得（900 ≥ 850），注入即发生：第二个请求保形停工具
       expect(gateway.requests, hasLength(2));
-      expect(gateway.requests[1].tools, isEmpty);
+      expect(gateway.requests[1].tools, isNotEmpty);
+      expect(
+        _toolsFingerprint(gateway.requests[1]),
+        _toolsFingerprint(gateway.requests[0]),
+      );
+      expect(gateway.requests[1].toolChoice, ToolChoice.none);
     });
 
     test('审查收官 R1-P1-2：余量守卫含 cache 读（Anthropic 口径 prompt 不含 cache）', () async {
@@ -1452,7 +1489,8 @@ void main() {
       expect(result.reason, AgentStopReason.completed);
       expect(result.lastAssistantText, '缓存重会话的收尾正文。');
       expect(gateway.requests, hasLength(2), reason: '软着陆注入发生');
-      expect(gateway.requests[1].tools, isEmpty);
+      expect(gateway.requests[1].tools, isNotEmpty);
+      expect(gateway.requests[1].toolChoice, ToolChoice.none);
     });
 
     test('B6：无 usage 数据（lastPromptTokens=0）不误触发余量守卫', () async {
@@ -1732,8 +1770,9 @@ void main() {
 
       expect(result.reason, AgentStopReason.completed);
       expect(gateway.requests, hasLength(1), reason: '只剩软着陆的收尾请求');
-      // 软着陆通牒注入且工具停用（纯文本请求不带工具定义）
-      expect(gateway.requests.single.tools, isEmpty);
+      // HAR-05：软着陆通牒注入且保形停工具（tools 定义保留 + none）
+      expect(gateway.requests.single.tools, isNotEmpty);
+      expect(gateway.requests.single.toolChoice, ToolChoice.none);
       expect(
         sink
             .of<AgentInjectedMessageEvent>()
@@ -1764,6 +1803,536 @@ void main() {
       expect(gateway.requests, hasLength(2));
     });
   });
+
+  // ==================== HAR-03 前缀演化不变量（随批验收工具） ====================
+  //
+  // 不变量：多步工具循环中，每个后续请求的 messages 是之前请求 messages
+  // 的**前缀扩展**（append-only，允许尾部新增），tools 列表与之前请求相等
+  // ——这是供应商前缀缓存（Anthropic prompt caching / OpenAI 自动前缀
+  // 缓存）命中的前提。
+  //
+  // 合法破坏例外（显式列举，不建统一平台）：
+  // ① 溢出整面替换：surface/replace 后 messages 被压缩摘要整面替换
+  //   （非前缀扩展；见「上下文超限自愈」组的重试消息批断言）
+  // ② 软着陆（HAR-05 落地后）：tools 不变但 toolChoice 变 none 且尾部
+  //   注入通牒 user——messages 尾部新增仍满足前缀扩展（见下方用例）
+  // ③ 同 step 重试：messages 不变（可能重复请求；见下方用例）
+  group('HAR-03 前缀演化不变量', () {
+    test('多步工具循环：messages 前缀扩展 + tools 恒等', () async {
+      final gateway = _ScriptedGateway([
+        _call('echo', {'text': '1'}, id: 'c1'),
+        _call('echo', {'text': '2'}, id: 'c2'),
+        _call('echo', {'text': '3'}, id: 'c3'),
+        _text('收尾。'),
+      ]);
+      final runner = AgentRunner(gateway: gateway);
+
+      await runner.runTurn(
+        _spec(gateway, surface: [AgentMessage.user('开始')]),
+      );
+
+      expect(gateway.requests, hasLength(4));
+      for (var i = 1; i < gateway.requests.length; i++) {
+        final prev = gateway.requests[i - 1];
+        final curr = gateway.requests[i];
+        expect(
+          curr.messages.length,
+          greaterThan(prev.messages.length),
+          reason: '请求 $i 应在尾部追加消息',
+        );
+        expect(
+          curr.messages.sublist(0, prev.messages.length),
+          equals(prev.messages),
+          reason: '请求 $i 的 messages 必须是请求 ${i - 1} 的前缀扩展',
+        );
+        expect(
+          _toolsFingerprint(curr),
+          _toolsFingerprint(gateway.requests.first),
+          reason: '请求 $i 的 tools 必须与首请求相等',
+        );
+        expect(curr.toolChoice, isNull, reason: '工具步无 step 级 toolChoice');
+      }
+    });
+
+    // 例外②软着陆：HAR-05 落地后 tools 不变、toolChoice=none、
+    // 通牒 user 尾部追加——messages 仍满足前缀扩展
+    test('例外②软着陆：tools 恒等 + toolChoice=none + 通牒尾部追加仍前缀扩展', () async {
+      final gateway = _ScriptedGateway([
+        _call('echo', {'text': '1'}, id: 'c1'),
+        _call('echo', {'text': '2'}, id: 'c2'),
+        _text('收尾正文。'),
+      ]);
+      final runner = AgentRunner(gateway: gateway);
+
+      final result = await runner.runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('loop')],
+          budget: const AgentBudget(maxSteps: 2, maxDuration: null),
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completed);
+      expect(gateway.requests, hasLength(3));
+      final prev = gateway.requests[1];
+      final last = gateway.requests[2];
+      expect(last.messages.length, greaterThan(prev.messages.length));
+      expect(
+        last.messages.sublist(0, prev.messages.length),
+        equals(prev.messages),
+        reason: '通牒 user 是尾部新增，前缀不变',
+      );
+      expect(
+        _toolsFingerprint(last),
+        _toolsFingerprint(gateway.requests.first),
+        reason: '例外②：软着陆步 tools 不变（HAR-05）',
+      );
+      expect(last.toolChoice, ToolChoice.none);
+    });
+
+    // 例外③同 step 重试：messages 不变（重复请求）
+    test('例外③同 step 重试：messages 不变（重复请求）', () async {
+      final gateway = _FlakyGateway(
+        failures: 1,
+        thenResponse: _text('恢复后的回复。'),
+      );
+      final runner = AgentRunner(gateway: gateway);
+
+      await runner.runTurn(
+        _spec(gateway, surface: [AgentMessage.user('hi')]),
+      );
+
+      expect(gateway.requests, hasLength(2));
+      expect(
+        gateway.requests[1].messages,
+        equals(gateway.requests[0].messages),
+      );
+      expect(
+        _toolsFingerprint(gateway.requests[1]),
+        _toolsFingerprint(gateway.requests[0]),
+      );
+    });
+  });
+
+  group('写入失败终结守卫与同批边界', () {
+    test('工具失败在 toolResult 与下次请求中保留 isError 信号', () async {
+      final readFail = _ScriptedTool(
+        name: 'search_story',
+        permission: AgentToolPermission.readOnly,
+        results: [
+          AgentToolResult.failure(title: '检索失败', output: '查询语法错误'),
+        ],
+      );
+      final gateway = _ScriptedGateway([
+        _call('search_story', {}, id: 'c1'),
+        _text('改用直接回答。'),
+      ]);
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('查一下')],
+          tools: [readFail],
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completed);
+      final toolMsg =
+          result.appendedMessages.firstWhere((m) => m.role == 'tool');
+      expect(toolMsg.isToolError, isTrue);
+      final wireTool =
+          gateway.requests[1].messages.firstWhere((m) => m['role'] == 'tool');
+      expect(wireTool['content'], '[TOOL_ERROR] 查询语法错误');
+    });
+
+    test('只读工具失败不拦截终结工具', () async {
+      final readFail = _ScriptedTool(
+        name: 'search_story',
+        permission: AgentToolPermission.readOnly,
+        results: [AgentToolResult.failure(title: '检索失败', output: '无结果')],
+      );
+      final writeOk = _ScriptedTool(
+        name: 'update_facts',
+        permission: AgentToolPermission.write,
+        results: [AgentToolResult.success(title: '已暂存', output: 'ok')],
+      );
+      final finish = _CountingFinishTool();
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c1', name: 'search_story', arguments: {}),
+            AgentToolCall(id: 'c2', name: 'update_facts', arguments: {}),
+            AgentToolCall(id: 'c3', name: 'finish_round', arguments: {}),
+          ],
+        ),
+      ]);
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('继续')],
+          tools: [readFail, writeOk, finish],
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(finish.invocations, 1);
+    });
+
+    test('多个写工具混合成功与失败：成功工具不会清除失败工具的未修正记录', () async {
+      final writeA = _ScriptedTool(
+        name: 'update_story_anchor',
+        permission: AgentToolPermission.write,
+        results: [
+          AgentToolResult.success(title: '锚点已更新', output: 'ok'),
+          AgentToolResult.success(title: '锚点已更新', output: 'ok'),
+        ],
+      );
+      final writeB = _ScriptedTool(
+        name: 'update_facts',
+        permission: AgentToolPermission.write,
+        results: [
+          AgentToolResult.failure(title: '参数缺失', output: '缺少 confidence'),
+          AgentToolResult.success(title: '已暂存', output: 'ok'),
+        ],
+      );
+      final finish = _CountingFinishTool();
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c1', name: 'update_facts', arguments: {'n': 1}),
+            AgentToolCall(id: 'c2', name: 'update_story_anchor', arguments: {}),
+          ],
+        ),
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c3', name: 'update_story_anchor', arguments: {}),
+            AgentToolCall(id: 'c4', name: 'finish_round', arguments: {}),
+          ],
+        ),
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c5', name: 'update_facts', arguments: {'n': 2}),
+            AgentToolCall(id: 'c6', name: 'finish_round', arguments: {}),
+          ],
+        ),
+      ]);
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('继续')],
+          tools: [writeA, writeB, finish],
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(result.steps, 3);
+      expect(finish.invocations, 1, reason: '第 2 步终结调用应在 invoke 前被短路拦截');
+      final step2ToolMsgs = gateway.requests[2].messages
+          .where((m) => m['role'] == 'tool')
+          .toList();
+      expect(step2ToolMsgs.last['content'], contains('update_facts（参数缺失）'));
+    });
+
+    test('同一步内写工具失败后紧跟终结工具：首次拦截，修正或二次确认后放行', () async {
+      final write = _ScriptedTool(
+        name: 'update_facts',
+        permission: AgentToolPermission.write,
+        results: [
+          AgentToolResult.failure(title: '变更全部无效', output: '缺少 confidence'),
+        ],
+      );
+      final finish = _CountingFinishTool();
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c1', name: 'update_facts', arguments: {}),
+            AgentToolCall(id: 'c2', name: 'finish_round', arguments: {}),
+          ],
+        ),
+        _call('finish_round', {}, id: 'c3'),
+      ]);
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('继续')],
+          tools: [write, finish],
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(result.steps, 2);
+      expect(finish.invocations, 1, reason: '首次拦截未进 invoke，二次确认直接放行');
+      final secondReqTools = gateway.requests[1].messages
+          .where((m) => m['role'] == 'tool')
+          .toList();
+      expect(secondReqTools, hasLength(2));
+      expect(secondReqTools[1]['content'], contains('若确认要放弃这些写入并直接结束'));
+    });
+
+    test('同一步内先失败后自愈再终结：直接放行', () async {
+      final write = _ScriptedTool(
+        name: 'update_facts',
+        permission: AgentToolPermission.write,
+        results: [
+          AgentToolResult.failure(title: '变更全部无效', output: '缺少 confidence'),
+          AgentToolResult.success(title: '已暂存', output: 'ok'),
+        ],
+      );
+      final finish = _CountingFinishTool();
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c1', name: 'update_facts', arguments: {'a': 1}),
+            AgentToolCall(id: 'c2', name: 'update_facts', arguments: {'a': 2}),
+            AgentToolCall(id: 'c3', name: 'finish_round', arguments: {}),
+          ],
+        ),
+      ]);
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('继续')],
+          tools: [write, finish],
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(result.steps, 1);
+      expect(finish.invocations, 1);
+    });
+
+    test('乱序同批 [finish_round(terminal), write]：后续写工具跳过执行并占位补齐', () async {
+      final write = _ScriptedTool(
+        name: 'update_facts',
+        permission: AgentToolPermission.write,
+        results: [AgentToolResult.success(title: '不应执行', output: 'ok')],
+      );
+      final finish = _CountingFinishTool();
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c1', name: 'finish_round', arguments: {}),
+            AgentToolCall(id: 'c2', name: 'update_facts', arguments: {}),
+          ],
+        ),
+      ]);
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('继续')],
+          tools: [finish, write],
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(finish.invocations, 1);
+      expect(write.invocations, 0);
+      final toolMsgs =
+          result.appendedMessages.where((m) => m.role == 'tool').toList();
+      expect(toolMsgs, hasLength(2));
+      expect(toolMsgs[0].isToolError, isFalse);
+      expect(toolMsgs[1].isToolError, isTrue);
+      expect(toolMsgs[1].content, contains('同一请求中的后续写入未执行'));
+    });
+
+    test('pre-execute 或审批拒绝（wasDenied=true）不记入未修正写失败', () async {
+      final write = _ScriptedTool(
+        name: 'update_facts',
+        permission: AgentToolPermission.write,
+        results: [AgentToolResult.success(title: '不应执行', output: 'ok')],
+      );
+      final finish = _CountingFinishTool();
+      final pipeline = AgentToolPipeline(
+        preExecuteHooks: [
+          (req) async => req.toolName == 'update_facts'
+              ? const AgentPreExecuteDeny('频率限制')
+              : const AgentPreExecuteAllow(),
+        ],
+      );
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(id: 'c1', name: 'update_facts', arguments: {}),
+            AgentToolCall(id: 'c2', name: 'finish_round', arguments: {}),
+          ],
+        ),
+      ]);
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('继续')],
+          tools: [write, finish],
+          pipeline: pipeline,
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(finish.invocations, 1);
+      expect(write.invocations, 0);
+    });
+
+    test('finish_maintenance({}) 同参重复调用豁免 doom-loop 误杀', () async {
+      final finishMaintenance = _ScriptedTool(
+        name: 'finish_maintenance',
+        permission: AgentToolPermission.control,
+        results: [
+          AgentToolResult.failure(title: '需补充巡检', output: '请先调用查询工具'),
+          AgentToolResult.failure(title: '需补充巡检', output: '请先核对事实'),
+          AgentToolResult.terminal(title: '维护完成', output: 'done'),
+        ],
+      );
+      final gateway = _ScriptedGateway([
+        _call('finish_maintenance', {}, id: 'c1'),
+        _call('finish_maintenance', {}, id: 'c2'),
+        _call('finish_maintenance', {}, id: 'c3'),
+      ]);
+      final sink = BufferingAgentEventSink();
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('维护')],
+          tools: [finishMaintenance],
+          doomLoopDetector: DoomLoopDetector(threshold: 3),
+          events: sink,
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(sink.of<AgentDoomLoopDetected>(), isEmpty);
+      expect(finishMaintenance.invocations, 3);
+    });
+
+    test('阶段切换（extraMaxStepsDelta > 0）重置写失败终结守卫开关', () async {
+      final write = _ScriptedTool(
+        name: 'update_facts',
+        permission: AgentToolPermission.write,
+        results: [
+          AgentToolResult.failure(title: '任务一失败', output: '缺字段'),
+          AgentToolResult.failure(title: '任务二失败', output: '值超长'),
+          AgentToolResult.success(title: '任务二成功', output: 'ok'),
+        ],
+      );
+      final finishRound = _ScriptedTool(
+        name: 'finish_round',
+        permission: AgentToolPermission.control,
+        results: [
+          AgentToolResult.success(
+            title: '正文已锁定，进入维护阶段',
+            output: '请开始任务二',
+            extraMaxStepsDelta: 4,
+          ),
+        ],
+      );
+      final finishMaintenance = _CountingFinishTool(name: 'finish_maintenance');
+      final gateway = _ScriptedGateway([
+        // 任务一：写失败 -> finish_round 被拦 -> 再次 finish_round 确认放弃并进入任务二
+        _call('update_facts', {'p': 1}, id: 'c1'),
+        _call('finish_round', {}, id: 'c2'),
+        _call('finish_round', {}, id: 'c3'),
+        // 任务二：新写失败 -> finish_maintenance 应再次触发一次性守卫（因阶段切换已重置）
+        _call('update_facts', {'p': 2}, id: 'c4'),
+        _call('finish_maintenance', {}, id: 'c5'),
+        // 修正成功 -> finish_maintenance 放行
+        _call('update_facts', {'p': 3}, id: 'c6'),
+        _call('finish_maintenance', {}, id: 'c7'),
+      ]);
+
+      final result = await AgentRunner(gateway: gateway).runTurn(
+        _spec(
+          gateway,
+          surface: [AgentMessage.user('开始')],
+          tools: [write, finishRound, finishMaintenance],
+          budget: const AgentBudget(maxSteps: 6, maxDuration: null),
+        ),
+      );
+
+      expect(result.reason, AgentStopReason.completedByTool);
+      expect(finishRound.invocations, 1);
+      expect(
+        finishMaintenance.invocations,
+        1,
+        reason: '任务二的 finish_maintenance 首次被守卫拦下',
+      );
+      final step5Tools = gateway.requests[5].messages
+          .where((m) => m['role'] == 'tool')
+          .toList();
+      expect(step5Tools.last['content'], contains('update_facts（任务二失败）'));
+    });
+  });
+}
+
+class _ScriptedTool implements AgentTool {
+  _ScriptedTool({
+    required this.name,
+    required this.permission,
+    required this.results,
+  });
+
+  @override
+  final String name;
+
+  @override
+  final AgentToolPermission permission;
+
+  final List<AgentToolResult> results;
+  int invocations = 0;
+
+  @override
+  String get description => name;
+
+  @override
+  Map<String, dynamic> buildParametersSchema() => const {'type': 'object'};
+
+  @override
+  Future<AgentToolResult> invoke(
+    AgentToolInvocation invocation,
+    Map<String, dynamic> arguments,
+  ) async {
+    final idx = invocations < results.length ? invocations : results.length - 1;
+    invocations++;
+    return results[idx];
+  }
+}
+
+class _CountingFinishTool implements AgentTool {
+  _CountingFinishTool({this.name = 'finish_round'});
+
+  @override
+  final String name;
+
+  int invocations = 0;
+
+  @override
+  String get description => name;
+
+  @override
+  AgentToolPermission get permission => AgentToolPermission.control;
+
+  @override
+  Map<String, dynamic> buildParametersSchema() => const {'type': 'object'};
+
+  @override
+  Future<AgentToolResult> invoke(
+    AgentToolInvocation invocation,
+    Map<String, dynamic> arguments,
+  ) async {
+    invocations++;
+    return AgentToolResult.terminal(title: 'done', output: 'done');
+  }
 }
 
 /// 可编程溢出压缩器 fake

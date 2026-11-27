@@ -5,6 +5,7 @@ import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/di/providers.dart'
     show
         apiPresetRepositoryProvider,
+        chatRepositoryProvider,
         settingsRepositoryProvider,
         templateRepositoryProvider;
 import 'package:lmstory/core/utils/logger.dart';
@@ -30,7 +31,7 @@ import '../../../../test_helpers/stub_failure_log_repository.dart';
 /// chat 模式上下文用量圆环——三模式体验一致的验收面。
 ///
 /// 1. 圆环 chip 出现在输入区工具栏，替换旧文本徽章；数据同源：
-///    numerator = 最近一次落库 tokensUsed（+草稿输入），
+///    numerator = 当前预计上下文（按真实装配材料本地计数 + 草稿输入），
 ///    denominator = chat 压缩触发线（availableWindow × 阈值）
 /// 2. 点开与故事/导演同款 ContextUsageDetailSheet
 /// 3. 手动压缩入口可达，复用 CompressResult 分态（insufficient 专属文案）
@@ -59,6 +60,7 @@ void main() {
   Future<ProviderContainer> pumpPage(WidgetTester tester) async {
     final container = ProviderContainer(
       overrides: [
+        chatRepositoryProvider.overrideWithValue(repo),
         chatModeControllerProvider(session).overrideWith((ref) {
           return ChatModeController(
             chatRepository: repo,
@@ -69,6 +71,8 @@ void main() {
             logger: const Logger('test'),
             failureLogRepository: const StubFailureLogRepository(),
             session: session,
+            // 固定计数：避免真实 tiktoken isolate 让断言依赖文本长度
+            tokenCounter: _FixedTokenCounter(),
           );
         }),
         settingsRepositoryProvider.overrideWithValue(
@@ -106,7 +110,7 @@ void main() {
     return container;
   }
 
-  testWidgets('圆环出现在输入区工具栏，数字与旧徽章同源', (tester) async {
+  testWidgets('圆环数字=当前预计上下文（材料本地计数），不再取 tokensUsed', (tester) async {
     await pumpPage(tester);
 
     final state = tester.state<State>(find.byType(ChatModePage));
@@ -115,8 +119,9 @@ void main() {
     final chip = tester.widget<ContextUsageChip>(
       find.byType(ContextUsageChip),
     );
-    // 落库 tokensUsed = 48000（唯一一条带 usage 的消息）+ 草稿 0
-    expect(chip.numerator, 48000, reason: 'numerator 走旧徽章取数路径');
+    // 固定计数器 1234（系统提示 + 有效消息）+ 草稿 0；旧语义的 48000
+    //（消息 tokensUsed=本轮总消耗）不得再当上下文占用
+    expect(chip.numerator, 1234, reason: 'numerator = 当前预计上下文');
     // 128000 窗口 × 0.6 阈值：max(96000, 64000) × 0.6 = 57600
     expect(chip.denominator, 57600, reason: 'denominator = chat 压缩触发线');
 
@@ -132,8 +137,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.byType(ContextUsageDetailSheet), findsOneWidget);
-    // usageFraction 模板 "$used / $total tokens"；48000 → 48k、128000 → 128k
-    expect(find.textContaining('48k / 128k tokens'), findsOneWidget);
+    // usageFraction 模板 "$used / $total tokens"；1234 / 128000 → 128k
+    expect(find.textContaining('1234 / 128k tokens'), findsOneWidget);
     // 压缩触发线行（57600 → 57.6k）
     expect(find.textContaining('57.6k'), findsOneWidget);
   });
@@ -174,17 +179,18 @@ void main() {
     final notifier =
         container.read(chatModeControllerProvider(session).notifier);
 
-    // 流式完成前的初始态：输出/缓存读取行「—」，脚注解释口径
+    // 流式完成前的初始态：最近请求输入/输出/缓存读取/命中率/平均均「—」
     await tester.tap(find.byType(ContextUsageChip));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 100));
-    // 三个「—」：输出行 + 缓存读取行 + 命中率最近一轮 + 会话平均 = 4
-    expect(find.text('—'), findsNWidgets(4));
+    expect(find.text('—'), findsNWidgets(5));
+    // 主数字为本地估算（≈）→ 脚注解释两种符号
     expect(find.textContaining('「≈」为本地估算值'), findsOneWidget);
 
     // 模拟一轮流式完成（_onFinishStreaming 写入 usage 分项）——面板经
     // Consumer watch 原位刷新，无需重开
     notifier.state = notifier.state.copyWith(
+      lastPromptTokens: 180000,
       lastCompletionTokens: 800,
       lastCacheReadTokens: 132000,
     );
@@ -192,12 +198,94 @@ void main() {
 
     expect(find.text('800 tokens'), findsOneWidget);
     expect(find.text('132k tokens'), findsOneWidget);
-    // 最近一轮命中率：132000/(132000+48000) ≈ 73.3%
+    // 最近请求命中率（新口径）：132000 / 完整输入 180000 ≈ 73.3%
     expect(find.text('73.3%'), findsOneWidget);
-    // 分项齐全后脚注退场（会话平均仍「—」：chat 不做命中率累计）
+    // 会话平均仍「—」（chat 不做命中率累计）
     expect(find.text('—'), findsOneWidget);
-    expect(find.textContaining('「≈」为本地估算值'), findsNothing);
+    // 主数字仍是本地估算（≈），脚注继续说明——不得把估算值伪装成实报
+    expect(find.textContaining('「≈」为本地估算值'), findsOneWidget);
   });
+
+  testWidgets('详情面板消费已校验命中率：cached>input 不显示 120%', (tester) async {
+    await pumpDetailSheet(
+      tester,
+      lastPromptTokens: 1000,
+      lastRequestInputTokens: 1000,
+      requestInputIsComplete: true,
+      lastCacheReadTokens: 1200,
+    );
+
+    expect(find.text('120.0%'), findsNothing);
+    expect(find.text(t.common.contextRing.cacheSampleInvalid), findsOneWidget);
+  });
+
+  testWidgets('详情面板消费已校验命中率：冲突样本不显示 80%', (tester) async {
+    await pumpDetailSheet(
+      tester,
+      lastPromptTokens: 1000,
+      lastRequestInputTokens: 1000,
+      requestInputIsComplete: true,
+      lastCacheReadTokens: 800,
+      lastCacheSampleInvalid: true,
+    );
+
+    expect(find.text('80.0%'), findsNothing);
+    expect(find.text(t.common.contextRing.cacheSampleInvalid), findsOneWidget);
+  });
+
+  testWidgets('详情面板展示已校验的合法命中率', (tester) async {
+    await pumpDetailSheet(
+      tester,
+      lastPromptTokens: 1000,
+      lastRequestInputTokens: 1000,
+      requestInputIsComplete: true,
+      lastCacheReadTokens: 800,
+      lastCacheHitRatio: 0.8,
+    );
+
+    expect(find.text('80.0%'), findsOneWidget);
+    expect(find.text(t.common.contextRing.cacheSampleInvalid), findsNothing);
+  });
+}
+
+Future<void> pumpDetailSheet(
+  WidgetTester tester, {
+  int? lastPromptTokens,
+  int? lastRequestInputTokens,
+  bool requestInputIsComplete = false,
+  int? lastCacheReadTokens,
+  double? lastCacheHitRatio,
+  bool lastCacheSampleInvalid = false,
+}) async {
+  await tester.pumpWidget(
+    TranslationProvider(
+      child: MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ContextUsageDetailSheet(
+              contextWindowTokens: 100000,
+              compactionTriggerTokens: 80000,
+              lastPromptTokens: lastPromptTokens,
+              lastCompletionTokens: 100,
+              lastCacheReadTokens: lastCacheReadTokens,
+              averageCacheHit: null,
+              sessionRounds: 1,
+              isManualCompacting: false,
+              manualCompactionDelta: '',
+              manualCompactionError: null,
+              isRoundActive: false,
+              onManualCompact: () {},
+              lastRequestInputTokens: lastRequestInputTokens,
+              requestInputIsComplete: requestInputIsComplete,
+              lastCacheHitRatio: lastCacheHitRatio,
+              lastCacheSampleInvalid: lastCacheSampleInvalid,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
 }
 
 CompactionService _compactionService() => CompactionService(
@@ -227,6 +315,9 @@ class _RingChatRepository implements ChatRepository {
       List.of(messages);
 
   @override
+  Future<String?> getSessionDraft(String sessionId) async => null;
+
+  @override
   Future<ChatSession> updateSession(ChatSession session) async => session;
 
   @override
@@ -240,6 +331,12 @@ class _RingChatRepository implements ChatRepository {
 
   @override
   Future<List<ForkAnchor>> getForkAnchors(String sessionId) async => [];
+
+  @override
+  Future<List<Map<String, dynamic>>> getCompactionPoints(
+    String sessionId,
+  ) async =>
+      const [];
 
   @override
   Future<void> updateMessageTokensUsed(String messageId, int? tokensUsed) =>
@@ -320,4 +417,10 @@ class _NoopTemplateRepository implements TemplateRepository {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName}');
+}
+
+/// 固定计数（1234）：隔离真实 tiktoken，避免断言依赖文本/编码表
+class _FixedTokenCounter extends TokenCounter {
+  @override
+  Future<int> countTokensForMessages(List<String> messages) async => 1234;
 }

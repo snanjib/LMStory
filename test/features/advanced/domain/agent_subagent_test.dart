@@ -1,13 +1,26 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/agent/agent_budget.dart';
 import 'package:lmstory/core/agent/agent_cancellation.dart';
 import 'package:lmstory/core/agent/agent_events.dart';
 import 'package:lmstory/core/agent/agent_llm_gateway.dart';
 import 'package:lmstory/core/agent/agent_message.dart';
+import 'package:lmstory/core/agent/agent_runner.dart' show AgentEventSink;
 import 'package:lmstory/core/agent/agent_tool.dart';
+import 'package:lmstory/features/advanced/data/agent_durable_event_sink.dart';
+import 'package:lmstory/features/advanced/data/repositories/agent_event_log_repository.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_round_draft.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_event_bus.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_session_tools.dart'
+    show AgentToolDeps;
+import 'package:lmstory/features/advanced/domain/services/agent_story_reader.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_subagent.dart';
+import 'package:lmstory/features/advanced/domain/services/calc_agent_tools.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
+import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
+import 'package:lmstory/features/memory/domain/repositories/factual_repository.dart';
 
 /// 通用子代理测试（P3：SubagentRunner 档位 + SpawnTool 参数/信封）
 class _ScriptedGateway implements AgentLlmGateway {
@@ -123,7 +136,7 @@ void main() {
         gateway: gateway,
         endpoint: endpoint(),
         availableTools: researchTools(),
-        externalEventsResolver: () => external,
+        externalEventsResolver: (_) => external,
       );
 
       final result = await subagent.run(
@@ -264,6 +277,132 @@ void main() {
         ),
         throwsArgumentError,
       );
+    });
+
+    // 以下三组锁定 research 档对幕后 calc 的真实路由与边界。
+    const researchCandidates = [
+      'search_story',
+      'search_story_text',
+      'read_story',
+      'query_facts',
+      'query_memory_changes',
+      'read_compact_summary',
+      'read_skill',
+      'calc_eval',
+      'calc_date',
+    ];
+
+    test('research 出站含候选集中的两项 calc（真实 run + 桩工具只证路由）', () async {
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(text: '【结论】已核对。', toolCalls: []),
+      ]);
+      final subagent = SubagentRunner(
+        gateway: gateway,
+        endpoint: endpoint(),
+        // 候选集独立于白名单常量构造，防止白名单自我对照空转。
+        availableTools: [
+          for (final name in researchCandidates) _StubTool(name),
+        ],
+      );
+      await subagent.run(
+        brief: '核对数值与日期。',
+        toolset: 'research',
+        parentCancellation: AgentCancellationToken(),
+      );
+      final outbound = gateway.requests.single.tools.map((t) => t.name).toSet();
+      expect(outbound, containsAll(researchCandidates));
+      expect(outbound, isNot(contains('spawn')));
+    });
+
+    test('research 子代理真实执行 calc_eval 并把回执送回网关', () async {
+      final draft = AgentRoundDraft(turnNumber: 1);
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(
+          text: '',
+          toolCalls: [
+            AgentToolCall(
+              id: 'cc1',
+              name: 'calc_eval',
+              arguments: {'expression': '0.1 + 0.2'},
+            ),
+          ],
+        ),
+        const AgentStepResponse(text: '【结论】精确值为 3/10。', toolCalls: []),
+      ]);
+      final subagent = SubagentRunner(
+        gateway: gateway,
+        endpoint: endpoint(),
+        availableTools: [
+          // 其余候选给桩，calc_eval 给真实工具（真实 CalcDateTool 同理可换入）。
+          for (final name in researchCandidates.where((n) => n != 'calc_eval'))
+            _StubTool(name),
+          CalcEvalTool(_calcToolDeps(draft)),
+        ],
+      );
+
+      final result = await subagent.run(
+        brief: '用 calc 核对 0.1 + 0.2。',
+        toolset: 'research',
+        parentCancellation: AgentCancellationToken(),
+      );
+
+      // 桩网关脚本驱动，不声称调用真实模型；但 calc_eval 是真实执行。
+      expect(result.reason, AgentStopReason.completed);
+      expect(draft.calledTools, contains('calc_eval'));
+      expect(gateway.requests, hasLength(2));
+      final secondRequest = jsonEncode(gateway.requests[1].messages);
+      expect(secondRequest, contains('3/10'));
+      expect(result.lastAssistantText, contains('3/10'));
+    });
+
+    test('候选缺 calc/无关候选/写工具的过滤边界保持', () async {
+      // 候选不含 calc：出站不含 calc，其余合法项保留。
+      final noCalc = _ScriptedGateway([
+        const AgentStepResponse(text: '【结论】', toolCalls: []),
+      ]);
+      await SubagentRunner(
+        gateway: noCalc,
+        endpoint: endpoint(),
+        availableTools: [
+          for (final name in [
+            'search_story',
+            'read_story',
+            'update_facts',
+            'finish_round',
+            'unrelated_read_only',
+          ])
+            _StubTool(name),
+        ],
+      ).run(
+        brief: 'x',
+        toolset: 'research',
+        parentCancellation: AgentCancellationToken(),
+      );
+      final outbound = noCalc.requests.single.tools.map((t) => t.name).toSet();
+      expect(outbound, {'search_story', 'read_story'});
+      expect(outbound, isNot(contains('calc_eval')));
+      expect(outbound, isNot(contains('calc_date')));
+      expect(outbound, isNot(contains('unrelated_read_only')));
+      expect(outbound, isNot(contains('spawn')));
+      expect(outbound, isNot(contains('update_facts')));
+      expect(outbound, isNot(contains('finish_round')));
+
+      // plain 恒为空工具。
+      final plain = _ScriptedGateway([
+        const AgentStepResponse(text: '【结论】', toolCalls: []),
+      ]);
+      await SubagentRunner(
+        gateway: plain,
+        endpoint: endpoint(),
+        availableTools: [
+          for (final name in researchCandidates) _StubTool(name),
+        ],
+      ).run(
+        brief: 'x',
+        toolset: 'plain',
+        parentCancellation: AgentCancellationToken(),
+      );
+      expect(plain.requests.single.tools, isEmpty);
     });
   });
 
@@ -554,4 +693,133 @@ void main() {
       expect(gateway.requests, hasLength(2));
     });
   });
+
+  // HAR-09：子代理中继稳定身份——同轮多次 spawn 的中继事件按
+  // subagentCallId（= spawn 的 toolCallId，天然唯一）区分，
+  // 既有消费方仍按 data['subagent'] 过滤不受影响。
+  group('HAR-09 子代理中继稳定身份', () {
+    test('同轮两次 spawn 的中继事件 subagentCallId 可区分且与各自 callId 一致', () async {
+      final repo = _CapturingEventLogRepository();
+      final durableSink = DurableAgentEventSink(
+        repository: repo,
+        sessionId: 's-main',
+        turnNumber: 4,
+      );
+      final gateway = _ScriptedGateway([
+        const AgentStepResponse(text: '【结论甲】', toolCalls: []),
+        const AgentStepResponse(text: '【结论乙】', toolCalls: []),
+      ]);
+      final tool = SpawnTool(
+        SubagentRunner(
+          gateway: gateway,
+          endpoint: endpoint(),
+          availableTools: researchTools(),
+          externalEventsResolver: (callId) =>
+              _SubagentCallIdRelaySink(durableSink, callId),
+        ),
+      );
+
+      AgentToolInvocation invocation(String callId, int stepIndex) =>
+          AgentToolInvocation(
+            callId: callId,
+            toolName: 'spawn',
+            stepIndex: stepIndex,
+            cancellation: AgentCancellationToken(),
+          );
+
+      await tool.invoke(invocation('spawn-a', 0), {'brief': '任务甲'});
+      await durableSink.flush();
+      final firstBatch = List.of(repo.appended);
+
+      await tool.invoke(invocation('spawn-b', 1), {'brief': '任务乙'});
+      await durableSink.flush();
+      final secondBatch = repo.appended.skip(firstBatch.length).toList();
+
+      expect(firstBatch, isNotEmpty, reason: '第一次 spawn 有中继事件');
+      expect(
+        firstBatch.every((e) => e.data['subagentCallId'] == 'spawn-a'),
+        isTrue,
+        reason: '中继事件携带各自 spawn 的 callId',
+      );
+      expect(secondBatch, isNotEmpty);
+      expect(
+        secondBatch.every((e) => e.data['subagentCallId'] == 'spawn-b'),
+        isTrue,
+      );
+      // subagent 标记不变（既有消费方按它过滤）
+      for (final e in [...firstBatch, ...secondBatch]) {
+        expect(e.data['subagent'], isTrue);
+      }
+    });
+  });
+}
+
+/// 真实 CalcEvalTool 的最小合成依赖：calc 只触 draft.calledTools，
+/// 其余端口不应被调用（noSuchMethod fail-loud 防误用）。
+AgentToolDeps _calcToolDeps(AgentRoundDraft draft) => AgentToolDeps(
+      sessionId: 'subagent-calc',
+      draft: draft,
+      factualRepository: _NoopFactualRepository(),
+      experienceRepository: _NoopExperienceRepository(),
+      storyReader: _NoopStoryReader(),
+      latestMacros: () async => [],
+      userInteraction: _NoopUserInteractionPort(),
+      commitRound: (d) async => d.explicitReply ?? 'committed',
+    );
+
+class _NoopFactualRepository implements FactualRepository {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _NoopExperienceRepository implements ExperienceRepository {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _NoopStoryReader implements AgentStoryReader {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _NoopUserInteractionPort implements AgentUserInteractionPort {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+/// 捕获 appendAll 的假仓库（HAR-09 中继链路测试用）
+class _CapturingEventLogRepository implements AgentEventLogRepository {
+  final List<AgentDurableEvent> appended = [];
+
+  @override
+  Future<List<int>> appendAll(
+    String sessionId,
+    List<AgentDurableEvent> events,
+  ) async {
+    appended.addAll(events);
+    return List.generate(events.length, (i) => i);
+  }
+
+  @override
+  Future<List<AgentDurableEvent>> readEvents(
+    String sessionId, {
+    int? fromSeq,
+    int? limit,
+  }) async =>
+      const [];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+/// 把 spawn callId 随中继带入 durable sink（模拟 _SubagentDurableRelay 接线）
+class _SubagentCallIdRelaySink implements AgentEventSink {
+  _SubagentCallIdRelaySink(this._sink, this._callId);
+
+  final DurableAgentEventSink _sink;
+  final String _callId;
+
+  @override
+  void emit(AgentRunEvent event) =>
+      _sink.relaySubagentEvent(event, subagentCallId: _callId);
 }

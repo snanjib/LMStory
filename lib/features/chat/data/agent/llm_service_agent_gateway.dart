@@ -7,6 +7,7 @@ import 'package:lmstory/core/llm/context_overflow.dart';
 import 'package:lmstory/core/llm/llm_content_block.dart';
 import 'package:lmstory/core/llm/tool_calling/provider_tool_capabilities.dart';
 import 'package:lmstory/core/llm/tool_calling/tool_call.dart';
+import 'package:lmstory/core/llm/tool_calling/tool_choice.dart';
 import 'package:lmstory/core/network/http_client.dart'
     show CancellationToken, CancelledException;
 import 'package:lmstory/core/network/retry_policy.dart';
@@ -60,8 +61,13 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
           modelId: endpoint.modelId,
         );
 
-    final toolChoice =
-        capabilities.resolveToolChoice(request.config.toolChoice);
+    // HAR-05 软着陆保形：step 级 toolChoice 覆盖优先（软着陆步
+    // tools 定义保留 + none 停用），无覆盖时沿用调用配置
+    final toolChoice = capabilities.resolveToolChoice(
+      request.toolChoice ?? request.config.toolChoice,
+    );
+    // toolChoice=none 的步无工具调用预期——流式可靠性降级只针对工具步
+    final expectsNoToolCalls = request.toolChoice == ToolChoice.none;
     final providerOptions = <String, dynamic>{
       ...?endpoint.providerOptions,
       // 并行工具开关（OpenAiAdapter 识别；DeepSeek 适配器自行移除）
@@ -85,7 +91,11 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
       reasoningEffort: request.config.reasoningEffort,
       modelMaxOutputTokens: endpoint.maxOutputTokens,
       includeUsage: true,
-      stream: request.tools.isEmpty || capabilities.streamingToolCallsReliable,
+      // HAR-05：软着陆步 tools 恒非空，但 toolChoice=none 无工具调用
+      // 预期——视同无工具步保流式（收尾正文流式交付不因保形回退）
+      stream: request.tools.isEmpty ||
+          expectsNoToolCalls ||
+          capabilities.streamingToolCallsReliable,
       tools: request.tools.isEmpty ? null : request.tools,
       toolChoice: request.tools.isEmpty ? null : toolChoice,
       protocol: protocol,
@@ -114,7 +124,9 @@ class LlmServiceAgentGateway implements AgentLlmGateway {
 
     try {
       // 流式工具不可靠的端点（未知中转站）→ 工具步回退非流式请求
+      //（toolChoice=none 的步除外——无工具调用预期，保流式）
       if (request.tools.isNotEmpty &&
+          !expectsNoToolCalls &&
           !capabilities.streamingToolCallsReliable) {
         return await _completeNonStreaming(
           baseRequest.copyWith(cancelToken: httpCancelToken),

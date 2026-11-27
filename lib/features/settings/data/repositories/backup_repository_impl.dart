@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
+import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/memory/data/database/embedding_dimensions_backfill.dart';
 import 'package:lmstory/features/memory/data/repositories/memory_fts_rebuilder.dart';
@@ -24,10 +26,14 @@ class BackupRepositoryImpl implements BackupRepository {
   static const _tExperientialMemories = 'experiential_memories';
   static const _tFactualEntities = 'factual_entities';
   static const _tFactualAttributes = 'factual_attributes';
+  static const _tRelationshipMigrationBackup =
+      'factual_relationship_migration_backup';
   static const _tFactualHistory = 'factual_memory_history';
   static const _tIntermediateArtifacts = 'intermediate_round_artifacts';
   static const _tMessageVariants = 'message_variants';
   static const _tMemoriesFts = 'memories_fts';
+  static const _tFactualFts = 'factual_fts';
+  static const _tFailureLogs = 'failure_logs';
   static const _tApiPresets = 'api_presets';
   // v3 全局资产表（backupVersion 3，2026-09-02）
   static const _tCharacterCards = 'character_cards';
@@ -48,6 +54,8 @@ class BackupRepositoryImpl implements BackupRepository {
     _tExperientialMemories,
     _tFactualEntities,
     _tFactualAttributes,
+    // v55 关系拆分迁移备份（会话叙事资产的迁移留档）随备份生命周期
+    _tRelationshipMigrationBackup,
     _tIntermediateArtifacts,
     // schema v49 新表 message_variants 缺席全部数据
     // 生命周期链（导出不含/删除不删/覆盖导入残留幽灵变体可被切换物化）——
@@ -70,7 +78,7 @@ class BackupRepositoryImpl implements BackupRepository {
         throw StateError('Session not found: $sessionId');
       }
 
-      final messages = await _dumpTable(_tMessages, 'session_id', sessionId);
+      final messages = await _dumpSessionMessages(sessionId);
       final compactionPoints =
           await _dumpTable(_tCompactionPoints, 'session_id', sessionId);
       final forkBranches =
@@ -81,6 +89,11 @@ class BackupRepositoryImpl implements BackupRepository {
           await _dumpTable(_tFactualEntities, 'session_id', sessionId);
       final factualAttributes =
           await _dumpTable(_tFactualAttributes, 'session_id', sessionId);
+      final relationshipMigrationBackup = await _dumpTable(
+        _tRelationshipMigrationBackup,
+        'session_id',
+        sessionId,
+      );
 
       // factual_memory_history 无 session_id 列，通过 entity_id 子查询过滤
       final factualHistory = await _dumpTableWithSubquery(
@@ -112,6 +125,7 @@ class BackupRepositoryImpl implements BackupRepository {
         'experientialMemories': experientialMemories,
         'factualEntities': factualEntities,
         'factualAttributes': factualAttributes,
+        'relationshipMigrationBackup': relationshipMigrationBackup,
         'factualHistory': factualHistory,
         'intermediateArtifacts': intermediateArtifacts,
         'messageVariants': messageVariants,
@@ -144,6 +158,73 @@ class BackupRepositoryImpl implements BackupRepository {
   // ==================== 导入 ====================
 
   @override
+  Future<T> runInTransaction<T>(Future<T> Function() action) =>
+      _database.transaction(action);
+
+  @override
+  Future<bool> containsMessageId(String id) async {
+    final row = await _database.customSelect(
+      'SELECT 1 FROM $_tMessages WHERE message_id = ?',
+      variables: [Variable.withString(id)],
+    ).getSingleOrNull();
+    return row != null;
+  }
+
+  @override
+  Future<BackupOverwriteState> readOverwriteState(
+    Set<BackupDataDomain> domains,
+  ) async {
+    final sources = <String, String>{
+      if (domains.contains(BackupDataDomain.sessions)) ...{
+        for (final table in _sessionTables) table: '',
+        _tFactualHistory: '',
+        _tMemoriesFts: '',
+        _tFactualFts: '',
+        _tFailureLogs: '',
+      },
+      if (domains.contains(BackupDataDomain.sessions) ||
+          domains.contains(BackupDataDomain.agentEvents))
+        _tAgentEvents: '',
+      if (domains.contains(BackupDataDomain.presets))
+        _tApiPresets: 'WHERE is_built_in = 0',
+      if (domains.contains(BackupDataDomain.characterCards))
+        _tCharacterCards: '',
+      if (domains.contains(BackupDataDomain.worldbooks)) _tWorldbooks: '',
+      if (domains.contains(BackupDataDomain.userTemplates))
+        _tTemplates: 'WHERE is_built_in = 0',
+    };
+    var hasData = false;
+    final fingerprints = <String>[];
+    final sessionIds = <Object?>{};
+    final entityIds = <Object?>{};
+    for (final source in sources.entries) {
+      final table = source.key;
+      final rows = await _database
+          .customSelect('SELECT * FROM $table ${source.value} ORDER BY rowid')
+          .get();
+      // 失败日志属于诊断数据，会随事务回退，但不写进可移植备份。
+      if (rows.isNotEmpty && table != _tFailureLogs) hasData = true;
+      if (table == _tSessions) {
+        sessionIds.addAll(rows.map((row) => row.data['session_id']));
+      } else if (_sessionTables.contains(table) &&
+          rows.any((row) => !sessionIds.contains(row.data['session_id']))) {
+        // 可移植备份从现有会话出发导出，孤立正文或记忆无法从中恢复。
+        throw StateError('Session data without a restorable owner');
+      }
+      if (table == _tFactualEntities) {
+        entityIds.addAll(rows.map((row) => row.data['entity_id']));
+      }
+      if (table == _tFactualHistory &&
+          rows.any((row) => !entityIds.contains(row.data['entity_id']))) {
+        throw StateError('Fact history without a restorable owner');
+      }
+      final content = jsonEncode(rows.map((row) => row.data).toList());
+      fingerprints.add(sha256.convert(utf8.encode(content)).toString());
+    }
+    return (hasData: hasData, fingerprint: fingerprints.join(','));
+  }
+
+  @override
   Future<int> importSessionData(
     Map<String, dynamic> data, {
     required ImportMode mode,
@@ -155,66 +236,97 @@ class BackupRepositoryImpl implements BackupRepository {
       throw const FormatException('Missing session_id in backup data');
     }
 
-    // 追加模式：sessionId 已存在则跳过（-1 = 跳过，与"空会话导入成功"区分）
-    if (mode == ImportMode.append) {
-      final existing = await _dumpSingle(_tSessions, 'session_id', sessionId);
-      if (existing != null) return -1;
-    }
+    // 单会话的删除、插入和索引重建一起提交。整文件覆盖时，每条
+    // 会话在外层事务内使用独立保存点。
+    final imported = _database.transaction(
+      () async {
+        // 追加模式：sessionId 已存在则跳过（-1 与空会话导入成功区分）。
+        if (mode == ImportMode.append) {
+          final existing =
+              await _dumpSingle(_tSessions, 'session_id', sessionId);
+          if (existing != null) return -1;
+        }
+        final experiences = _asList(data['experientialMemories']);
+        var hasMissingOwner = false;
+        for (final row in experiences) {
+          final owner = row['session_id'];
+          if (owner is! String || owner.isEmpty) {
+            hasMissingOwner = true;
+          } else if (owner != sessionId) {
+            throw const BackupExperienceIdConflictException.ownerMismatch();
+          }
+        }
+        if (hasMissingOwner) {
+          throw const FormatException(
+            'Missing session_id in backup experience',
+          );
+        }
+        if (mode == ImportMode.overwrite) {
+          await _deleteSessionDataInner(sessionId);
+        }
+        final insertedSessions = await _restoreTable(_tSessions, [sessionRow]);
+        if (insertedSessions == 0) {
+          throw const FormatException(
+            'Could not restore session row from backup',
+          );
+        }
+        final insertedMessages =
+            await _restoreTable(_tMessages, _rowsBySourceId(data['messages']));
+        await _restoreTable(
+          _tCompactionPoints,
+          _asList(data['compactionPoints']),
+        );
+        await _restoreTable(_tForkBranches, _asList(data['forkBranches']));
+        await _restoreExperientialMemories(sessionId, experiences);
+        await _restoreTable(
+          _tFactualEntities,
+          _asList(data['factualEntities']),
+        );
+        await _restoreTable(
+          _tFactualAttributes,
+          _asList(data['factualAttributes']),
+        );
+        // v55 迁移备份随导入恢复（旧导出文件缺键 → 空清单不导入）
+        await _restoreTable(
+          _tRelationshipMigrationBackup,
+          _asList(data['relationshipMigrationBackup']),
+        );
+        await _restoreTable(
+          _tFactualHistory,
+          _rowsBySourceId(data['factualHistory']),
+        );
+        await _restoreTable(
+          _tIntermediateArtifacts,
+          _asList(data['intermediateArtifacts']),
+        );
+        // 恢复变体行（旧导出文件缺键 → 空清单不导入，向后兼容）
+        await _restoreTable(
+          _tMessageVariants,
+          _asList(data['messageVariants']),
+        );
+        // 恢复导演事件日志（覆盖导入 deleteSessionData 已先删该表，
+        // 不恢复即净损失）。旧导出文件缺键 → _asList 空清单不导入（向后兼容）。
+        await _restoreTable(_tAgentEvents, _asList(data['agentEvents']));
+        //  修复：failure_logs 不再随会话备份导入（旧备份中的键被忽略）
 
-    // 覆盖模式：先删除该会话的所有现有数据。
-    // 删旧与插新同一事务——此前
-    // deleteSessionData 独立事务先行提交，插入事务失败/进程被杀即
-    // 净丢该会话全部数据（且 Web 端无  覆盖前快照可回滚）。
-    // 覆盖导入失败现在整体回滚，旧数据原样保留。
-    //  修复：消息按实际插入计数（OR IGNORE 撞 ID 静默跳过不再虚报）
-    var insertedMessages = 0;
-    await _database.transaction(() async {
-      if (mode == ImportMode.overwrite) {
-        await _deleteSessionDataInner(sessionId);
-      }
-      await _restoreTable(_tSessions, [sessionRow]);
-      insertedMessages =
-          await _restoreTable(_tMessages, _asList(data['messages']));
-      await _restoreTable(
-        _tCompactionPoints,
-        _asList(data['compactionPoints']),
-      );
-      await _restoreTable(_tForkBranches, _asList(data['forkBranches']));
-      await _restoreTable(
-        _tExperientialMemories,
-        _asList(data['experientialMemories']),
-      );
-      await _restoreTable(_tFactualEntities, _asList(data['factualEntities']));
-      await _restoreTable(
-        _tFactualAttributes,
-        _asList(data['factualAttributes']),
-      );
-      await _restoreTable(_tFactualHistory, _asList(data['factualHistory']));
-      await _restoreTable(
-        _tIntermediateArtifacts,
-        _asList(data['intermediateArtifacts']),
-      );
-      // 恢复变体行（旧导出文件缺键 → 空清单不导入，向后兼容）
-      await _restoreTable(
-        _tMessageVariants,
-        _asList(data['messageVariants']),
-      );
-      // 恢复导演事件日志（覆盖导入 deleteSessionData 已先删该表，
-      // 不恢复即净损失）。旧导出文件缺键 → _asList 空清单不导入（向后兼容）。
-      await _restoreTable(_tAgentEvents, _asList(data['agentEvents']));
-      //  修复：failure_logs 不再随会话备份导入（旧备份中的键被忽略）
-
-      // FTS5 索引：不按备份行搬运，统一由落库主表重建（见
-      // memory_fts_rebuilder.rebuildSessionFts）——备份可能缺键（旧格式/手裁）
-      // 或含被 INSERT OR IGNORE 跳过的行，按 JSON 建索引会指向不存在的行。
-      // 2026-09-09 审查（FF6）：factual_fts 与 memories_fts 一起重建。
-      await rebuildSessionFts(_database, sessionId);
-      // 旧备份的 experiential_memories 行缺
-      // embedding_dimensions 键 → 落库为 NULL——导入即回填，不等下次开库。
-      await backfillEmbeddingDimensions(_database);
-    });
-
-    return insertedMessages;
+        // FTS5 索引：不按备份行搬运，统一由落库主表重建（见
+        // memory_fts_rebuilder.rebuildSessionFts）——备份可能缺键（旧格式/手裁）
+        // 或含被 INSERT OR IGNORE 跳过的行，按 JSON 建索引会指向不存在的行。
+        // 2026-09-09 审查（FF6）：factual_fts 与 memories_fts 一起重建。
+        await rebuildSessionFts(_database, sessionId);
+        // 旧备份的 experiential_memories 行缺
+        // embedding_dimensions 键 → 落库为 NULL——导入即回填，不等下次开库。
+        await backfillEmbeddingDimensions(_database);
+        return insertedMessages;
+      },
+      requireNew: true,
+    );
+    return imported.onError<CouldNotRollBackException>(
+      (_, stackTrace) => Error.throwWithStackTrace(
+        const SavepointRollbackException(),
+        stackTrace,
+      ),
+    );
   }
 
   // ==================== 删除 ====================
@@ -316,8 +428,7 @@ class BackupRepositoryImpl implements BackupRepository {
       if (existing != null) return false;
     }
 
-    await _restoreTable(_tApiPresets, [data]);
-    return true;
+    return (await _restoreTable(_tApiPresets, [data])) > 0;
   }
 
   @override
@@ -401,6 +512,16 @@ class BackupRepositoryImpl implements BackupRepository {
 
   // ==================== 私有方法：导出 ====================
 
+  Future<List<Map<String, dynamic>>> _dumpSessionMessages(
+    String sessionId,
+  ) async {
+    final rows = await _database.customSelect(
+      'SELECT * FROM $_tMessages WHERE session_id = ? ORDER BY id',
+      variables: [Variable.withString(sessionId)],
+    ).get();
+    return rows.map((row) => _sanitizeRow(row.data)).toList();
+  }
+
   /// 导出表中匹配条件的所有行
   Future<List<Map<String, dynamic>>> _dumpTable(
     String tableName, [
@@ -453,6 +574,45 @@ class BackupRepositoryImpl implements BackupRepository {
 
   // ==================== 私有方法：导入 ====================
 
+  /// 新库分配自增主键前，先用备份里完整、唯一的原行号恢复入库顺序。
+  /// 缺少可靠行号的备份沿用文件里的顺序。
+  List<Map<String, dynamic>> _rowsBySourceId(Object? data) {
+    final rows = _asList(data);
+    final sourceIds = rows.map((row) => row['id']).whereType<int>().toSet();
+    if (rows.length > 1 && sourceIds.length == rows.length) {
+      rows.sort((a, b) => (a['id'] as int).compareTo(b['id'] as int));
+    }
+    return rows;
+  }
+
+  Future<void> _restoreExperientialMemories(
+    String sessionId,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final inserted = await _restoreTable(_tExperientialMemories, rows);
+    if (inserted == rows.length) return;
+
+    // 按 SQLite 的实际列值检查归属。TEXT 列也可能把数字 ID 写入为文本。
+    var hasUnrestoredMemory = false;
+    for (final row in rows) {
+      final Object? memoryId = row['memory_id'];
+      final existing = await _database.customSelect(
+        'SELECT session_id FROM $_tExperientialMemories WHERE memory_id = ?',
+        variables: [Variable(memoryId)],
+      ).getSingleOrNull();
+      if (existing == null) {
+        hasUnrestoredMemory = true;
+      } else if (existing.data['session_id'] != sessionId) {
+        throw const BackupExperienceIdConflictException.existingOwner();
+      }
+    }
+    if (hasUnrestoredMemory) {
+      throw const FormatException(
+        'Could not restore experience row from backup',
+      );
+    }
+  }
+
   /// 将行数据批量插入表中（保留原始 ID，排除自增 id 列）
   ///
   /// 使用 INSERT OR IGNORE 避免唯一约束冲突。
@@ -484,12 +644,24 @@ class BackupRepositoryImpl implements BackupRepository {
 
       // 恢复 embedding BLOB（base64 -> Uint8List）
       final embedding = filtered['embedding'];
-      if (embedding is String && embedding.isNotEmpty) {
+      if (embedding is String) {
         try {
           filtered['embedding'] = base64Decode(embedding);
         } on FormatException {
           filtered.remove('embedding');
         }
+      }
+      // 只绑定 SQLite 支持的标量。坏 JSON 行直接跳过，下面真正的
+      // SQLite 写入异常（如磁盘失败或触发器拒绝）由事务处理。
+      if (filtered.values.any(
+        (value) =>
+            value != null &&
+            value is! String &&
+            value is! num &&
+            value is! bool &&
+            value is! Uint8List,
+      )) {
+        continue;
       }
 
       final columns = filtered.keys.toList();

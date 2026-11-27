@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/core/utils/secret_redactor.dart';
 
 /// 文件日志 sink：将日志写入文件，按大小轮转。
 ///
@@ -81,7 +82,8 @@ class FileLogSink implements LogSink {
   @override
   void write(LogRecord record) {
     if (!_initialized) return;
-    final line = _sanitizeForFile(record.toLine());
+    // Routine errors and retries can carry request data inside exception text.
+    final line = redactDiagnosticText(_sanitizeForFile(record.toLine()));
     // 同步追加写入，无缓冲，无 null 字节残留
     _file!.writeAsStringSync(
       '$line\n',

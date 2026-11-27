@@ -373,16 +373,17 @@ class AgentToolPipeline {
       result = applyToolOutputBudget(result, toolOutputLimit!);
     }
 
-    // 4.7 批准批注信封（2026-10-15 批 B，P1）：批准时附带的导演批注随
-    // 工具成功回执尾部下发——与 ask_user「导演答：…」、拒绝信封同通道
-    // 同成本（tool result 单通道，零额外模型请求），下次请求自然读到。
-    // 仅成功回执追加（失败信封已自带行动指引，批注挤尾部徒增噪声）；
+    // 4.7 批准批注信封：批准时附带的导演批注随工具成功或部分成功回执尾部
+    // 下发——与 ask_user「导演答：…」、拒绝信封同通道同成本（tool result
+    // 单通道，零额外模型请求），下次请求自然读到。纯失败回执已自带行动指引，
+    // 批注挤尾部徒增噪声；部分成功写入（accepted > 0）仍保留批注。
     // 在输出预算之后追加，保证批注全文不被截断。
     final feedback = approvalFeedback;
+    final hasPartialAccepted = (result.metadata?['accepted'] as int? ?? 0) > 0;
     if (feedback != null &&
         feedback.trim().isNotEmpty &&
-        !result.isError &&
-        !result.terminal) {
+        !result.terminal &&
+        (!result.isError || hasPartialAccepted)) {
       result = AgentToolResult(
         title: result.title,
         output: '${result.output}\n——\n导演批注（随本次批准下发）：$feedback',
@@ -390,6 +391,8 @@ class AgentToolPipeline {
         isError: result.isError,
         terminal: result.terminal,
         outputSchema: result.outputSchema,
+        extraMaxStepsDelta: result.extraMaxStepsDelta,
+        phaseSoftLandingNotice: result.phaseSoftLandingNotice,
       );
     }
 

@@ -1,6 +1,6 @@
 name: lmstory
 description: AI-powered interactive storytelling app with self-evolving memory system.
-version: 0.4.2
+version: 0.5.0
 
 repository: https://github.com/snanjib/LMStory
 homepage: https://github.com/snanjib/LMStory
@@ -29,6 +29,8 @@ dependencies:
   flutter_secure_storage: ^10.3.1
   http: ^1.2.1
   image_picker: ^1.1.2
+  # path_provider_android 的类名查找需要 jni 1.2.1 中的修复。
+  jni: ^1.2.1
   json_annotation: ^4.9.0
   meta: ^1.15.0
   path: ^1.9.0

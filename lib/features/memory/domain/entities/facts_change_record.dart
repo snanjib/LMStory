@@ -20,9 +20,9 @@ import 'package:meta/meta.dart';
 /// 合成规则（见 [FactApplier._buildChangeRecord]）：
 /// - [action]：取实际落库动作（[FactualMemoryHistory.action]），以反映
 ///   create_entity 被转写为 update_attr / add_alias 等场景的真实结果。
-/// - [entityType] / [primaryName] / [attrKey]：取自原始 [FactsDelta]，
-///   保留 LLM 视角的实体与属性描述；UI 展示属性名时可再经
-///   `AttributeSchema.labelFor` 标准化为中文标签。
+/// - [entityType]：成功应用后取自会话中的目标实体。
+/// - [primaryName] / [attrKey]：取自原始 [FactsDelta]，
+///   保留 LLM 视角的实体与属性描述；内置属性标签由界面选择语言。
 /// - [oldValue] / [newValue]：取自 [FactualMemoryHistory]；create_entity /
 ///   add_alias 无旧值，archive_entity 无新旧值（仅 reason）。
 /// - [entityId]：优先取 [FactualMemoryHistory.entityId]（create_entity 时
@@ -66,7 +66,9 @@ class FactsChangeRecord {
         entityType: delta.entityType,
         primaryName: delta.primaryName,
         attrKey: delta.attrKey,
-        newValue: delta.value,
+        newValue: delta.action == FactAction.setImportance
+            ? delta.importance?.toString()
+            : delta.value,
         reason: delta.reason,
         confidence: delta.confidence,
       );
@@ -77,7 +79,7 @@ class FactsChangeRecord {
   /// 实体 ID（来自审计记录；create_entity 时为新建的 entityId）
   final String? entityId;
 
-  /// 实体类型（来自原始 delta；转写场景下可能为 null）
+  /// 实体类型。旧记录可缺失，尚在应用的预览取自 delta。
   ///
   /// 取值：`character` / `location` / `item` / `lore` / `organization` / `misc`
   final String? entityType;

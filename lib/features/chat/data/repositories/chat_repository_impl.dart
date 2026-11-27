@@ -14,6 +14,8 @@ import 'package:lmstory/features/chat/domain/entities/session_phase_models.dart'
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/memory/data/repositories/memory_fts_rebuilder.dart';
+import 'package:lmstory/features/memory/domain/entities/fact_replay_record.dart';
+import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
 import 'package:lmstory/features/settings/domain/entities/data_management_models.dart';
 import 'package:uuid/uuid.dart';
 
@@ -33,12 +35,13 @@ class ChatRepositoryImpl implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = ChatMode.chat,
     String? modelId,
     String? presetId,
   }) async {
     final now = DateTime.now();
-    final sessionId = _uuid.v4();
+    final id = sessionId ?? _uuid.v4();
 
     // Compute sortOrder: min existing sortOrder - 1000
     // 新会话 sortOrder 最小，侧边栏按 sortOrder 升序排列时出现在列表顶部（最新在上）。
@@ -57,7 +60,7 @@ class ChatRepositoryImpl implements ChatRepository {
 
     await _database.into(_database.chatSessionsTable).insert(
           ChatSessionsTableCompanion.insert(
-            sessionId: sessionId,
+            sessionId: id,
             title: title,
             mode: Value(mode),
             createdAt: Value(now),
@@ -70,7 +73,7 @@ class ChatRepositoryImpl implements ChatRepository {
         );
 
     return ChatSession(
-      sessionId: sessionId,
+      sessionId: id,
       title: title,
       mode: mode,
       createdAt: now,
@@ -128,6 +131,49 @@ class ChatRepositoryImpl implements ChatRepository {
   }
 
   @override
+  Future<HomeSessions> getHomeSessions() async {
+    // SQLite's substr of an empty blob is NULL. COALESCE keeps an empty
+    // message distinct from a missing message or one with NULL content.
+    final rows = await _database.customSelect('''
+      WITH recent AS (
+        SELECT id FROM chat_sessions ORDER BY last_active_at DESC, id LIMIT 5
+      ), story AS (
+        SELECT id FROM chat_sessions WHERE ${AppDatabase.storyModeFilter}
+        ORDER BY ${AppDatabase.storyActivityOrder} LIMIT 1
+      )
+      SELECT s.*,
+        s.id IN (SELECT id FROM recent) AS is_recent,
+        s.id IN (SELECT id FROM story) AS is_story,
+        (SELECT coalesce(substr(CAST(m.content AS BLOB), 1, 150),
+                         CAST(m.content AS BLOB))
+         FROM chat_messages m WHERE m.session_id = s.session_id
+         ORDER BY m.id DESC LIMIT 1) AS preview_bytes
+      FROM chat_sessions s
+      WHERE s.id IN (SELECT id FROM recent UNION ALL SELECT id FROM story)
+      ORDER BY s.last_active_at DESC, s.id
+    ''').get();
+
+    final recent = <ChatSession>[];
+    ChatSession? latestStory;
+    for (final row in rows) {
+      var session = _sessionFromRow(_database.chatSessionsTable.map(row.data));
+      final bytes = row.readNullable<Uint8List>('preview_bytes');
+      if (bytes != null) {
+        // 150 UTF-8 bytes cover 50 UTF-16 units even with CJK. Truncating in
+        // bytes preserves embedded NULs; any incomplete final rune is outside
+        // the displayed prefix.
+        final text = utf8.decode(bytes, allowMalformed: true);
+        session = session.copyWith(
+          lastMessagePreview: text.length > 50 ? text.substring(0, 50) : text,
+        );
+      }
+      if (row.read<bool>('is_recent')) recent.add(session);
+      if (row.read<bool>('is_story')) latestStory = session;
+    }
+    return (recent: recent, latestStory: latestStory);
+  }
+
+  @override
   Future<ChatSession> getSession(String sessionId) async {
     final row = await (_database.select(_database.chatSessionsTable)
           ..where((t) => t.sessionId.equals(sessionId)))
@@ -155,6 +201,61 @@ class ChatRepositoryImpl implements ChatRepository {
   }
 
   @override
+  Future<void> clearSessionDraftIfMatches(
+    String sessionId,
+    String draft,
+  ) async {
+    await (_database.update(_database.chatSessionsTable)
+          ..where(
+            (t) => t.sessionId.equals(sessionId) & t.draftInput.equals(draft),
+          ))
+        .write(const ChatSessionsTableCompanion(draftInput: Value(null)));
+  }
+
+  @override
+  Future<DirectorInputs> getDirectorInputs(String sessionId) async {
+    final table = _database.chatSessionsTable;
+    final row = await (_database.selectOnly(table)
+          ..addColumns([table.directorPendingInput, table.directorQueuedInput])
+          ..where(table.sessionId.equals(sessionId)))
+        .getSingleOrNull();
+    return (
+      pending: row?.read(table.directorPendingInput),
+      queued: row?.read(table.directorQueuedInput),
+    );
+  }
+
+  @override
+  Future<void> setDirectorPendingInput(String sessionId, String? input) async {
+    await (_database.update(_database.chatSessionsTable)
+          ..where((t) => t.sessionId.equals(sessionId)))
+        .write(ChatSessionsTableCompanion(directorPendingInput: Value(input)));
+  }
+
+  @override
+  Future<void> setDirectorQueuedInput(String sessionId, String? input) async {
+    await (_database.update(_database.chatSessionsTable)
+          ..where((t) => t.sessionId.equals(sessionId)))
+        .write(ChatSessionsTableCompanion(directorQueuedInput: Value(input)));
+  }
+
+  @override
+  Future<void> clearDirectorPendingInputIfMatches(
+    String sessionId,
+    String input,
+  ) async {
+    await (_database.update(_database.chatSessionsTable)
+          ..where(
+            (t) =>
+                t.sessionId.equals(sessionId) &
+                t.directorPendingInput.equals(input),
+          ))
+        .write(
+      const ChatSessionsTableCompanion(directorPendingInput: Value(null)),
+    );
+  }
+
+  @override
   Future<void> setSessionStarred(
     String sessionId, {
     required bool starred,
@@ -163,6 +264,9 @@ class ChatRepositoryImpl implements ChatRepository {
           ..where((t) => t.sessionId.equals(sessionId)))
         .write(ChatSessionsTableCompanion(isStarred: Value(starred)));
   }
+
+  /// 工程上下文开关列的「不写」占位（通用更新通道对该列恒缺席）。
+  static const Value<bool> _engineeringFlagAbsent = Value.absent();
 
   @override
   Future<ChatSession> updateSession(ChatSession session) async {
@@ -206,6 +310,8 @@ class ChatRepositoryImpl implements ChatRepository {
         // 审查  修复：contextBudget 会话级覆盖
         recentMinRatioOverride: Value(session.recentMinRatioOverride),
         retrievalRatioOverride: Value(session.retrievalRatioOverride),
+        compactionTriggerRatioOverride:
+            Value(session.compactionTriggerRatioOverride),
         maxSteps: Value(session.maxSteps),
         // schemaVersion ≥ 42：剧情锚 JSON（体验重构卡片 C）
         storyAnchor: Value(StoryAnchor.stringify(session.storyAnchor)),
@@ -222,10 +328,23 @@ class ChatRepositoryImpl implements ChatRepository {
         // 向导「初始化你的角色」两列（repairSchema 开库补列）
         characterInitPrompt: Value(session.characterInitPrompt),
         characterInitCardId: Value(session.characterInitCardId),
+        // 工程上下文模式开关列不进通用更新通道：该列唯一写入口是专用
+        // 原子事务（纪元事件+置列同库同事务提交）。通用保存即使带着
+        // 转换开始前的旧快照值也不能覆写它（否则「开启事务 prepare
+        // 挂起→普通保存旧 false→放行提交 true」会把库内开关覆回，
+        // 生产解析进入需要修复态）。
+        engineeringContextEnabled: _engineeringFlagAbsent,
       ),
     );
 
-    return session;
+    // 回填以库内重读为准：并发原子事务可能刚提交过开关/纪元变化，
+    // 返回库内现行值而不是调用方传入的快照。行缺失（并发删除、
+    // 未物化测试夹具）回退调用方快照，不改变既有返回契约。
+    try {
+      return await getSession(session.sessionId);
+    } on ModelNotFoundException {
+      return session;
+    }
   }
 
   @override
@@ -259,6 +378,10 @@ class ChatRepositoryImpl implements ChatRepository {
       // 锚快照都在 message_variants 行里，残留即隐私残留 + 幽灵变体可被
       // 切换物化（与 backupRepository.deleteSessionData 同口径）。
       await (_database.delete(_database.messageVariantsTable)
+            ..where((t) => t.sessionId.equals(sessionId)))
+          .go();
+      // v55 关系拆分迁移备份同属会话叙事资产留档，随会话删除
+      await (_database.delete(_database.factualRelationshipMigrationBackupTable)
             ..where((t) => t.sessionId.equals(sessionId)))
           .go();
       // factual_memory_history 无 session_id 列：先按实体子查询删历史，再删实体
@@ -300,6 +423,9 @@ class ChatRepositoryImpl implements ChatRepository {
       await _database.delete(_database.factualAttributesTable).go();
       await _database.delete(_database.factualMemoryHistoryTable).go();
       await _database.delete(_database.factualEntitiesTable).go();
+      await _database
+          .delete(_database.factualRelationshipMigrationBackupTable)
+          .go();
       await _database.customStatement('DELETE FROM factual_fts');
       await _database.delete(_database.experientialMemoriesTable).go();
       await _database.customStatement('DELETE FROM memories_fts');
@@ -366,19 +492,6 @@ class ChatRepositoryImpl implements ChatRepository {
       );
       final sourceBranchRows =
           await (_database.select(_database.chatSessionBranchesTable)
-                ..where((t) => t.sessionId.equals(sourceSessionId)))
-              .get();
-      // 轮产物与稿件变体随会话
-      // 复制——两表均按 (session_id, turn_number) 键、无消息 id 引用，改
-      // session_id 即可；此前不复制导致副本幕后时间线/Recap 小窗丢失、
-      // 变体悬空（后 message_variants 行也随副本齐全，指针列
-      // current_variant_index 原值保留）。
-      final sourceArtifactRows =
-          await (_database.select(_database.intermediateRoundArtifactsTable)
-                ..where((t) => t.sessionId.equals(sourceSessionId)))
-              .get();
-      final sourceVariantRows =
-          await (_database.select(_database.messageVariantsTable)
                 ..where((t) => t.sessionId.equals(sourceSessionId)))
               .get();
 
@@ -490,6 +603,8 @@ class ChatRepositoryImpl implements ChatRepository {
                   Value(sourceSession.recentMinRatioOverride),
               retrievalRatioOverride:
                   Value(sourceSession.retrievalRatioOverride),
+              compactionTriggerRatioOverride:
+                  Value(sourceSession.compactionTriggerRatioOverride),
               // v0.3 导演会话列随会话复制（与
               // updateSession 对齐）——此前这些列静默丢失：工具权限（安全
               // 相关）/单轮时间预算/节奏档/每轮步数回退默认，轮次计数器
@@ -508,6 +623,11 @@ class ChatRepositoryImpl implements ChatRepository {
               // 仍按一次性语义注入）
               characterInitPrompt: Value(sourceSession.characterInitPrompt),
               characterInitCardId: Value(sourceSession.characterInitCardId),
+              // 工程上下文模式不随会话复制：开关 true 必须与账本内
+              // `mode/epoch` 纪元共存，而事件账本不随 copySession 搬运——
+              // 只复制 true 列会得到「开而无纪元」的修复态挂起。副本明确
+              // 初始化为关闭态（列缺省 NULL），用户可对副本重新开启触发
+              // 全新一次性捕获。
               // 见上
               sortOrder: Value(sortOrder),
             ),
@@ -594,31 +714,9 @@ class ChatRepositoryImpl implements ChatRepository {
             ),
           );
         }
-
-        // 轮产物与稿件变体：改 session_id 原样复制（id 置 absent 由新库
-        // 自增分配，否则与源行主键冲突）。
-        for (final row in sourceArtifactRows) {
-          batch.insert(
-            _database.intermediateRoundArtifactsTable,
-            row.copyWith(sessionId: newSessionId).toCompanion(true).copyWith(
-                  id: const Value.absent(),
-                ),
-          );
-        }
-        for (final row in sourceVariantRows) {
-          batch.insert(
-            _database.messageVariantsTable,
-            row.copyWith(sessionId: newSessionId).toCompanion(true).copyWith(
-                  id: const Value.absent(),
-                ),
-          );
-        }
       });
 
-      // 记忆补齐：记忆随会话搬运。
-      // 留在 copySession 单事务内——中途失败整体回滚，不留「有会话行、
-      // 无记忆」的半份副本。
-      await _copySessionMemories(sourceSessionId, newSessionId);
+      await _copySessionMemoriesAndVariants(sourceSessionId, newSessionId);
 
       return ChatSession(
         sessionId: newSessionId,
@@ -649,6 +747,8 @@ class ChatRepositoryImpl implements ChatRepository {
         // 审查  修复：contextBudget 会话级覆盖随会话复制
         recentMinRatioOverride: sourceSession.recentMinRatioOverride,
         retrievalRatioOverride: sourceSession.retrievalRatioOverride,
+        compactionTriggerRatioOverride:
+            sourceSession.compactionTriggerRatioOverride,
         // v0.3 导演会话列与剧情锚——返回实体与落库行对齐
         maxSteps: sourceSession.maxSteps,
         storyAnchor: sourceSession.storyAnchor,
@@ -660,27 +760,17 @@ class ChatRepositoryImpl implements ChatRepository {
         retrievalOverrides: sourceSession.retrievalOverrides,
         characterInitPrompt: sourceSession.characterInitPrompt,
         characterInitCardId: sourceSession.characterInitCardId,
+        // 工程上下文模式不随会话复制（见上方 companion 注释）——返回
+        // 实体与落库行对齐：副本为关闭态。
         // 返回实体携带实际落库的排序值
         sortOrder: sortOrder,
       );
     });
   }
 
-  /// 复制会话记忆
-  ///
-  /// 事实层三表（实体/属性/审计历史）与经历记忆随会话搬运，业务 ID 全部
-  /// 重映射——副本与源**内容等价、ID 不共享**，删任一侧不影响另一侧。
-  /// 两个 FTS5 索引以落库后的副本主表重建（memory_fts_rebuilder，禁止
-  /// 第三份重建 SQL）。
-  ///
-  /// 明确不搬运：`failure_logs` / `agent_events`（同 / 口径，副本从空
-  /// 开始）；`intermediate_round_artifacts` 的 retrieved_facts/facts_changes
-  /// JSON 内的历史 entity_id **不重映射**——仅用于面板展示，不参与检索与
-  /// 写回（重映射历史 JSON 属扩大范围，见实施计划 §1.4）。
-  ///
-  /// `embedding` BLOB 与 `has_embedding` 原样保留：同嵌入模型下向量仍有效；
-  /// 换模型产生的陈旧向量由健康面板的维度自愈流程处理。
-  Future<void> _copySessionMemories(
+  /// 在复制会话的事务内统一分配记忆 ID，供活动行和稿件重放资料共用。
+  /// 检索与事实变更的历史展示、嵌入向量保留原值，副本的 FTS 按活动行重建。
+  Future<void> _copySessionMemoriesAndVariants(
     String sourceSessionId,
     String newSessionId,
   ) async {
@@ -689,13 +779,20 @@ class ChatRepositoryImpl implements ChatRepository {
       _database.factualEntitiesTable,
     )..where((t) => t.sessionId.equals(sourceSessionId)))
         .get();
-    final sourceAttributes = await (_database.select(
-      _database.factualAttributesTable,
-    )..where((t) => t.sessionId.equals(sourceSessionId)))
-        .get();
     final entityIdMap = <String, String>{
       for (final row in sourceEntities) row.entityId: 'ent_${_uuid.v4()}',
     };
+    final sourceEntityIds = entityIdMap.keys.toSet();
+    final attributeRows = await (_database.select(
+      _database.factualAttributesTable,
+    )..where((t) => t.sessionId.equals(sourceSessionId)))
+        .get();
+    // 属性只能随确属源会话的活动实体复制，旧稿的创建记录不能证明归属。
+    final sourceAttributes = attributeRows
+        .where(
+          (row) => entityIdMap.containsKey(row.entityId),
+        )
+        .toList();
     final attributeIdMap = <String, String>{
       for (final row in sourceAttributes) row.attributeId: 'attr_${_uuid.v4()}',
     };
@@ -703,10 +800,12 @@ class ChatRepositoryImpl implements ChatRepository {
     final sourceHistory = entityIdMap.isEmpty
         ? const <FactualMemoryHistoryTableData>[]
         : await (_database.select(_database.factualMemoryHistoryTable)
-              ..where((t) => t.entityId.isIn(entityIdMap.keys.toList())))
+              ..where((t) => t.entityId.isIn(entityIdMap.keys.toList()))
+              // 副本会重新分配自增主键，按源行顺序插入以保留同轮变更次序。
+              ..orderBy([(t) => OrderingTerm.asc(t.id)]))
             .get();
 
-    // ---------- 经历层：微/宏记忆 + parent_event_ids 重映射 ----------
+    // ---------- 经历层：活动行与旧稿快照的 ID 重映射 ----------
     final sourceMemories = await (_database.select(
       _database.experientialMemoriesTable,
     )..where((t) => t.sessionId.equals(sourceSessionId)))
@@ -714,6 +813,77 @@ class ChatRepositoryImpl implements ChatRepository {
     final memoryIdMap = <String, String>{
       for (final row in sourceMemories) row.memoryId: _uuid.v4(),
     };
+
+    final artifactRows =
+        await (_database.select(_database.intermediateRoundArtifactsTable)
+              ..where((t) => t.sessionId.equals(sourceSessionId)))
+            .get();
+    final variantRows = await (_database.select(_database.messageVariantsTable)
+          ..where((t) => t.sessionId.equals(sourceSessionId)))
+        .get();
+    final artifacts = [
+      for (final row in artifactRows)
+        (
+          row: row,
+          deltas: _factsForCopy(
+            row.factsDeltas,
+            row.factsChanges,
+            sourceEntityIds,
+          ),
+        ),
+    ];
+    final variants = [
+      for (final row in variantRows)
+        (
+          row: row,
+          deltas: _factsForCopy(
+            row.factsDeltas,
+            row.factsChanges,
+            sourceEntityIds,
+          ),
+          snapshot: _decodeStoredList(row.experientialSnapshot),
+        ),
+    ];
+    // 旧稿独有实体由成功创建的记录声明；普通引用不分配新 ID。
+    for (final deltas in [
+      ...artifacts.map((artifact) => artifact.deltas),
+      ...variants.map((variant) => variant.deltas),
+    ]) {
+      final rows = deltas.rows;
+      if (rows == null) continue;
+      for (final (index, item) in rows.indexed) {
+        final legacy = deltas.legacy?[index];
+        final id = switch (item) {
+          {
+            AppliedFact.field: {
+              'action': 'create_entity',
+              'entityId': final String id
+            },
+          } =>
+            id,
+          {
+            'action': 'create_entity',
+            LegacyFactReplay.createdIdField: final String id
+          } =>
+            id,
+          _ => legacy?.proposal.action == FactAction.createEntity
+              ? legacy?.entityId
+              : null,
+        };
+        if (id != null && id.isNotEmpty) {
+          entityIdMap.putIfAbsent(id, () => 'ent_${_uuid.v4()}');
+        }
+      }
+    }
+    for (final variant in variants) {
+      final snapshot = variant.snapshot;
+      if (snapshot == null) continue;
+      for (final item in snapshot) {
+        if (item case {'memory_id': final String id} when id.isNotEmpty) {
+          memoryIdMap.putIfAbsent(id, _uuid.v4);
+        }
+      }
+    }
 
     await _database.batch((batch) {
       for (final row in sourceEntities) {
@@ -734,8 +904,7 @@ class ChatRepositoryImpl implements ChatRepository {
           row
               .copyWith(
                 attributeId: attributeIdMap[row.attributeId],
-                // 映射外（跨会话/悬空）引用保持原值——内容等价优先
-                entityId: entityIdMap[row.entityId] ?? row.entityId,
+                entityId: entityIdMap[row.entityId],
                 sessionId: newSessionId,
               )
               .toCompanion(true)
@@ -763,11 +932,56 @@ class ChatRepositoryImpl implements ChatRepository {
                 memoryId: memoryIdMap[row.memoryId],
                 sessionId: newSessionId,
                 parentEventIds: Value(
-                  _remapParentEventIds(row.parentEventIds, memoryIdMap),
+                  _remapEventIds(row.parentEventIds, memoryIdMap),
+                ),
+                archivedEventIds: Value(
+                  _remapEventIds(row.archivedEventIds, memoryIdMap),
                 ),
               )
               .toCompanion(true)
               .copyWith(id: const Value.absent()),
+        );
+      }
+      for (final artifact in artifacts) {
+        final row = artifact.row;
+        batch.insert(
+          _database.intermediateRoundArtifactsTable,
+          row.toCompanion(true).copyWith(
+                id: const Value.absent(),
+                sessionId: Value(newSessionId),
+                factsDeltas: Value(
+                  _remapFactsDeltas(
+                    row.factsDeltas,
+                    artifact.deltas,
+                    entityIdMap,
+                  ),
+                ),
+              ),
+        );
+      }
+      for (final variant in variants) {
+        final row = variant.row;
+        batch.insert(
+          _database.messageVariantsTable,
+          row.toCompanion(true).copyWith(
+                id: const Value.absent(),
+                sessionId: Value(newSessionId),
+                factsDeltas: Value(
+                  _remapFactsDeltas(
+                    row.factsDeltas,
+                    variant.deltas,
+                    entityIdMap,
+                  ),
+                ),
+                experientialSnapshot: Value(
+                  _remapExperientialSnapshot(
+                    row.experientialSnapshot,
+                    variant.snapshot,
+                    memoryIdMap,
+                    newSessionId,
+                  ),
+                ),
+              ),
         );
       }
     });
@@ -775,23 +989,123 @@ class ChatRepositoryImpl implements ChatRepository {
     await rebuildSessionFts(_database, newSessionId);
   }
 
-  /// 宏记忆 parent_event_ids 重映射：逐个映射到副本记忆 id，未命中的剔除
-  /// （源 JSON 可能引用已删除/跨会话记忆；引用列表允许收缩）。
-  /// micro 行（NULL）与异常 JSON 原样保留，不因复制破坏数据。
-  String? _remapParentEventIds(
-    String? parentEventIds,
+  /// 父事件与归档事件的有效引用指向副本，已删除或外部 ID 剔除。
+  String? _remapEventIds(
+    String? eventIds,
     Map<String, String> memoryIdMap,
   ) {
-    if (parentEventIds == null) return null;
+    final ids = _decodeStoredList(eventIds);
+    if (ids == null) return eventIds;
+    return jsonEncode([
+      for (final id in ids)
+        if (memoryIdMap[id] case final String mappedId) mappedId,
+    ]);
+  }
+
+  /// 未映射的显式事实引用原样保留，由重放拒绝无法证明归属的目标。
+  String? _remapFactsDeltas(
+    String? original,
+    _FactDeltasForCopy deltas,
+    Map<String, String> entityIdMap,
+  ) {
+    final rows = deltas.rows;
+    if (rows == null) return original;
+    var changed = false;
+    for (final (index, item) in rows.indexed) {
+      if (item is! Map<String, Object?>) continue;
+      final legacy = deltas.legacy?[index];
+      if (legacy != null && entityIdMap.containsKey(legacy.entityId)) {
+        item[LegacyFactReplay.displayIdField] = legacy.change.entityId;
+        if (legacy.proposal.action == FactAction.createEntity) {
+          item[LegacyFactReplay.createdIdField] = legacy.entityId;
+        }
+        changed = true;
+      }
+      for (final field in const ['entityId', LegacyFactReplay.createdIdField]) {
+        final mappedId = entityIdMap[item[field]];
+        if (mappedId == null) continue;
+        item[field] = mappedId;
+        changed = true;
+      }
+      if (item[AppliedFact.field] case final Map<String, Object?> effect) {
+        final mappedId = entityIdMap[effect['entityId']];
+        if (mappedId != null) {
+          effect['entityId'] = mappedId;
+          changed = true;
+        }
+      }
+    }
+    return changed ? jsonEncode(rows) : original;
+  }
+
+  _FactDeltasForCopy _factsForCopy(
+    String? encoded,
+    String? changes,
+    Set<String> sourceEntityIds,
+  ) {
+    final rows = _decodeStoredList(encoded);
+    if (rows == null ||
+        rows.any(
+          (row) =>
+              row is! Map<String, Object?> ||
+              row.containsKey(AppliedFact.field),
+        )) {
+      return (rows: rows, legacy: null);
+    }
+    final display = _decodeStoredList(changes);
+    if (display == null || display.any((row) => row is! Map<String, Object?>)) {
+      return (rows: rows, legacy: null);
+    }
     try {
-      final decoded = jsonDecode(parentEventIds);
-      if (decoded is! List) return parentEventIds;
-      return jsonEncode([
-        for (final id in decoded)
-          if (id is String && memoryIdMap[id] != null) memoryIdMap[id]!,
-      ]);
+      final legacy = LegacyFactReplay.read(
+        rows.cast<Map<String, Object?>>(),
+        display.cast<Map<String, Object?>>(),
+      );
+      final created = <String>{};
+      for (final fact in legacy) {
+        if (fact.proposal.action == FactAction.createEntity) {
+          created.add(fact.entityId);
+        } else if (!sourceEntityIds.contains(fact.entityId) &&
+            !created.contains(fact.entityId)) {
+          return (rows: rows, legacy: null);
+        }
+      }
+      return (rows: rows, legacy: legacy);
     } on FormatException {
-      return parentEventIds;
+      return (rows: rows, legacy: null);
+    }
+  }
+
+  String? _remapExperientialSnapshot(
+    String? original,
+    List<Object?>? snapshot,
+    Map<String, String> memoryIdMap,
+    String newSessionId,
+  ) {
+    if (snapshot == null) return original;
+    var changed = false;
+    for (final item in snapshot) {
+      if (item is! Map<String, Object?>) continue;
+      final mappedId = memoryIdMap[item['memory_id']];
+      if (mappedId == null) continue;
+      item['memory_id'] = mappedId;
+      item['snapshot_session_id'] = newSessionId;
+      for (final field in const ['parent_event_ids', 'archived_event_ids']) {
+        final ids = item[field];
+        if (ids is String) item[field] = _remapEventIds(ids, memoryIdMap);
+      }
+      changed = true;
+    }
+    return changed ? jsonEncode(snapshot) : original;
+  }
+
+  List<Object?>? _decodeStoredList(String? json) {
+    if (json == null) return null;
+    try {
+      final decoded = jsonDecode(json);
+      return decoded is List<Object?> ? decoded : null;
+    } on FormatException {
+      return null;
     }
   }
 
@@ -835,7 +1149,10 @@ class ChatRepositoryImpl implements ChatRepository {
   Future<List<ChatMessage>> getMessages(String sessionId) async {
     final rows = await (_database.select(_database.chatMessagesTable)
           ..where((t) => t.sessionId.equals(sessionId))
-          ..orderBy([(t) => OrderingTerm(expression: t.createdAt)]))
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.createdAt),
+            (t) => OrderingTerm(expression: t.id),
+          ]))
         .get();
     return rows.map(_messageFromRow).toList();
   }
@@ -1674,6 +1991,7 @@ class ChatRepositoryImpl implements ChatRepository {
       // 审查  修复：contextBudget 会话级覆盖
       recentMinRatioOverride: row.recentMinRatioOverride,
       retrievalRatioOverride: row.retrievalRatioOverride,
+      compactionTriggerRatioOverride: row.compactionTriggerRatioOverride,
       maxSteps: row.maxSteps,
       // schemaVersion ≥ 42：剧情锚 JSON（体验重构卡片 C）
       storyAnchor: StoryAnchor.parse(row.storyAnchor),
@@ -1690,6 +2008,8 @@ class ChatRepositoryImpl implements ChatRepository {
       // 向导「初始化你的角色」两列
       characterInitPrompt: row.characterInitPrompt,
       characterInitCardId: row.characterInitCardId,
+      // 工程上下文模式开关（导演实验）
+      engineeringContextEnabled: row.engineeringContextEnabled,
     );
   }
 
@@ -1749,3 +2069,8 @@ class _BranchSnapshot {
     };
   }
 }
+
+typedef _FactDeltasForCopy = ({
+  List<Object?>? rows,
+  List<LegacyFactReplay>? legacy,
+});

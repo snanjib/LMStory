@@ -27,6 +27,8 @@ class IntermediateEditDialog extends StatefulWidget {
   const IntermediateEditDialog({
     required this.initialContent,
     this.allowResend = true,
+    this.saveBeforeClosing,
+    this.saveErrorMessage,
     super.key,
   });
 
@@ -35,6 +37,8 @@ class IntermediateEditDialog extends StatefulWidget {
 
   /// 是否允许"保存并发送"（用户消息=true，助手消息=false）
   final bool allowResend;
+  final Future<bool> Function(String content)? saveBeforeClosing;
+  final String? saveErrorMessage;
 
   @override
   State<IntermediateEditDialog> createState() => _IntermediateEditDialogState();
@@ -47,12 +51,16 @@ class IntermediateEditDialog extends StatefulWidget {
     BuildContext context, {
     required String initialContent,
     bool allowResend = true,
+    Future<bool> Function(String content)? saveBeforeClosing,
+    String? saveErrorMessage,
   }) {
     return showLmDialog<({String content, bool resend})>(
       context: context,
       builder: (context) => IntermediateEditDialog(
         initialContent: initialContent,
         allowResend: allowResend,
+        saveBeforeClosing: saveBeforeClosing,
+        saveErrorMessage: saveErrorMessage,
       ),
     );
   }
@@ -62,6 +70,8 @@ class _IntermediateEditDialogState extends State<IntermediateEditDialog> {
   late final TextEditingController _controller;
   late final String _originalContent;
   bool _isDirty = false;
+  bool _saving = false;
+  bool _saveFailed = false;
 
   @override
   void initState() {
@@ -73,8 +83,11 @@ class _IntermediateEditDialogState extends State<IntermediateEditDialog> {
 
   void _onTextChanged() {
     final dirty = _controller.text != _originalContent;
-    if (dirty != _isDirty) {
-      setState(() => _isDirty = dirty);
+    if (dirty != _isDirty || _saveFailed) {
+      setState(() {
+        _isDirty = dirty;
+        _saveFailed = false;
+      });
     }
   }
 
@@ -127,11 +140,35 @@ class _IntermediateEditDialogState extends State<IntermediateEditDialog> {
   }
 
   /// 内容是否有效（已修改且非空）
-  bool get _canSave => _isDirty && _controller.text.trim().isNotEmpty;
+  bool get _canSave =>
+      !_saving && _isDirty && _controller.text.trim().isNotEmpty;
 
   /// 返回编辑结果（绕过 PopScope dirty 检查）
-  void _popWithResult(bool resend) {
-    Navigator.of(context).pop((content: _controller.text, resend: resend));
+  Future<void> _popWithResult(bool resend) async {
+    if (!_canSave) return;
+    final content = _controller.text;
+    final save = widget.saveBeforeClosing;
+    if (save != null) {
+      setState(() {
+        _saving = true;
+        _saveFailed = false;
+      });
+      bool saved;
+      try {
+        saved = await save(content);
+      } catch (_) {
+        saved = false;
+      }
+      if (!mounted) return;
+      if (!saved) {
+        setState(() {
+          _saving = false;
+          _saveFailed = true;
+        });
+        return;
+      }
+    }
+    if (mounted) Navigator.of(context).pop((content: content, resend: resend));
   }
 
   @override
@@ -141,9 +178,9 @@ class _IntermediateEditDialogState extends State<IntermediateEditDialog> {
     final allowResend = widget.allowResend;
 
     return PopScope(
-      canPop: !_isDirty,
+      canPop: !_isDirty && !_saving,
       onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
+        if (didPop || _saving) return;
         final shouldPop = await _confirmDiscard();
         if (shouldPop && context.mounted) {
           Navigator.of(context).pop();
@@ -161,6 +198,10 @@ class _IntermediateEditDialogState extends State<IntermediateEditDialog> {
             controller: _controller,
             maxLines: null,
             autofocus: true,
+            readOnly: _saving,
+            decoration: _saveFailed
+                ? InputDecoration(errorText: widget.saveErrorMessage)
+                : const InputDecoration(),
             style: LmNarrativeTextStyles.input.copyWith(color: colors.ink),
             // decoration 省略：主题 inputDecorationTheme 自动应用
             // （surfaceVariant 填充 + rMd 圆角 + focused 时 primary 1.5px 边框）
@@ -171,7 +212,7 @@ class _IntermediateEditDialogState extends State<IntermediateEditDialog> {
           // 用 maybePop 而非 pop：maybePop 尊重 PopScope.canPop，
           // dirty 时 canPop=false -> 触发 onPopInvokedWithResult 弹丢弃确认
           TextButton(
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: _saving ? null : () => Navigator.of(context).maybePop(),
             style: TextButton.styleFrom(foregroundColor: colors.muted),
             child: Text(
               t.common.cancel,

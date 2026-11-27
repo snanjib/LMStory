@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_level.dart';
@@ -7,6 +8,7 @@ import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/storage/preferences.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_setting_card.dart';
+import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
@@ -133,6 +135,7 @@ Future<ProviderContainer> _pumpTopPage(
 
   final container = ProviderContainer(
     overrides: [
+      preferencesProvider.overrideWithValue(prefs),
       intermediateConfigProvider.overrideWith((ref) async => config),
       settingsRepositoryProvider.overrideWithValue(repo),
       apiPresetRepositoryProvider.overrideWithValue(
@@ -221,6 +224,61 @@ void main() {
         isFalse,
         reason: '故事模式入口默认隐藏',
       );
+    });
+
+    for (final (width, scale) in [(400.0, 1.0), (320.0, 1.5)]) {
+      testWidgets('switch row taps toggle once at $width dp ($scale× text)',
+          (tester) async {
+        tester.view.physicalSize = Size(width, 720);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        final container = await _pumpTopPage(
+          tester,
+          config: const IntermediateConfig(),
+          repo: _StubSettingsRepository(),
+        );
+        addTearDown(container.dispose);
+
+        final toggles = <bool>[];
+        container.listen(intermediateModeFlagProvider, (_, value) {
+          toggles.add(value);
+        });
+        await tester.tap(find.text('故事模式'));
+        await tester.pumpAndSettle();
+        expect(toggles, [true]);
+
+        await tester.tap(find.byIcon(Icons.auto_stories));
+        await tester.pumpAndSettle();
+        expect(toggles, [true, false]);
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+        expect(toggles, [true, false, true]);
+        expect(
+          await IntermediateModeFlagNotifier.readInitial(
+            container.read(preferencesProvider),
+          ),
+          isTrue,
+        );
+      });
+    }
+
+    testWidgets('switch row can be toggled with the keyboard', (tester) async {
+      final container = await _pumpTopPage(
+        tester,
+        config: const IntermediateConfig(),
+        repo: _StubSettingsRepository(),
+      );
+      addTearDown(container.dispose);
+
+      // App bar has no back button on this root route.
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
     });
 
     testWidgets('2. 5 个分类卡片全部显示（模型/提示词/工具与记忆/提示词模板/帮助）', (tester) async {

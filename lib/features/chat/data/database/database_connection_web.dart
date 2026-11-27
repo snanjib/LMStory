@@ -15,6 +15,11 @@ import 'package:drift/wasm.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart'
     show AppDatabase;
 
+/// The browser database adapter cannot open an app documents file.
+Future<QueryExecutor> openNativeDatabase(Object file) async {
+  throw UnsupportedError('File databases require a native platform');
+}
+
 /// 创建数据库执行器（Web 平台）
 ///
 /// 返回 [QueryExecutor] 供 [AppDatabase] 通过 [LazyDatabase] 包装使用。

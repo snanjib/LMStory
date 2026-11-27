@@ -167,17 +167,17 @@ class FactualAttribute {
   /// 用于 UI 展示的简要描述
   ///
   /// 例：`物种：金毛` / `技能：接飞盘, 握手` / `年龄：3个月`
-  String get displayText {
+  String get displayText => '$attrKey：${formatValue()}';
+
+  /// 显示属性值，保留纯文本和字典原值，将列表展开成一行。
+  String formatValue({String emptyListPlaceholder = '无'}) {
     switch (valueType) {
       case AttributeValueType.single:
-        return '$attrKey：$value';
+      case AttributeValueType.dict:
+        return value;
       case AttributeValueType.list:
         final list = listValue;
-        if (list.isEmpty) return '$attrKey：无';
-        return '$attrKey：${list.join(', ')}';
-      case AttributeValueType.dict:
-        // 字典类型直接展示原始 JSON（简化处理）
-        return '$attrKey：$value';
+        return list.isEmpty ? emptyListPlaceholder : list.join(', ');
     }
   }
 

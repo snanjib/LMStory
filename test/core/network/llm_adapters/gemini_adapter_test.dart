@@ -60,6 +60,65 @@ void main() {
     });
   });
 
+  // HAR-02：空 assistant（无正文无 functionCall）出站保形——
+  // parts 置占位空文本 part，保形状不丢消息。
+  group('HAR-02 空 assistant 出站保形', () {
+    test('空 assistant → parts 为非空占位（消息不丢）', () {
+      final body = GeminiAdapter().buildRequestBody(
+        const LlmRequest(
+          baseUrl: 'https://generativelanguage.googleapis.com',
+          apiKey: 'k',
+          modelId: 'gemini-3.6-flash',
+          messages: [
+            {'role': 'user', 'content': '输入'},
+            {'role': 'assistant', 'content': ''},
+            {'role': 'user', 'content': '继续'},
+          ],
+        ),
+        stream: false,
+      );
+
+      final contents = (body['contents'] as List).cast<Map<String, dynamic>>();
+      expect(contents, hasLength(3), reason: '空 assistant 消息不得被丢弃');
+      expect(contents[1]['role'], 'model');
+      final parts = contents[1]['parts'] as List;
+      expect(parts, isNotEmpty, reason: 'parts 必须非空（保消息形状）');
+      expect(parts.single, {'text': ''});
+    });
+
+    test('有 functionCall 的 assistant 不受影响（无占位注入）', () {
+      final body = GeminiAdapter().buildRequestBody(
+        const LlmRequest(
+          baseUrl: 'https://generativelanguage.googleapis.com',
+          apiKey: 'k',
+          modelId: 'gemini-3.6-flash',
+          messages: [
+            {
+              'role': 'assistant',
+              'content': '',
+              'tool_calls': [
+                {
+                  'id': 'gemini_search__1',
+                  'type': 'function',
+                  'function': {'name': 'search', 'arguments': '{}'},
+                },
+              ],
+            },
+          ],
+        ),
+        stream: false,
+      );
+
+      final parts = ((body['contents'] as List).first
+          as Map<String, dynamic>)['parts'] as List;
+      expect(parts, hasLength(1));
+      expect(
+        (parts.single as Map<String, dynamic>).containsKey('functionCall'),
+        isTrue,
+      );
+    });
+  });
+
   group('user 消息 image_url 转 Gemini parts', () {
     test('data: base64 URL → inlineData（mimeType + data）', () {
       final body = GeminiAdapter().buildRequestBody(
@@ -388,8 +447,9 @@ void main() {
         stream: true,
       );
 
-      final tools = body['tools'] as Map<String, dynamic>;
-      final declarations = tools['functionDeclarations'] as List<dynamic>;
+      final tools = body['tools'] as List<dynamic>;
+      final tool = tools.single as Map<String, dynamic>;
+      final declarations = tool['functionDeclarations'] as List<dynamic>;
       final declaration = declarations.single as Map<String, dynamic>;
       final parameters = declaration['parameters'] as Map<String, dynamic>;
 
@@ -500,6 +560,134 @@ void main() {
       // 无签名的块（旧数据/降级）不带 thoughtSignature 键
       expect(parts[1], {'thought': true, 'text': 't2'});
       expect(parts[2], {'text': 'answer'});
+    });
+  });
+
+  group('单步多工具回执（兼容性核验锁定）', () {
+    // 旧模式同一步支持单响应多 toolCalls，
+    // 每个工具回执必须是独立 user content——本批不改动全局转换，此测试
+    // 锁定现状 wire（全局合并需另案显式策略）。
+    test('两个 tool 回执 → 两个独立 user content，各含单个 functionResponse', () {
+      final body = GeminiAdapter().buildRequestBody(
+        const LlmRequest(
+          baseUrl: 'https://generativelanguage.googleapis.com',
+          apiKey: 'k',
+          modelId: 'gemini-3.6-flash',
+          messages: <Map<String, dynamic>>[
+            {
+              'role': 'user',
+              'content': '查两个',
+            },
+            {
+              'role': 'assistant',
+              'content': '',
+              'tool_calls': [
+                {
+                  'id': 'gemini_query_facts',
+                  'type': 'function',
+                  'function': {
+                    'name': 'query_facts',
+                    'arguments': '{"q": "a"}',
+                  },
+                },
+                {
+                  'id': 'gemini_query_facts__1',
+                  'type': 'function',
+                  'function': {
+                    'name': 'query_facts',
+                    'arguments': '{"q": "b"}',
+                  },
+                },
+              ],
+            },
+            {
+              'role': 'tool',
+              'tool_call_id': 'gemini_query_facts',
+              'content': '结果A',
+            },
+            {
+              'role': 'tool',
+              'tool_call_id': 'gemini_query_facts__1',
+              'content': '结果B',
+            },
+          ],
+        ),
+        stream: false,
+      );
+      final contents = (body['contents'] as List).cast<Map<String, dynamic>>();
+      // user + model + 两个独立 user 回执（未被合并）
+      expect(contents, hasLength(4));
+      expect(contents[1]['role'], 'model');
+      expect(contents[2]['role'], 'user');
+      expect(contents[3]['role'], 'user');
+      Map<String, dynamic> partAt(int i) =>
+          (contents[i]['parts'] as List).cast<Map<String, dynamic>>().single;
+      final first = partAt(2);
+      final second = partAt(3);
+      final firstResponse = first['functionResponse'] as Map<String, dynamic>;
+      final secondResponse = second['functionResponse'] as Map<String, dynamic>;
+      expect(
+        firstResponse['response'] as Map<String, dynamic>,
+        containsPair('result', '结果A'),
+      );
+      expect(
+        secondResponse['response'] as Map<String, dynamic>,
+        containsPair('result', '结果B'),
+      );
+    });
+  });
+
+  group('functionResponse 错误状态映射', () {
+    test('is_error=true 时使用 error 键，非错误使用 result 键', () {
+      final body = GeminiAdapter().buildRequestBody(
+        const LlmRequest(
+          baseUrl: 'https://generativelanguage.googleapis.com',
+          apiKey: 'k',
+          modelId: 'gemini-3.6-flash',
+          messages: <Map<String, dynamic>>[
+            {'role': 'user', 'content': '更新设定'},
+            {
+              'role': 'assistant',
+              'content': '',
+              'tool_calls': [
+                {
+                  'id': 'gemini_update_facts',
+                  'type': 'function',
+                  'function': {'name': 'update_facts', 'arguments': '{}'},
+                },
+                {
+                  'id': 'gemini_query_facts',
+                  'type': 'function',
+                  'function': {'name': 'query_facts', 'arguments': '{}'},
+                },
+              ],
+            },
+            {
+              'role': 'tool',
+              'tool_call_id': 'gemini_update_facts',
+              'content': '缺少必填字段 confidence',
+              'is_error': true,
+            },
+            {
+              'role': 'tool',
+              'tool_call_id': 'gemini_query_facts',
+              'content': '已查询',
+            },
+          ],
+        ),
+        stream: false,
+      );
+
+      final contents = (body['contents'] as List).cast<Map<String, dynamic>>();
+      final errResp = ((contents[2]['parts'] as List).single
+          as Map<String, dynamic>)['functionResponse'] as Map<String, dynamic>;
+      expect(errResp['name'], 'update_facts');
+      expect(errResp['response'], {'error': '缺少必填字段 confidence'});
+
+      final okResp = ((contents[3]['parts'] as List).single
+          as Map<String, dynamic>)['functionResponse'] as Map<String, dynamic>;
+      expect(okResp['name'], 'query_facts');
+      expect(okResp['response'], {'result': '已查询'});
     });
   });
 }

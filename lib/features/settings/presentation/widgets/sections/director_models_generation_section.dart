@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lmstory/core/config/config_level.dart';
 import 'package:lmstory/core/config/config_visibility.dart';
 import 'package:lmstory/core/di/providers.dart';
+import 'package:lmstory/core/llm/reasoning_effort.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
@@ -12,6 +13,7 @@ import 'package:lmstory/core/widgets/numeric_input_dialog.dart';
 import 'package:lmstory/features/advanced/domain/entities/narrative_pacing.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/collapsible_settings_section.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_model_picker_sheet.dart';
 import 'package:lmstory/features/settings/presentation/widgets/sections/director_setting_rows.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -38,6 +40,19 @@ class DirectorModelsGenerationSection extends ConsumerWidget {
 
     final generation = config?.generation;
     final suggest = config?.suggestReply;
+    final presets =
+        ref.watch(settingsNotifierProvider.select((s) => s.presets));
+    final generating = (config?.generatingPresetId, config?.generatingModelId);
+    final sampling = samplingControlsForModel(
+      presets,
+      generating,
+      reasoningEffort: ReasoningEffort.fromString(generation?.reasoningEffort),
+    );
+    final suggestModel = (suggest?.presetId, suggest?.modelId);
+    final suggestSampling = samplingControlsForModel(
+      presets,
+      hasModelSelection(suggestModel) ? suggestModel : generating,
+    );
 
     final rows = <Widget>[
       // ── GM 默认模型 ──────────────────────────────────────────
@@ -50,10 +65,11 @@ class DirectorModelsGenerationSection extends ConsumerWidget {
         ),
 
       // ── 生成参数默认 ─────────────────────────────────────────
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.directorGenerationTemperature,
-        level,
-      ))
+      if (sampling.showsTemperatureAndTopP &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.directorGenerationTemperature,
+            level,
+          ))
         DirectorSliderRow(
           label: t.settings.director.generation.temperature,
           value: generation?.temperature ?? 0.8,
@@ -65,10 +81,11 @@ class DirectorModelsGenerationSection extends ConsumerWidget {
           onChanged: (v) =>
               writeDirectorOverride(ref, 'advanced.generation.temperature', v),
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.directorGenerationTopP,
-        level,
-      ))
+      if (sampling.showsTemperatureAndTopP &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.directorGenerationTopP,
+            level,
+          ))
         DirectorSliderRow(
           label: t.settings.director.generation.topP,
           value: generation?.topP ?? 0.95,
@@ -88,10 +105,11 @@ class DirectorModelsGenerationSection extends ConsumerWidget {
             value: generation?.maxTokens ?? 8192,
           ),
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.directorGenerationPresencePenalty,
-        level,
-      ))
+      if (sampling.showsPenalties &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.directorGenerationPresencePenalty,
+            level,
+          ))
         DirectorSliderRow(
           label: t.settings.director.generation.presencePenalty,
           value: generation?.presencePenalty ?? 0.6,
@@ -105,10 +123,11 @@ class DirectorModelsGenerationSection extends ConsumerWidget {
             v,
           ),
         ),
-      if (ConfigVisibility.of(
-        ConfigVisibilityKeys.directorGenerationFrequencyPenalty,
-        level,
-      ))
+      if (sampling.showsPenalties &&
+          ConfigVisibility.of(
+            ConfigVisibilityKeys.directorGenerationFrequencyPenalty,
+            level,
+          ))
         DirectorSliderRow(
           label: t.settings.director.generation.frequencyPenalty,
           value: generation?.frequencyPenalty ?? 0.3,
@@ -156,18 +175,19 @@ class DirectorModelsGenerationSection extends ConsumerWidget {
         SettingsTile(
           child: _SuggestPromptTile(prompt: suggest?.prompt ?? ''),
         ),
-        DirectorSliderRow(
-          label: t.settings.director.suggestReply.temperature,
-          value: suggest?.temperature ?? 0.8,
-          min: 0,
-          max: 2,
-          divisions: 40,
-          onChanged: (v) => writeDirectorOverride(
-            ref,
-            'advanced.suggest_reply.temperature',
-            v,
+        if (suggestSampling.showsTemperatureAndTopP)
+          DirectorSliderRow(
+            label: t.settings.director.suggestReply.temperature,
+            value: suggest?.temperature ?? 0.8,
+            min: 0,
+            max: 2,
+            divisions: 40,
+            onChanged: (v) => writeDirectorOverride(
+              ref,
+              'advanced.suggest_reply.temperature',
+              v,
+            ),
           ),
-        ),
         SettingsTile(
           child: _SuggestMaxTokensTile(value: suggest?.maxTokens ?? 600),
         ),

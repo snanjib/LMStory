@@ -149,13 +149,25 @@ class AnthropicAdapter implements LlmProtocolAdapter {
         : _mapCacheBreakpointIndex(messages, rawCacheBreakpointIndex);
 
     if (systemTexts.isNotEmpty) {
-      final useCacheBreakpoints = request.tools != null;
-      body['system'] = useCacheBreakpoints
-          ? _buildSystemBlocks(
-              systemTexts,
-              maxBreakpoints: historyCacheBreakpointIndex == null ? 3 : 2,
-            )
-          : systemTexts.join('\n\n');
+      // 无工具的故事请求可按调用方声明的稳定段拆分：仅首末稳定块打断点，
+      // 动态资料保持无标记；其余请求沿用既有字符串/工具分层策略。
+      final stableCount = request.stableSystemPrefixCount;
+      final useStableSystemCache = request.tools == null &&
+          compat.allowStableSystemCache &&
+          stableCount != null &&
+          stableCount > 0 &&
+          stableCount <= systemTexts.length;
+      if (useStableSystemCache) {
+        body['system'] = _buildStableSystemBlocks(systemTexts, stableCount);
+      } else {
+        final useCacheBreakpoints = request.tools != null;
+        body['system'] = useCacheBreakpoints
+            ? _buildSystemBlocks(
+                systemTexts,
+                maxBreakpoints: historyCacheBreakpointIndex == null ? 3 : 2,
+              )
+            : systemTexts.join('\n\n');
+      }
     }
     // 消息区断点对无工具请求
     // （chat 模式）同样开放；有稳定历史尾时额外打一个断点，让跨轮
@@ -295,7 +307,8 @@ class AnthropicAdapter implements LlmProtocolAdapter {
       usage = LlmUsage(
         promptTokens: inputTokens,
         completionTokens: outputTokens,
-        totalTokens: inputTokens + outputTokens,
+        // total_tokens 与完整输入面同口径（含缓存读写），否则成本口径偏小
+        totalTokens: totalInput + outputTokens,
         totalInputTokens: totalInput,
         cacheReadTokens: cacheRead,
         cacheCreationTokens: cacheCreation,
@@ -466,6 +479,28 @@ class AnthropicAdapter implements LlmProtocolAdapter {
     ];
   }
 
+  /// system 文本列表 → Anthropic 内容块数组（稳定段首末缓存标记）
+  ///
+  /// 前 [stableCount] 块属于稳定段，只在首块与末块末尾打断点（只有一块时
+  /// 只打一次）；其后的动态 system 块保持原序且不标记。
+  ///
+  /// Anthropic 按序直接拼接相邻 text 块、不补分隔符，因此第 2 块起前置
+  /// `\n\n`——块文本直接首尾相接即还原旧 `join('\n\n')` 的模型可见文本。
+  static List<Map<String, dynamic>> _buildStableSystemBlocks(
+    List<String> texts,
+    int stableCount,
+  ) {
+    return [
+      for (var i = 0; i < texts.length; i++)
+        {
+          'type': 'text',
+          'text': i == 0 ? texts[i] : '\n\n${texts[i]}',
+          if (i == 0 || i == stableCount - 1)
+            'cache_control': {'type': 'ephemeral'},
+        },
+    ];
+  }
+
   /// 过滤掉 system 消息（已提取到顶层）
   List<Map<String, dynamic>> _filterNonSystemMessages(
     List<Map<String, dynamic>> messages,
@@ -479,8 +514,9 @@ class AnthropicAdapter implements LlmProtocolAdapter {
   /// 1. role:"tool" → role:"user" + content:[{type:"tool_result", tool_use_id, content}]
   /// 2. assistant 消息的 tool_calls → content 数组中的 tool_use block
   /// 3. assistant 消息的 thinkingBlocks → content 数组中的 thinking block（含 signature）
-  /// 4. assistant 消息的 reasoning_content → 转换为 thinking block（但无 signature，
-  ///    仅当 thinkingBlocks 不存在时使用，这种情况一般来自跨协议回传，不推荐）
+  /// 4. 有序块（anthropicBlocks）可用时整体取代上述平行字段；任何路径都
+  ///    不读取聚合 reasoning/reasoningContent——Anthropic 多轮思考回传
+  ///    只认结构化块（含签名），预算估算面同口径（compaction_planning）
   List<Map<String, dynamic>> _convertMessages(
     List<Map<String, dynamic>> messages,
   ) {
@@ -528,6 +564,7 @@ class AnthropicAdapter implements LlmProtocolAdapter {
     if (role == 'tool') {
       final toolCallId = msg['tool_call_id'] as String? ?? '';
       final resultContent = content is String ? content : '';
+      final isError = msg['is_error'] == true;
       return {
         'role': 'user',
         'content': [
@@ -535,6 +572,7 @@ class AnthropicAdapter implements LlmProtocolAdapter {
             'type': 'tool_result',
             'tool_use_id': toolCallId,
             'content': resultContent,
+            if (isError) 'is_error': true,
           }
         ],
       };
@@ -607,7 +645,14 @@ class AnthropicAdapter implements LlmProtocolAdapter {
 
       return {
         'role': 'assistant',
-        'content': blocks.isEmpty ? <Map<String, dynamic>>[] : blocks,
+        // HAR-02：空 assistant（无正文无 tool_use）置占位空文本 block——
+        // Anthropic 契约要求 content 为非空数组，空数组会被拒或消息被吞；
+        // 占位保形状不丢消息。
+        'content': blocks.isEmpty
+            ? <Map<String, dynamic>>[
+                {'type': 'text', 'text': ''},
+              ]
+            : blocks,
       };
     }
 

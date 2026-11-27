@@ -196,38 +196,31 @@ class _DemoReplayEntry extends ConsumerWidget {
     );
     final demo = ref.watch(demoRuntimeProvider);
 
-    // 当演示曾被中断且未在当前作用域激活（如不兼容恢复被取消、异常中断或退出保留），
-    // 暴露可达的后续入口，允许重新进入恢复决策/重开或放弃，避免页面死锁。
-    if (onboarding &&
-        demo.loaded &&
-        demo.packAvailable &&
-        !demo.scopeActive &&
-        demo.state.phase == DemoPhase.running) {
-      return OutlinedButton.icon(
-        onPressed: () => handleDemoResumeFlow(demo, context),
-        icon: Icon(Icons.play_circle_outline, size: 18, color: colors.primary),
-        label: Text(t.demo.resume.continueDemo),
-      );
+    if (!onboarding || !demo.loaded || demo.scopeActive) {
+      return const SizedBox.shrink();
     }
-
-    final eligible = onboarding &&
-        demo.loaded &&
-        demo.packAvailable &&
-        !demo.scopeActive &&
-        demo.state.phase != DemoPhase.running;
-    if (!eligible) return const SizedBox.shrink();
-
-    return OutlinedButton.icon(
-      onPressed: () async {
-        if (context.mounted) {
-          Navigator.of(context).popUntil((route) => route.isFirst);
-          // lm-motion-exempt: 路由退出动画完成等待窗口（非过渡动效，手动启动演示前的时序缓冲）
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-        }
-        await demo.start(fresh: true);
+    final locale = t.$meta.locale.languageTag;
+    return FutureBuilder<bool>(
+      key: ValueKey(locale),
+      future: demo.isPackAvailable(locale),
+      builder: (context, availability) {
+        if (availability.data != true) return const SizedBox.shrink();
+        final resume = demo.state.phase == DemoPhase.running;
+        return OutlinedButton.icon(
+          onPressed: resume
+              ? () => handleDemoResumeFlow(demo, context)
+              : () async {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                  // lm-motion-exempt: wait for the outgoing route before mounting the demo.
+                  await Future<void>.delayed(const Duration(milliseconds: 300));
+                  await demo.start(fresh: true);
+                },
+          icon:
+              Icon(Icons.play_circle_outline, size: 18, color: colors.primary),
+          label:
+              Text(resume ? t.demo.resume.continueDemo : t.demo.invite.accept),
+        );
       },
-      icon: Icon(Icons.play_circle_outline, size: 18, color: colors.primary),
-      label: Text(t.demo.invite.accept),
     );
   }
 }

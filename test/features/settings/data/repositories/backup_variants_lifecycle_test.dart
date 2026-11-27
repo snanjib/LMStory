@@ -171,11 +171,12 @@ void main() {
         'message_variants',
         'agent_events',
         'failure_logs',
+        'factual_relationship_migration_backup',
       ]),
     );
     expect(
       sessionTables.length,
-      11,
+      12,
       reason:
           '含 session_id 的表数变化=新表进库——按上文注释接入五链后再更新计数（当前清单：${sessionTables.join(', ')}）',
     );

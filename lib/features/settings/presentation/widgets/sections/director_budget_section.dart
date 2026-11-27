@@ -165,20 +165,6 @@ class DirectorBudgetSection extends ConsumerWidget {
                 ),
               ),
               directorSectionGap,
-              // 帮助文案「可在导演设置调整」的落地写点（此前无 UI 入口）
-              DirectorStepperRow(
-                label: b.foreshadowCheckInterval,
-                value: harness?.foreshadowCheckInterval ?? 8,
-                min: 0,
-                max: 30,
-                hint: b.foreshadowCheckIntervalHint,
-                onChanged: (v) => writeDirectorOverride(
-                  ref,
-                  'advanced.harness.foreshadow_check_interval',
-                  v,
-                ),
-              ),
-              directorSectionGap,
               DirectorStepperRow(
                 label: b.eventLogRetentionTurns,
                 value: harness?.eventLogRetentionTurns ?? 20,

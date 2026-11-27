@@ -17,6 +17,7 @@ import 'package:lmstory/core/theme/system/structures/classic/conversation/simple
 import 'package:lmstory/core/utils/follow_scroll_executor.dart';
 import 'package:lmstory/core/utils/smooth_follow_scroller.dart'
     show streamingFollowCushionPx;
+import 'package:lmstory/core/widgets/conversation_navigation.dart';
 import 'package:lmstory/core/widgets/model_config_banner.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
@@ -28,9 +29,9 @@ import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_backg
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_empty_view.dart';
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_error_banner.dart';
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_generating_placeholder.dart';
-import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_message_navigation_overlay.dart';
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_mode_app_bar.dart';
 import 'package:lmstory/features/chat/presentation/pages/chat/widgets/chat_round_done_hint.dart';
+import 'package:lmstory/features/chat/presentation/utils/conversation_round_navigation.dart';
 import 'package:lmstory/features/chat/presentation/utils/scroll_position_cache.dart';
 import 'package:lmstory/features/chat/presentation/widgets/chat_mode_input_area.dart';
 import 'package:lmstory/features/chat/presentation/widgets/in_session_search_bar.dart';
@@ -114,9 +115,10 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
   Timer? _tokenDebounce;
   String? _lastCountedText;
 
-  /// 消息导航相关（对标 ChatBox MessageNavigation）
-  /// 滚动位置状态：是否在底部、是否向上滚动过
-  bool _atBottom = true;
+  late final _roundNavigation = ConversationRoundNavigation(
+    _scrollController,
+    onTailChanged: () => setState(() {}),
+  );
 
   ///  滚动终案（照抄 director_chat_body 终案蓝图）：普通方向列表下的
   /// 贴底跟随语义。reverse 列表在阅读态直播增长（尾部 child 变高）会把
@@ -130,14 +132,6 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
   /// 执行按平台分派——桌面 ticker 逐帧指数趋近平滑贴底、移动 postFrame
   /// jumpTo 直贴（行为不回归）。
   late final FollowScrollExecutor _followExecutor;
-
-  /// 底部容差（普通方向列表：maxExtent - offset 为距底距离）：80px 内视为贴底。
-  static const double _bottomTolerance = 80;
-
-  /// 滚动活动状态：用户正在滑动时为 true，停止 2 秒后自动设为 false
-  /// 导航按钮在滑动时出现，停止后自动消失，避免遮挡阅读
-  bool _isScrollActive = false;
-  Timer? _scrollIdleTimer;
 
   /// 当前动态定位/跳转的目标消息 ID
   String? _targetScrollMessageId;
@@ -159,17 +153,31 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
   /// 输入防抖落库计时器（500ms 静默后写窄列；dispose 只取消不写——
   /// Riverpod 生命周期禁止 dispose 内用 ref）。
   Timer? _draftDebounce;
+  bool _settingDraftText = false;
 
-  /// 未发送草稿窄列持久化（fire-and-forget；空串=清空，发送后调用）。
+  void _setDraftText(String text) {
+    _settingDraftText = true;
+    _inputController.text = text;
+    _settingDraftText = false;
+  }
+
+  /// 未发送草稿窄列持久化（fire-and-forget；空串=清空）。
   void _persistDraftColumn(String sessionId, String text) {
     // 同步+异步双兜底：持久化失败静默降级（草稿非关键路径，不炸页面）
     unawaited(
       () async {
+        final release =
+            ref.read(dataStoreOperationGuardProvider).tryBeginWrite();
+        if (release == null) return;
         try {
           await ref
               .read<ChatRepository>(chatRepositoryProvider)
               .setSessionDraft(sessionId, text.isEmpty ? null : text);
-        } catch (_) {}
+        } catch (_) {
+          // 草稿写入失败时仍保留编辑框。
+        } finally {
+          release();
+        }
       }(),
     );
   }
@@ -185,9 +193,12 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
       return; // 读库失败静默降级（不炸页面）
     }
     if (!mounted || draft == null || draft.isEmpty) return;
-    if (widget.session.sessionId != sessionId) return;
+    if (widget.session.sessionId != sessionId ||
+        _inputDrafts.containsKey(sessionId)) {
+      return;
+    }
     if (_inputController.text.isEmpty) {
-      _inputController.text = draft;
+      _setDraftText(draft);
     }
   }
 
@@ -226,17 +237,16 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.session.sessionId != widget.session.sessionId) {
       final oldText = _inputController.text;
-      if (oldText.isNotEmpty) {
-        _inputDrafts[oldWidget.session.sessionId] = oldText;
-      } else {
-        _inputDrafts.remove(oldWidget.session.sessionId);
-      }
+      _inputDrafts[oldWidget.session.sessionId] = oldText;
+      final hasPendingWrite = _draftDebounce?.isActive ?? false;
       _draftDebounce?.cancel();
-      _persistDraftColumn(oldWidget.session.sessionId, oldText);
-      final stashed = _inputDrafts[widget.session.sessionId] ?? '';
-      _inputController.text = stashed;
+      if (hasPendingWrite) {
+        _persistDraftColumn(oldWidget.session.sessionId, oldText);
+      }
+      final stashed = _inputDrafts[widget.session.sessionId];
+      _setDraftText(stashed ?? '');
       // 跨重启恢复：同 State 会话内暂存未命中时读库
-      if (stashed.isEmpty) {
+      if (stashed == null) {
         unawaited(_restoreDraftFromDb(widget.session.sessionId));
       }
       // 同型页面原地复用（桌面 replace/同型
@@ -249,6 +259,7 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
       // 误判成用户上划，新会话流式不跟随。story/director 同场景均有
       // reset（intermediate_chat_body:193 / director_chat_body:191），
       // reset 后由下方初燃定位重新建立位置。
+      _roundNavigation.reset();
       _followExecutor.reset();
       // 控制器缓存（非 autoDispose）+ build 内
       // ref.listen 无初燃——切到「已打开过」的会话永不出现「空→非空」
@@ -313,7 +324,7 @@ class _ChatModePageState extends ConsumerState<ChatModePage>
     }
     _tokenDebounce?.cancel();
     _draftDebounce?.cancel();
-    _scrollIdleTimer?.cancel();
+    _roundNavigation.reset();
     _flashTimer?.cancel();
     _roundDoneHintTimer?.cancel();
     _inputController.removeListener(_onInputChanged);
@@ -458,6 +469,7 @@ final chatModeControllerProvider = StateNotifierProvider.family<
     ChatModeController, ChatModeState, ChatSession>(
   (ref, session) {
     return ChatModeController(
+      operationGuard: ref.read(dataStoreOperationGuardProvider),
       chatRepository: ref.read(chatRepositoryProvider),
       presetRepository: ref.read(apiPresetRepositoryProvider),
       settingsRepository: ref.read(settingsRepositoryProvider),

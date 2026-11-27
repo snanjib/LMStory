@@ -1,4 +1,5 @@
 common:
+  backupOverwriteInProgress: A backup is being restored. Wait for it to finish before sending.
   errors:
     directorFirstResponseTimeout: First response deadline exceeded; automatic retry stopped. Check provider logs or adjust the first-response limit.
     directorCompleteResponseTimeout: Non-streaming completion deadline exceeded; automatic retry stopped. Check provider logs or adjust the completion limit.
@@ -10,6 +11,9 @@ common:
     llmTimeout: "Request timed out"
     llmEmptyResponse: "The model returned an empty response (no text or tool calls)"
     llmNonStreamFailed(detail): "Non-streaming request failed: $detail"
+    factWriteWarning(param=count):
+      one: "$count fact change could not be saved this round."
+      other: "$count fact changes could not be saved this round."
   confirm: Confirm
   cancel: Cancel
   save: Save
@@ -84,7 +88,18 @@ common:
     # reported by the endpoint; "≈" prefix = locally estimated by the app
     usageNote: '"—" means the endpoint did not report this item; "≈" marks locally estimated values'
     estTokenCount: "≈ $count tokens"
+    currentEstimateLabel: Current estimated input (next request)
+    updatedAtLabel: Updated
+    cacheCoverageLabel: Hit-rate coverage
+    cacheCoverageValue: "$count comparable rounds"
+    cacheSampleInvalid: Metering anomaly; hit rate not comparable
   seedResource:
+    appliedTitle: Applied to this session
+    appliedEmpty: No character cards or worldbooks applied yet
+    appliedLoadFailed: Couldn't load resources applied to this session
+    applySessionUnavailable: Couldn't save this session. Try applying the resource again.
+    appliedCard(name): Character card · $name
+    appliedBook(name): Worldbook · $name
     applyCard: Apply character card
     applyBook: Apply worldbook
     resourceEmpty: No resources yet — import them first under "Settings → Character cards/Worldbooks"
@@ -282,8 +297,8 @@ chat:
     mermaidNotSupported: Mermaid diagrams can't be rendered on mobile yet. Copy to mermaid.live to view
   navigation:
     jumpToTop: Jump to top
-    prevUserMessage: Previous user message
-    nextUserMessage: Next user message
+    prevUserMessage: Previous round
+    nextUserMessage: Next round
     jumpToBottom: Jump to bottom
   modelSelector:
     noModel: No model selected
@@ -340,7 +355,7 @@ chat:
     messages:
       config: Incomplete configuration. Go to Settings and check the API provider and model.
       network: Network connection failed. Check your network and try again.
-      auth: Invalid API Key or insufficient permission
+      auth: API Key rejected
       rateLimit: Too many requests. Please try again later.
       server: Server error. Please try again later.
       timeout: Request timed out. Check your network and try again.
@@ -357,7 +372,7 @@ chat:
     suggestedActions:
       config: Go to Settings and check the API provider, model ID, and API Key
       network: Switch between Wi-Fi and mobile data, or restart your router and try again
-      auth: Go to Settings and check whether the API Key is valid; regenerate it if needed
+      auth: Check or replace the API Key in Settings → Model providers → your provider.
       rateLimit: Wait 1 minute and retry, or slow down your request rate
       server: Wait 5 minutes and retry; if the problem persists, contact the provider
       timeout: Switch to a faster model, or check your network stability
@@ -376,10 +391,31 @@ chat:
 
       $detailLabel: $detail'
 advanced:
+  auxiliaryFailure:
+    titleFailed: "Title generation failed · $reason"
+    noConversation: There is no conversation content to use yet
+    modelOrKeyUnavailable: No usable model or API key. Check your model settings
+    timeout: The request timed out. Try again later
+    network: Could not reach the provider. Check your connection
+    auth: The provider could not authorize the request. Check your API key and permissions
+    rateLimit: The request was rate limited. Try again later
+    requestRejected: The provider rejected the request. Check the model and its parameters
+    unsupportedParameter: The provider does not support $parameter
+    contextOverflow: The request exceeds the model's context window
+    server: The provider is temporarily unavailable
+    emptyOutput: The model returned an empty response
+    invalidCandidates: The model returned no usable suggested replies
+    titleChanged: The title changed while generating. The current title was kept
+    saveFailed: Could not save the new title. Try again
+    unknown: An error occurred during generation. Try again later
+    withHttpStatus: "$reason (HTTP $status)"
   sessionSettingsTitle: Session settings
   emptyHint: In Director mode, the AI showrunner autonomously searches memories, writes the story prose, and maintains the setting. Send the first line to begin.
   failure:
     gmMissing: 'Director main model not configured: go to "Settings → Director mode settings → Models & generation" to configure the director main model, then resend'
+    inputRecovered: Previous input recovered
+    inputRecoveredSuggestion: You can continue this round. If you still need a main model, go to Settings → Director mode settings → Models & generation first.
+    inputSaveFailed: Saving failed. Your edits are still here so you can try again.
     contextOverflow: Still over the limit after an auto-compaction retry; compact manually or simplify the input
   # 2026-10-15 batch F: badge word follows the cause
   retryWaitingBadge: Waiting to retry
@@ -402,6 +438,15 @@ advanced:
     delete: Delete this version
     deleteDone: Deleted this version
     sourceLabel: 'Generation instruction: $input'
+    switchBlockedRestore: This draft could not be restored in full. Your current draft was kept.
+    switchBlockedDownstream: There are later rounds after this version; switching would mix memories with the story text. Delete the later rounds first
+    switchBlockedCompacted: This round has been folded into the compaction summary; switching would mix memories with the story text, so the current version is kept
+  # Single-slot queued message (staged while generating, auto-sent once the round ends normally)
+  queue:
+    chip(text): "Will send after this round: $text"
+    withdraw: Withdraw
+    overwriteTitle: Replace queued message?
+    overwriteConfirm(queued): "A queued message already exists (\"$queued\"). Replace it with the new content?"
   input:
     hint: Instruction to the director…
   emptyState:
@@ -413,6 +458,8 @@ advanced:
     searchStory: Browsing past events
     readStory: Rereading the original
     queryFacts: Checking the facts
+    listFacts: Browsing fact catalog
+    queryMemoryChanges: Checking memory changes
     readCompactSummary: Rereading the mainline
     updateFacts: Revising the fact set
     recordEventMemory: Logging to the chronicle
@@ -420,7 +467,10 @@ advanced:
     mergeEntities: Merging entities
     askUser: Consulting the director
     finishRound: Bringing down the curtain
+    finishMaintenance: Completing maintenance
     readSkill: Browsing the playbook
+    calcEval: Calculating exactly
+    calcDate: Checking dates
     spawn: Dispatching a subagent
     fallback: Working backstage
   agentStop:
@@ -486,8 +536,16 @@ advanced:
     thinkingDuration: Thinking · $seconds s
     aggregatedActions(verb, count): $verb × $count
     interruptedToolPlaceholder: "Interrupted"
-    interruptedToolOutput: "(Application interrupted, not executed; please retry in subsequent turns if still needed)"
+    interruptedToolOutput: "(Application interrupted; whether this operation executed is uncertain. Re-judge from the current state before acting if still needed)"
     narrationLabel: Director narration
+  maintenance:
+    capsuleIdle: Prose ready · Running periodic memory check…
+    capsuleWithStep(step, verb): "Prose ready · Memory check (Step $step) · $verb"
+    capsuleWithBudget(step, maxSteps, verb): "Prose ready · Memory check (Step $step/$maxSteps) · $verb"
+    capsuleWithCount(count, verb): "Prose ready · Memory check ($count steps) · $verb"
+    checkingVerb: Inspecting memory
+    pureReadingStatus: Prose ready · Calibrating memory in background…
+    noStepsYet: Preparing memory inspection…
   heartbeat:
     composing: The director is composing…
   live:
@@ -613,6 +671,9 @@ advanced:
     confidenceBadge(n): 'Confidence $n/5'
     beforeLabel: Old
     afterLabel: New
+    valueLine(label, value): '$label: $value'
+    emptyListValue: None
+    eventFieldSeparator: '; '
     reasonLabel: Reason
     commentEntry: Add a note (optional)
     commentHint: One-off guidance sent to the AI with your decision; leave empty to send nothing. For standing rules, edit project rules or settings instead
@@ -627,15 +688,19 @@ advanced:
     noteConfidenceGate: Confidence below the key-attribute gate; will be rejected
     noteListRejects: List attribute cannot be overwritten wholesale; will be rejected (append or remove items instead)
     noteBaselineRedirect: Currently a single-value attribute; will be converted to a wholesale update
-    noteDuplicate: Same or similar entry already exists; will not be written again
+    noteDuplicate: Same entry already exists; will not be written again
     noteNoMutableList: No removable list attribute; will not take effect
     noteValueNotInList: Item not in the list; will not take effect
+    noteDictRejectsAppend: Dict-style relationship attribute cannot be appended to; will not take effect (use a "relationship:name" attribute for personal ties, or update the group dict wholesale)
+    noteDictKeyCreatesList: This attribute is dict-typed and cannot be created as a list by appending; will not take effect
+    baseDriftTrace(items): "These attributes were updated by another path after staging and will not be overwritten: $items (re-submit if a change is still needed)"
     noteAliasSameAsPrimary: Same as the primary name; will not be written
     noteAliasLimit: Alias limit reached; will not be written
     noteAlreadyArchived: Already archived; will not archive again
     noteSameNameUpdate: An entity with this name exists; will be converted to updating its attribute
     noteSameNameAlias: An entity with this name exists; will be converted to adding an alias to it
     noteCreatesAttrRow: Attribute does not exist yet; will be created
+    noteImportanceOutOfRange: Importance must be between 1 and 5; will be rejected
     anchorEntityName: Story anchor
     anchorFieldArc: Arc
     anchorFieldMainline: One-line mainline
@@ -702,6 +767,25 @@ advanced:
     retrievalProfileLoose: Loose
     retrievalProfileLooseDesc: 'Many and broad: retrieval returns 12 entries by default, no filtering'
     sectionContextDesc: Context and compaction settings are saved per session; "Reset to current global values" writes a snapshot of the global values at this moment; editing is blocked during generation
+    # Engineering context mode (director experiment): session switch + destructive exit warning + recovery state
+    engineeringTitle: Engineering context mode (experimental)
+    engineeringHint: When enabled, full work traces (briefings, tool calls and results) are retained; context is assembled from the event ledger and the event log is no longer trimmed by turn count; disabling restores the old retention policy
+    engineeringExitTitle: Disable engineering context mode
+    engineeringExitWarnLimited(turns): Disabling engineering context mode will restore the old log retention policy. Detailed tool calls and thinking traces older than $turns turns will be permanently pruned (the novel text itself is fully preserved). Disable it now?
+    engineeringExitWarnUnlimited: Disabling engineering context mode switches back to the classic text assembly mode. Your current settings keep all event logs, so historical tool traces will not be pruned immediately. Disable it now?
+    engineeringSwitchFailed: Switch not completed (generation in progress or data check failed)
+    engineeringSummaryNeedsModel: Configure the Director main model to generate an engineering context summary.
+    engineeringBlockedTitle: Engineering context needs repair
+    engineeringBlockedDesc: The session's mode switch is inconsistent with its work records. Generation is paused to protect the data; you can rebuild a new epoch from the current history, or confirm exiting this mode.
+    engineeringRepair: Repair and re-capture
+    engineeringExitButton: Confirm exit
+    engineeringReasonNoEpoch: The switch is on, but no valid work epoch record exists
+    engineeringReasonPending: The last enable attempt did not finish (interrupted transaction leftover)
+    engineeringReasonExited: The switch is on, but the work epoch has already exited
+    engineeringReasonDisabledOpen: The switch is off, but a work epoch is still open
+    engineeringReasonCapture: The history captured on enable is missing
+    engineeringReasonUnknownEvent: Work records exist that this version cannot recognize
+    engineeringReasonUnknown: Unknown reason (see diagnostics log)
     sectionMemoryManagement: Memory management
     sectionResource: Character card/Worldbook
     openMemoryBrowser: Open memory store
@@ -756,6 +840,93 @@ advanced:
     compaction:
       undoSuccess: Compaction undone; the archived conversation is restored
       undoFailed: Undo failed; try again later
+  actUnit:
+    actHeaderWithTime(act, time): "Act $act · $time"
+    settled: Settled
+    settledChanges(count, param=count):
+      one: "Settled · $count change"
+      other: "Settled · $count changes"
+    writing: Writing
+    maintaining: Organizing memory
+    interrupted: Interrupted
+    expandDirective: Show instruction
+    collapseDirective: Hide instruction
+    directiveActions: Instruction actions
+    pillEntityCreated(name): "New · $name"
+    pillEntityArchived(name): "Archived · $name"
+    pillAliasAdded(name): "$name · Alias added"
+    pillImportance(name): "$name · Importance"
+    pillAttrUpdated(name, attr): "$name · $attr"
+    pillEntityUpdated(name): "$name · Updated"
+    pillEntityMultiUpdated(name, count): "$name · $count updates"
+    pillForeshadowNew(text): "New clue · $text"
+    pillForeshadowNewCount(count): "$count new clues"
+    pillForeshadowResolved(text): "Paid off · $text"
+    pillForeshadowResolvedCount(count): "$count clues paid off"
+    pillAnchorUpdated: Anchor updated
+    pillRetrievalSummary(count, param=count):
+      one: "Checked $count source"
+      other: "Checked $count sources"
+    pillMaintenanceCalibrated: Memory calibrated
+    pillEventLogged: Logged to chronicle
+    pillBackstageCount(count, param=count):
+      one: "$count backstage step"
+      other: "$count backstage steps"
+    overflowPill(count): "+$count more"
+    changesSummaryTitle: Act changes
+    changesSummaryCount(count): "Act changes · $count"
+    expandMorePillsTooltip: Show remaining changes
+    collapseMorePillsTooltip: Show fewer changes
+    showAllChanges: Show all
+    actionVerbDetail(verb, detail): "$verb: $detail"
+    drawerTitle: World changes in this act
+    goToMemory: Open Memory
+    editAnchor: Edit current anchor
+    foreshadowNew: New foreshadowing
+    foreshadowResolved: Paid off
+    arcProgress: Story progress
+    narrativeTimeChange: Narrative time
+    chronicleLabel: Chronicle
+    directorActions: Director actions
+    thinkingNotes: Thinking notes
+    thinkingNotesCount(count, param=count):
+      one: "Thinking notes · $count note"
+      other: "Thinking notes · $count notes"
+    pulseExpand: Show director progress
+    pulseCollapse: Hide director progress
+    maintenanceHeadline: Prose finalized · Organizing long-term memory
+    maintenanceStepActive(verb): "Prose finalized · $verb…"
+    maintenanceProgress(step, maxSteps): "$step / $maxSteps"
+    unknownEntity: World entry
+    actionMergedInto(source, target): 'Merged "$source" into "$target"'
+  worldSheet:
+    entryLabel: Script Board
+    entryTooltip: View script board and tools
+    title: Script Board
+    refreshTooltip: Refresh script board
+    openMemory: Memory
+    sectionNow: World right now
+    narrativeTimeLabel: Story time
+    oneLinerLabel: Current beat
+    storylineLabel: Storyline
+    nowEmpty: No story time or arc recorded yet
+    sectionForeshadows: Foreshadowing
+    foreshadowsEmpty: No foreshadowing threads yet
+    sectionEntities: Key cast & lore
+    recentActiveSection: Recently active
+    entitiesEmpty: No key characters or lore recorded yet
+    entitiesUnavailable: World facts are temporarily unavailable. Open Memory to browse full records.
+    entityTypeCharacter: Character
+    entityTypeLocation: Location
+    entityTypeItem: Item
+    entityTypeLore: Lore
+    entityTypeOrganization: Organization
+    entityTypeMisc: Misc
+  composer:
+    toolsExpandTooltip: Show writing tools
+    toolsCollapseTooltip: Hide writing tools
+    quoteButton: Quotes
+    parenButton: Parens
 intermediate:
   title: Story
   draft:
@@ -834,6 +1005,8 @@ intermediate:
     factsTypeLore: Lore
     factsTypeOrganization: Organization
     factsTypeMisc: Misc
+    factsMatchName(type, name): '$type "$name"'
+    factsMatchAliases(label, aliases): ' ($label: $aliases)'
     factsChangeHint: Updating facts…
     factsChangeReady(param=count):
       one: "Facts updated · $count item"
@@ -855,6 +1028,7 @@ intermediate:
     factsActionRemoveFromList: Remove
     factsActionAddAlias: Alias
     factsActionArchiveEntity: Archive
+    factsActionSetImportance: Importance
     summarizingHint: Summarizing…
     summarizingReady: Summary generated
     preparingRegenerate: Preparing to regenerate…
@@ -1167,6 +1341,9 @@ intermediate:
       other: "Fixed $count memories"
     indexHealthRepairFailed: Repair failed; check the diagnostic logs
     archivedBadge: Archived
+    # MEM-20: memories with importance below the storage threshold get no
+    # memories_fts row by design (substring fallback keeps them reachable)
+    notIndexed: Not indexed
     archiveMemory: Archive
     unarchiveMemory: Restore
     archiveMemoryDone: Archived (no longer retrieved or injected)
@@ -1280,6 +1457,27 @@ intermediate:
     fieldAttrKeyHint: Choose the attribute to record
     fieldAttrValue: Attribute value
     fieldCustomAttrKey: Custom attribute
+    attributeLabels:
+      name: Name
+      characterName: Character name
+      locationName: Location name
+      itemName: Item name
+      loreName: Lore name
+      organizationName: Organization name
+      description: Description
+      loreDescription: Lore description
+      organizationDescription: Organization description
+      personality: Personality
+      background: Background
+      relationships: Relationships
+      relationshipWith(name): Relationship with $name
+      skills: Skills
+      features: Features
+      owner: Owner
+      category: Category
+      leader: Leader
+      members: Members
+      custom(key): '$key (Custom attribute)'
     fieldCustomAttrKeyHint: Not in the predefined list; the AI cannot update this attribute automatically
     customAttrKeyOption: Custom…
     fieldValueType: Value type
@@ -1377,7 +1575,10 @@ settings:
       one: $count model
       other: $count models
     fetchModels: Fetch model list
-    fetchError: 'Failed to fetch model list: $error'
+    fetchFailedTitle: "Couldn't fetch models"
+    fetchAuthSuggestion: Check or replace the API Key in this provider’s settings, then fetch the list again.
+    fetchRetry: Check the connection or provider address, then try again.
+    fetchHttpStatus: HTTP $status
     fetchEmpty: The provider connection works but returned 0 models (you can add model IDs manually)
     clearKeyConfirmTitle: Clear API Key?
     clearKeyConfirmBody: Saving empty content will clear this provider's API Key; you will need to re-enter it before the provider can be used again. Clear it?
@@ -1387,6 +1588,10 @@ settings:
     editModel: Edit model
     modelId: Model ID
     modelIdHint: Enter model ID
+    modelIdCheckTitle: Check the model ID
+    modelIdCheckMessage: This model ID contains a look-alike character ($codePoint). Check it against the ID from your provider, especially dashes (-) and full-width symbols.
+    modelIdKeep: Save as entered
+    modelIdEdit: Edit ID
     modelIdDuplicate(modelId): Model $modelId is already in the list; please don't add it again
     modelIdReadonly: The model ID cannot be changed after creation
     modelDisplayName: Display name
@@ -1446,14 +1651,14 @@ settings:
     samplingParams:
       title: Sampling parameters
       omitTitle: Omit sampling parameters
-      omitSubtitle: 'When on, every model under this provider omits temperature / top_p; known unsupported models are omitted automatically.'
+      omitSubtitle: Enabled by default for new providers. When on, requests omit temperature, top P, and penalties.
       editorDirtyHint: Save or cancel your unsaved advanced-parameter edits before changing this switch
     advancedOptions:
       title: Advanced parameters
       summaryEmpty: Not configured
       summaryConfigured(count): $count configured
       hintOpenai: 'Keys that take effect under this protocol: extra_headers, extra_body, parallel_tool_calls, thinking. extra_body is expanded after the base fields and can override reserved keys such as model/messages/stream. Leave empty for no custom parameters. The reserved key omit_sampling_params=true equals the switch above.'
-      hintAnthropic: 'Keys that take effect under this protocol: anthropic_version, anthropic_beta, anthropic_send_sampling, anthropic_thinking_mode, anthropic_effort, thinking, extra_headers, anthropic_capabilities. temperature/top_p are omitted by default; the official endpoint defaults to adaptive thinking and third-party endpoints omit thinking by default. Leave empty for no custom parameters. The reserved key omit_sampling_params=true equals the switch above.'
+      hintAnthropic: 'Keys that take effect under this protocol: anthropic_version, anthropic_beta, anthropic_send_sampling, anthropic_thinking_mode, anthropic_effort, thinking, extra_headers, anthropic_capabilities. temperature/top_p are omitted by default; the official endpoint defaults to adaptive thinking and third-party endpoints omit thinking by default. anthropic_capabilities.stable_system_cache controls whether story generation/review splits the stable system segment into cacheable blocks: enabled by default on the official endpoint, disabled by default on third-party endpoints, and a boolean explicitly overrides either default. Leave empty for no custom parameters. The reserved key omit_sampling_params=true equals the switch above.'
       hintGemini: Only thinkingConfig takes effect under this protocol (written into generationConfig); extra_headers / extra_body have no consumption path under this protocol and will not take effect. Leave empty for no custom parameters. The reserved key omit_sampling_params=true equals the switch above.
       invalidJson: Invalid JSON format; please check commas and quotes
       mustBeObject: Must be a JSON object (starting with {)
@@ -1507,7 +1712,7 @@ settings:
       saved: Project rules saved
     context:
       threshold: Context compaction threshold
-      thresholdHint: When history usage reaches this share of the effective window, history is compacted before the next round; an in-round 85% failsafe still applies as a backstop
+      thresholdHint: Above this threshold, history is compacted before the next round. Engineering context may compact sooner to save room for output.
       thresholdTokensUnit: tokens
       thresholdTokenInputTitle: Threshold (effective tokens)
       windowAdvanced: 'Advanced: window limit'
@@ -1532,8 +1737,6 @@ settings:
       approvalTimeoutSwitchOff: When off, banners wait for your decision indefinitely and never auto-deny
       subagentMaxSteps: Subagent step limit
       subagentMaxDuration: Subagent time limit (minutes)
-      foreshadowCheckInterval: Foreshadow check interval (rounds)
-      foreshadowCheckIntervalHint: Every N rounds, unresolved foreshadowing is listed at the end of the round; 0 = disable both the check and the gate
       eventLogRetentionTurns: Round log retention (rounds)
       eventLogRetentionTurnsHint: Behind-the-scenes event logs keep the most recent N rounds on a rolling basis; 0 = unlimited
     suggestReply:
@@ -1570,8 +1773,12 @@ settings:
         search_story: Search story memory
         read_story: Read back the original text by round number
         query_facts: Query fact-layer entity cards
+        list_facts: Browse the dynamic entity catalog and summary
+        query_memory_changes: Query factual change history
         read_compact_summary: Read the plotline overview
         read_skill: Read the writing skill guidelines
+        calc_eval: Exact numeric calculation
+        calc_date: Check explicit dates
         update_facts: Write/update the fact layer (staged mistakes can be cleared/reset)
         merge_entities: Merge duplicate entities
         update_story_anchor: Update the story anchor
@@ -1579,9 +1786,13 @@ settings:
         spawn: Dispatch a subagent for research
         ask_user: Ask the director a question
         finish_round: Submit this round
+        finish_maintenance: Finish periodic review and maintenance
     memory:
       embeddingModel: Embedding model
       embeddingModelDesc: Used for semantic retrieval over story memory; keyword-only retrieval when unset
+      # MEM-06 (3): resolved embedding channel status (same source as
+      # resolveAdvancedEmbeddingConfig — both advanced embedding keys set)
+      embeddingNotConfiguredStatus: Not configured · keyword retrieval only
       embeddingSwitchConfirmTitle: Switch embedding model?
       embeddingSwitchConfirmContent: After the switch, vectors of existing memories will no longer take part in semantic retrieval. Continue?
       embeddingSwitchConfirmAction: Confirm switch
@@ -1648,7 +1859,8 @@ settings:
         other: "Only the first 20 entries are shown; $count more are hidden"
       rawJson: Raw JSON (fallback when parsing fails)
     title: Character cards/worldbooks
-    entrySubtitle: Import and manage SillyTavern character cards and worldbooks
+    entrySubtitle: Import and manage character cards and worldbooks for Story and Director sessions
+    applyGuide: Open a Story or Director session and go to Session settings → Character card/Worldbook to apply a resource. If New story is missing from Home, enable it in Settings → Story mode settings.
     cardsSection: Character cards
     booksSection: Worldbooks
     importCard: Import character card (PNG)
@@ -1683,6 +1895,8 @@ settings:
 
       Projections of this resource applied to sessions (entities and their AI-evolved values) will be removed as well. This cannot be undone.'
     importFailed: 'Import failed: $error'
+    importSaveFailed: Couldn't save to the resource library. Try again later.
+    importFileFailed: Couldn't read the file. Select it again.
     imported: Imported "$name"
     loadFailed: Failed to load the resource library. Check the data files and try again
     aiCreateCard: Create character card with AI
@@ -2151,13 +2365,18 @@ settings:
     exportFailed(error): "Export failed: $error"
     importSuccess: Import successful
     importFailed: 'Import failed: $error'
+    overwriteExperienceConflict: "A memory ID in this backup conflicts with its story. The overwrite was canceled and your existing data was kept."
+    draftIndexConflict: "Two drafts in the same round share a number in this backup. Your existing stories were kept. Choose a different backup."
     importing: Importing data, please wait…
+    importStorageFailed: Import could not be saved. Check available storage and try again.
+    overwriteBusy: Wait for the current operation to finish, or stop generation and try again once it has stopped.
     importSummary:
       presets: 'Presets: $imported imported, $skipped skipped'
       sessions: 'Sessions: $imported imported, $skipped skipped'
       messages: 'Messages: $imported imported'
       preferences: 'Preferences: $imported imported, $skipped skipped'
       assets: 'Global assets: $imported rows imported (character cards/worldbooks/templates/event logs)'
+      skippedRows(count): 'Skipped $count message, session data, or asset entries.'
       apiKeyReminder: Providers restored, but this backup contains no API Keys; they need to be re-entered
       apiKeyNotImportedNotice: The backup contains API Keys, but importing them was not selected, so the local keys are unchanged; to use the keys from the backup, import again with "Import API Keys from backup" checked.
       apiKeyImportedNotice: API Keys imported from the backup, overriding the local keys
@@ -2190,16 +2409,53 @@ settings:
       appendDesc: Keeps existing data, skips what already exists, and imports only what's new
       overwrite: Overwrite
       overwriteDesc: Clears the data types included in the backup, then rebuilds from the backup
-      overwriteWarning: Overwrite mode will clear current data! This cannot be undone (a snapshot is created automatically first). Continue?
+      overwriteWarning: Overwrite replaces current data in the groups included in the backup. The app saves a recovery snapshot first when those groups contain data.
       secretsNotice: This backup contains API Keys. Keys are not imported by default; to override local keys with those from the backup, check the switch below.
       importApiKeysLabel: Import API Keys from the backup (override local keys)
       overwriteSingleHint:
         one: This backup contains only $count session; overwriting will clear all existing sessions and leave only this one. Please choose carefully.
         other: This backup contains only $count sessions; overwriting will clear all existing sessions and leave only these $count. Please choose carefully.
       overwriteNoSessionsHint: This backup has no session data, so sessions are unaffected; but overwriting still clears and rebuilds providers, preferences, and global assets from the backup, if any (world assets can be left out when exporting).
-      snapshotHint: A snapshot of the current data is created automatically before overwriting (backups/ in the documents directory, last 2 kept, no API Keys); if the import goes wrong, you can roll back from that snapshot.
+      snapshotHint: Before replacing existing data, the app saves a snapshot in the backup folder. The last two snapshots are kept and exclude API Keys.
+      browserSnapshotHint: Before replacing existing data, the app saves a snapshot in this browser. The last two snapshots are kept and exclude API Keys.
       snapshotCreated: 'Pre-import snapshot created automatically: $fileName'
-      snapshotFailed: 'Pre-import snapshot creation failed; the import was aborted: $error'
+      snapshotRequired: 'The app could not save and check a recovery snapshot. Check available storage or use Append.'
+      browserSnapshotFailed: 'The browser could not save and check a recovery snapshot. Use Export data to save your current data separately, or use Append.'
+      restoreSnapshotAfterFailure: 'The app could not verify that all original data was restored. Open “Restore from backup” and choose the latest pre-overwrite snapshot. Re-enter any API Key that needs correction.'
+    startupRecovery:
+      title: Recover from a backup
+      opening: Opening your data…
+      openFailed: LMStory could not open its database.
+      preservationFailed: LMStory could not copy the database files before opening them. Check available storage and file access, then retry.
+      nativeInstructions: Choose a backup to check and try in a separate database. You can review what it contains before switching.
+      webInstructions: You can inspect a backup file or a snapshot stored in this browser. Switching the browser database is unavailable here. You can also retry opening it.
+      originalLocation(path): 'Database location: $path'
+      preservedLocation(path): 'Preserved files before opening: $path'
+      chooseFile: Choose backup file
+      retryOpen: Retry opening
+      savedBackups: Saved backups
+      automatic: Automatic backup
+      snapshot: Pre-overwrite snapshot
+      selectedFile: Selected file
+      unknownDate: Date unavailable
+      version(number): 'Backup format v$number'
+      legacyFormat: Legacy backup format
+      readFailed: The backup could not be read. Try again or choose another file.
+      catalogFailed: Saved backups could not be listed. You can still choose a file.
+      invalidBackup: The backup file is invalid. Choose another backup.
+      noRestorableData: This backup contains no restorable data. Choose another backup.
+      working: Checking backup or applying changes…
+      trialFailed: The trial database could not be restored and checked. Try another backup or check available storage.
+      trialReady: The backup was restored and read back in a separate database.
+      summary(sessions, messages, presets, preferences, assets): '$sessions sessions · $messages messages · $presets providers · $preferences settings · $assets asset rows'
+      skippedItems: Some entries were skipped during the trial. Review the totals before continuing.
+      webCheckPassed: The backup format passed inspection.
+      webPartialCheck: The backup has usable data. Some entries were skipped during inspection.
+      useBackup: Use this backup
+      confirmTitle: Switch to the recovered database?
+      confirmBody: LMStory will open the checked recovery database and keep the preserved database files and backups. API Keys from the backup are skipped.
+      activate: Switch database
+      activationFailed: The recovered database could not be activated. The previous database files and the backup are still in place. Try again or choose another backup.
     recovery:
       title: Data recovery
       desc: Scans for and recovers orphaned messages
@@ -2354,7 +2610,8 @@ settings:
       share: Share logs
       shareSubject: LMStory run logs
       shareConfirmTitle: Share run logs?
-      shareConfirmBody: Logs may contain your conversation content and prompt text (never API keys). Share only with a recipient you trust.
+      shareConfirmBody: The export contains current and rotated logs. Service URLs and common credentials are masked, but conversation and prompt text may still be present. Share only with a recipient you trust.
+      shareFailed: Could not share the logs. Try again.
       shareConfirmAction: Share
       saveFailed(error): "Failed to save log: $error"
     failures:
@@ -2677,7 +2934,7 @@ help:
     uiTitle: UI behavior
     uiBody: When compaction triggers, the compacting/organizing-context feedback is shown; there is no separate "macro summary stage" panel anymore. Macro records can be viewed in the memory store and are injected when later retrievals hit them.
   firstLaunch:
-    intro: On first launch, LMStory automatically enters a six-step beginner guide that introduces the core concepts and optionally lets you configure an API Key.
+    intro: "On your first launch, you can read a short story in the offline Director tour without a model account or API Key. Use this page to start the tour or resume saved progress after the introduction."
     flowTitle: Startup flow
     flowSubtitle: From launch to the main screen
     diagramStartLabel: Launch the app
@@ -2838,33 +3095,33 @@ help:
   messageNavWiki:
     title: Message navigation
   messageNav:
-    intro: Scrolling through long conversations is a hassle, so 4 floating buttons help you jump to the start or end of the conversation or to the next user message. They auto-hide 2 seconds after scrolling stops so they never block content.
-    buttonsTitle: 4 floating buttons + auto-hide
-    buttonsSubtitle: Double arrows jump to the ends / single arrows step through messages
+    intro: Drag or use the scroll wheel to reveal navigation in Chat, Story and Director sessions. You can browse earlier rounds while a reply is being generated.
+    buttonsTitle: Conversation navigation
+    buttonsSubtitle: Double arrows jump to either end. Single arrows move one round.
     diagramButtonsTitle: The 4 floating buttons (top to bottom)
     btnJumpTop: Jump to top
     btnJumpTopDesc: Double arrow up · jump to the earliest message
-    btnPrevUser: Previous user message
-    btnPrevUserDesc: Single arrow up · step to the previous user message
-    btnNextUser: Next user message
-    btnNextUserDesc: Single arrow down · step to the next user message
+    btnPrevUser: Previous round
+    btnPrevUserDesc: Up arrow · go to the start of the previous round
+    btnNextUser: Next round
+    btnNextUserDesc: Down arrow · go to the start of the next round
     btnJumpBottom: Jump to bottom
     btnJumpBottomDesc: Double arrow down · jump to the latest message
-    diagramHideTitle: Auto-hide timeline
-    timeline1: Scrolling
-    timeline2: Scrolling stops
-    timeline3: Auto-hides after 2 seconds
+    diagramHideTitle: When scrolling stops
+    timeline1: Drag or use the scroll wheel
+    timeline2: Stop scrolling
+    timeline3: After 3 seconds, only the bottom shortcut remains. At the bottom, it hides too.
     opsTitle: What the 4 button icons mean
     btn1Title: Jump to top (double arrow up)
     btn1Body: Quickly return to the earliest message in the conversation. Handy for checking how the conversation began.
-    btn2Title: Previous user message (single arrow up)
-    btn2Body: Jump to the previous message you sent. Makes retracing your earlier questions much faster than scrolling by hand.
-    btn3Title: Next user message (single arrow down)
-    btn3Body: Jump to the next message you sent. Good for skimming the question-answer rhythm and skipping long AI replies.
+    btn2Title: Previous round (up arrow)
+    btn2Body: Go back one round from the passage you are reading. The question aligns with the top of the window. In Director pure reading, the manuscript begins at the top.
+    btn3Title: Next round (down arrow)
+    btn3Body: Move one round forward, even from the middle of a long reply. The arrow is disabled when you reach the last round.
     btn4Title: Jump to bottom (double arrow down)
     btn4Body: Quickly return to the latest message. Works while the AI streams, so you can jump back to watch it generate live.
-    hideTitle: The auto-hide mechanism
-    hideBody: The floating buttons auto-hide 2 seconds after scrolling stops so they don't cover message content. They reappear instantly when you scroll again. The buttons are semi-transparent to reduce visual noise.
+    hideTitle: When the controls appear
+    hideBody: Drag or use the scroll wheel to show all four buttons. After 3 seconds of rest, only the shortcut to the latest content remains. At the bottom, all four hide. Each tap restarts the timer. The controls stay open while they have accessibility focus.
     searchTitle: In-session search
     searchBody: 'Beyond the floating buttons, you can also find messages by content: open "In-session search" from the top-right menu or with Ctrl+F (Cmd+F on macOS), and press Esc to collapse it. Hit counts show as you type; Enter / Shift+Enter jump between the previous and next hit, and the located message flashes a brief highlight. Search only matches messages visible on the current branch; hits re-filter when you switch branches.'
   sessionSettingsWiki:
@@ -2947,9 +3204,9 @@ help:
     vectorizationThresholdTitle: Memory retrieval thresholds
     vectorizationThresholdBody: 'Not every memory can be retrieved. The system grades memories by importance (1-5): below the "storage index threshold" (default 3) a memory gets no index (unretrievable); at or above the "vectorization threshold" (default 4) it gets a semantic vector and supports fuzzy meaning-based lookup; in between, only exact keyword matching works. If you feel some importance-2 memories are valuable and should be retrievable, set both thresholds to 2 under "Settings → Story mode settings → Tools and memory" (that page is visible with "Config display mode = Advanced"; the config display mode toggle sits at the bottom of Settings → General and defaults to Simple).'
   failure:
-    intro: 'Each Story mode round fires 3 AI requests + 1 local retrieval + 1 vectorization by default (4 AI requests with the review stage enabled). More calls means a higher chance of failure. But Story mode''s failure handling has one core principle: all or nothing. For a quick reference of common error codes and scenario troubleshooting, see: Appendix → Troubleshooting FAQ.'
+    intro: 'Each Story mode round fires 3 AI requests + 1 local retrieval + 1 vectorization by default (4 AI requests with the review stage enabled). A failed round rolls back; individual fact-write failures are handled as described below. For common error codes and troubleshooting, see Appendix → Troubleshooting FAQ.'
     atomicityTitle: 'Core principle: the atomic transaction'
-    atomicityBody: 'Each round is an atomic transaction — extract → retrieve → generate → review → summarize → persist — that either fully succeeds or fully fails. Key distinction: data rollback ≠ UI clearing. On failure nothing is written to the database (the transaction rolls back). But the UI keeps the intermediate artifacts already shown (generated content, retrieval results, the half-written reply) so you can see which step failed. No quality degradation: the generated draft is never passed off as the final reply, and retrieval is never silently skipped.'
+    atomicityBody: 'When the whole round fails, the commit of prose and memories rolls back. The UI keeps intermediate artifacts already shown (generated content, retrieval results and a partial reply) so you can see where it failed. Individual fact-write failures are rolled back and reported separately, as described below.'
     retryTableTitle: How failures in each stage are handled
     retryTableBody: 'Generation failure: retried twice; if it still fails, the whole round fails and is handed to you. Keyword extraction failure: retried twice; if it still fails, the whole round fails and is handed to you. Both retrieval lanes fail: retried once; if it still fails, the whole round fails and is handed to you. One retrieval lane fails: no retry; continues with the other lane''s results. Review failure: retried twice; if it still fails, the whole round fails and is handed to you. Summary failure: retried twice; if it still fails, the whole round fails and is handed to you. Vectorization failure: retried once automatically; if it still fails, you choose — retry the whole round / temporarily fall back to keyword retrieval / clear this round (plus continue from where it stopped). Persistence failure: no retry; the transaction rolls back and the whole round fails.'
     uiRetentionTitle: What the UI keeps on failure
@@ -2957,7 +3214,7 @@ help:
     manualRetryTitle: What each failure-bar button does
     manualRetryBody: 'The failure bar shows action buttons based on the failure type: "Retry whole round" — clears all intermediate artifacts shown so far, keeps your message, and reruns the full six-step round from scratch (it does not resume from the failed step, because partially generated artifacts could leave the state inconsistent if it did); "Continue from interruption" — keeps the completed stages'' outputs (generated content, retrieval results) and retries from the failed stage, saving the earlier AI calls when the failure happened late in the round; "Continue writing" — appears when generation failed with a partial draft on hand; keeps generating from the partial draft without repeating what exists; "Accept as final" — appears when generation/review failed and the partial draft is usable; makes the partial draft this round''s final text and proceeds through summary and persistence as usual; "Temporarily fall back to keyword retrieval" — shown only for E104 embedding-model call failures; skips vector retrieval and continues this round (FTS5 keyword retrieval still runs); "Clear this round" — clears all intermediate artifacts and puts your message back into the input box so you can edit and resend it.'
     factualFallbackTitle: Special failure fallbacks on the factual layer
-    factualFallbackBody: 'The factual layer handles failures differently from the experiential layer. Retrieval stage (never blocks): the factual-layer retrieval code is fully wrapped in try-catch; any exception returns an empty result instead of throwing. Even if factual retrieval breaks, experiential retrieval proceeds normally and so does the review stage (just without the "World lore" block). Write stage (per-change tolerance): each fact delta gets its own try-catch; a single failure only logs and never propagates. Even if some factual writes fail, experiential memories always get written. Why this design? Because AI output-format problems are frequent (missing fields, nonexistent entityId, etc.); rolling back the whole round on any delta failure would leave "new conversations with a permanently empty memory store" — the most serious usability problem there is. So a little atomicity is traded away for availability.'
+    factualFallbackBody: 'A factual retrieval error returns an empty result while experiential retrieval can continue. Each fact change is handled separately on write: a failed change rolls back, while successful changes can be committed with the prose and experiential memory. After a successful Story or Director round, a brief notice shows how many fact changes were not saved. Changes skipped by rules and rounds with no failures show no notice. A failed or cancelled round still follows the normal failure flow.'
   storyVsChatWiki:
     title: How Story mode and Chat mode differ
   storyVsChat:
@@ -3180,11 +3437,11 @@ help:
     step3Title: API Host
     step3Body: The provider's service address. Pre-filled for built-in providers; enter manually for custom ones. With manual mode enabled you can type a full URL.
     step4Title: API Key
-    step4Body: Get the key from the provider's website; it is stored on this device only. "Test connection" requests the provider's model list to verify the address and credentials without consuming generation tokens; some non-standard manual endpoints may not support this request.
+    step4Body: Get the key from the provider's website; it is stored on this device only. "Test connection" requests the provider's model list to verify the address and credentials without consuming generation tokens; some non-standard manual endpoints may not support this request. If the provider rejects your API Key, open that provider’s settings and check or replace the key before retrying.
     step5Title: Advanced parameters
     step5Body: Protocol-specific parameters for advanced users (e.g. thinking, thinkingConfig, extra_headers), passed through as a JSON object to the network adapter. Leave empty for no custom parameters; resetting the provider to template defaults clears them too. Ordinary users can ignore this.
     modelsTitle: Model management
-    modelsBody: Each provider can hold multiple models. Tap "Fetch model list" to pull them from the provider, or tap "+" to add manually. After fetching, check the models you want to keep so hundreds of models don't flood the list.
+    modelsBody: Each provider can hold multiple models. Tap "Fetch model list" to pull them from the provider, or tap "+" to add manually. After fetching, check the models you want to keep so hundreds of models don't flood the list. Copy manual IDs from your provider. If a character looks like another one, such as a full-width dash, you can edit the ID or confirm that it should be saved as entered.
     entryTitle: How to enter
     entryBody: Settings → General settings → Providers → enter the provider list → tap "+" to create / tap a list item for details.
   modelStrategyWiki:
@@ -3496,7 +3753,7 @@ help:
     step4Title: Import to restore
     step4Body: Under "Data management → Import", pick the backup file, then choose "Append" or "Overwrite" mode. When import finishes, a summary shows imported/skipped counts per category. Older v2/v1 backup files import directly (auto-compatible).
     autoBackupTitle: Automatic backup
-    autoBackupBody: 'Once enabled, the app checks automatically a while after launch: if more than 24 hours have passed since the last backup and session data exists, it silently exports a full backup into the backups/ folder of the app documents directory (app-private storage, invisible to file managers; no API Key included), keeping only the 3 most recent. Toggle it on the "Data management" page, or tap "Back up now" or "Open backup folder" anytime.'
+    autoBackupBody: 'Once enabled, the app checks automatically a while after launch: if more than 24 hours have passed since the last backup and session data exists, it silently exports a full backup into the backups/ folder of the app documents directory (app-private storage, invisible to file managers; no API Key included), keeping only the 3 most recent. Toggle it on the "Data management" page, or tap "Back up now" or "Open backup folder" anytime. A pre-overwrite snapshot protects existing data and is available under “Restore from backup”. Web stores this snapshot in the current browser.'
     singleSessionTitle: Single-session export
     singleSessionBody: Long-press a session in the session list, or pick "Export this session" from the in-session menu, then choose JSON (with the session's associated data), Markdown or plain text. JSON suits migration and restore; the other two suit reading and sharing.
     entryTitle: How to enter
@@ -3611,9 +3868,9 @@ help:
     step3Title: View failure history
     step3Body: Lists the most recent 50 failure records, each with session ID, mode, error code, failed stage, HTTP status, error message and raw exception. Tap to expand the full technical details.
     step4Title: Share or clear
-    step4Body: The "Share" button at the top shares the currently synchronously written log file; "Clear" empties both the failure history and the log files (including rotated backups), with confirmation required.
+    step4Body: 'The top "Share" action shares on mobile after confirmation and saves on desktop. Both export the current and rotated logs merged in time order, masking service URLs and common credentials. Ordinary text, including deliberately logged conversation content and prompts, may remain; share carefully. "Clear" empties both failure history and log files (including rotated backups), with confirmation required.'
     fileTitle: Log file characteristics
-    fileBody: Synchronous writes (avoiding null bytes) + UTF-8 encoding + ASCII control-character filtering + history cleared on each launch + 10MB size rotation keeping 1 backup. No file logging on the Web platform.
+    fileBody: Synchronous writes (avoiding null bytes) + UTF-8 encoding + ASCII control-character filtering. A nonempty previous log is rotated on launch; the default size limit is 10MB with 1 backup. No file logging on the Web platform.
     entryTitle: How to enter
     entryBody: Settings → Diagnostics.
   faqWiki:
@@ -3707,7 +3964,7 @@ help:
       desc: 'Some models (like DeepSeek-R1) can "think deeply"; the thinking budget controls how deep: disabled/low/medium/high.'
     samplingParamsOmit:
       term: Omit sampling parameters
-      desc: Some newer models and strict relays reject non-default temperature / top_p. Turn on the provider-level switch and every request to that provider omits them, letting the model use its defaults — use it when a 400 says "does not support non-default temperature".
+      desc: New providers omit sampling parameters by default and use the model's defaults. Settings show temperature, top P, and penalty controls when the selected model accepts them.
     memoryTitle: Memory / retrieval terms
     compactionPoint:
       term: CompactionPoint
@@ -3773,6 +4030,9 @@ help:
     eventLog:
       term: Event log
       desc: A running record of every step of the director's work; after a crash or restart, the scene is restored from it and writing resumes.
+    engineeringMode:
+      term: 'Engineering context mode (experimental)'
+      desc: 'A session-level experimental Director switch: once enabled, the context sent to the model each round is assembled by projecting the event log (prose and backstage traces share one ledger), compaction becomes two-phase committed with full undo, and mode anomalies are handled via a repair card in the session settings. Long-term benefit is not yet validated by real runs. Each Director session controls this option, which is off by default.'
     fourStepGen:
       term: Six-step generation
       desc: 'Story mode''s per-round flow: extracting (keyword extraction) → retrieving (memory retrieval) → generating (generation) → reviewing (review, optional) → summarizing (summary generation) → persisting (persistence); when the context nears its limit, compaction runs automatically first. 3 AI requests by default, 4 with the review stage enabled.'
@@ -3831,8 +4091,8 @@ help:
       term: Context usage
       desc: 'The small ring indicator by the input area: full scale = context compaction threshold. Tap to open the detail panel for window usage, cache hit rate and the last round''s token breakdown; "Compact now" is available once the conversation is long enough, and the compaction summary card can undo the most recent compaction (the same across Chat/Story/Director).'
     foreshadowSweep:
-      term: Periodic foreshadow sweep
-      desc: 'Director mode''s foreshadow reconciliation mechanism: every N rounds (default 8, adjustable in Director settings) it reminds at round end of unresolved foreshadowing; if unresolved items remain when a sweep round submits, the final-review reminder gates it once — crossing out resolved ones or confirming before it passes — so planted foreshadowing never dangles unattended.'
+      term: Periodic memory maintenance (foreshadow check)
+      desc: 'Director mode''s long-session memory and foreshadowing reconciliation mechanism (replacing the retired "foreshadow check interval" stepper in Director settings): whenever settings, the scene anchor, or event memory go 7 rounds without updates, a lightweight gap nudge fires (with a 4-round cooldown); every 50 rounds, after prose delivery, the round relays into a "periodic memory maintenance" phase (+6 extra maintenance steps and a collapsible status capsule below the prose, with prose locked and cursor-free), letting the director use the setting catalog (list_facts), batch ID queries, and entity importance tuning (levels 1–5) to clean up stale settings and pending foreshadowing before closing via "Completing maintenance" in one transaction.'
     roundTimeline:
       term: Round timeline
       desc: 'A faithful replay of each director round''s backstage work: thinking, narration and actions interleaved in true order, archived with the round and reviewable on re-entering the session.'
@@ -3870,15 +4130,15 @@ help:
     moduleIntermediateTitle: Story mode features
     moduleIntermediateBody: Delivered in v0.2. The six-step generation flow (compaction → extraction → retrieval → generation → review → summary → persistence), experiential memory, the three factual-memory tables, cumulative compaction summary and segmented macro summary, 5W1E, narrative time, memory store, embedding model, FTS5+Vector retrieval, per-step models, tool-calling mode, failure handling E010-E018/E104 and round-artifact persistence; context usage ring and manual compaction, world state bar at the top of sessions, compaction summary card with "archived rounds X–Y" label and "Undo compaction", find-similar clustering and suspected-duplicate merge preselection, empty-state sample openings, streaming thinking area (auto-expand/height cap/copy), continue-generating splice merge (single bubble + continuation badge), streaming long-conversation rendering optimization (frozen-prefix chunked rendering); memory-retrieval reachability hardening (word segmentation and main-table substring fallback — visible in the store means findable), memory index health bar (missing rows/embedding dimension mismatch) with one-click rebuild, experiential archive badges and three-way filter, duplicating a session fully inherits memories and vectors, compacted macro summaries are retrievable, worldbook/character-card read-only semantics (baseline never rewritten, evolved coexists, row-level badges in the memory store, three-part apply preview); story draft variants (regenerate/edit-resend auto-snapshots the old draft, ◀ n/m ▶ switcher under the draft card to view/copy/set-as-current/delete, context changes after switching), interrupted-prose retention (partial prose kept as an unfinished-draft card, failure bar offers "Accept as final" or "Continue writing" without repeating existing content), draft export (range × content to Markdown), in-session search (menu or Ctrl/Cmd+F, hit jumping + highlight flash), reading position memory (re-entering restores where you left off); entry toggle (hidden by default — enable it in Settings → Story mode settings to restore the home/sidebar/shortcut entries; existing data is untouched).
     moduleDirectorTitle: Director mode
-    moduleDirectorBody: Delivered in v0.3. Project rules, main model and per-step models, step/time budgets with soft landing, supervision mode (item-by-item write approval), ask-director (with an "always wait" level and banner countdown), onstage/backstage process layering (round timeline), interlude recap cards (setting changes link straight to the memory store), event log and restart recovery, skill notes, subagents (re-dispatching the same task brief returns the last conclusion directly), memory store entity merging, standalone settings system (three-state tool permissions), three-level narrative pacing, context usage indicator and manual compaction, compaction summary card undo, periodic foreshadow sweep (every-N-round reminders at round end + final-review reconciliation gate on sweep rounds), character card/worldbook seed-apply entry, streaming long-conversation rendering optimization (draft-card frozen prefix + frame merging), draft variants (regenerate doesn't overwrite old versions, n/m switcher at the draft card's bottom-right), retry-wait countdown status bar and session-open loading skeleton, event log rolling retention (last 20 rounds by default, auto-pruned past the limit), memory store source/constant badges and entry-level injection disabling, character card/worldbook preview before applying, suggested-reply candidate count and per-item length entries, session retrieval strictness three levels (Conservative/Balanced/Loose, snapshot written to the session column), in-round budget progress title (step N/M · elapsed time, turns warning-colored as budget runs out), duplicating a session completes round artifacts and draft variants, draft export (range × content, four choices, Markdown), story anchor editing (Recap card entry, same data source as the AI), clapperboard view ("now, as the AI sees it", same source as the injection side), failed-round unfinalized badge, expand-all foreshadow list, de-emphasized narration lines, like-action aggregate rows (×N expand), pure reading mode (preference remembered per session), 3s system-adjudication notices (overflow self-healing/HITL timeout), context composition distribution (four-segment estimates in the ring detail panel), a single "context compaction threshold" knob (percentage ⇄ token dual display, direct token input back-computes; window cap folds into Advanced, 0 = auto + effective value disclosed). Failure true-resume (after a failure, "continue from where it stopped" rebuilds the model-visible message sequence from the event-log projection, so completed LLM steps and tool outputs are never re-burned; the half-written prose kept after a stop is synthesized into the resume context so the model continues from its own broken-off sentence), director session creation wizard (a standalone home entry walks three steps — model, embedding model, project rules — straight into a ready session — unconfigured users connect a provider from a template, paste a key and fetch models while global defaults get written along the way; configured users pick a model for this session only; embedding has three optional states; the rules step offers a ready template or a three-question questionnaire feeding local assembly or informed model generation, adopted after preview and saved as a template by default). Historical text search lets the AI find saved user input, prose and final replies with a few keywords when summaries are insufficient, then reread matching rounds; memory importance scores do not affect this search.
+    moduleDirectorBody: Delivered in v0.3. Project rules, main model and per-step models, step/time budgets with soft landing, supervision mode (item-by-item write approval), ask-director (with an "always wait" level and banner countdown), onstage/backstage process layering (round timeline), interlude recap cards (setting changes link straight to the memory store), event log and restart recovery, skill notes, subagents (re-dispatching the same task brief returns the last conclusion directly), memory store entity merging, standalone settings system (three-state tool permissions), three-level narrative pacing, context usage indicator and manual compaction, compaction summary card undo, character card/worldbook seed-apply entry, streaming long-conversation rendering optimization (draft-card frozen prefix + frame merging), draft variants (regenerate doesn't overwrite old versions, n/m switcher at the draft card's bottom-right), retry-wait countdown status bar and session-open loading skeleton, event log rolling retention (last 20 rounds by default, auto-pruned past the limit), memory store source/constant badges and entry-level injection disabling, character card/worldbook preview before applying, suggested-reply candidate count and per-item length entries, session retrieval strictness three levels (Conservative/Balanced/Loose, snapshot written to the session column), in-round budget progress title (step N/M · elapsed time, turns warning-colored as budget runs out), duplicating a session completes round artifacts and draft variants, draft export (range × content, four choices, Markdown), story anchor editing (Recap card entry, same data source as the AI), clapperboard view ("now, as the AI sees it", same source as the injection side), failed-round unfinalized badge, expand-all foreshadow list, de-emphasized narration lines, like-action aggregate rows (×N expand), pure reading mode (preference remembered per session), 3s system-adjudication notices (overflow self-healing/HITL timeout), context composition distribution (four-segment estimates in the ring detail panel), a single "context compaction threshold" knob (percentage ⇄ token dual display, direct token input back-computes; window cap folds into Advanced, 0 = auto + effective value disclosed). Failure true-resume (after a failure, "continue from where it stopped" rebuilds the model-visible message sequence from the event-log projection, so completed LLM steps and tool outputs are never re-burned; the half-written prose kept after a stop is synthesized into the resume context so the model continues from its own broken-off sentence), director session creation wizard (a standalone home entry walks three steps — model, embedding model, project rules — straight into a ready session — unconfigured users connect a provider from a template, paste a key and fetch models while global defaults get written along the way; configured users pick a model for this session only; embedding has three optional states; the rules step offers a ready template or a three-question questionnaire feeding local assembly or informed model generation, adopted after preview and saved as a template by default). Query memory changes lets the AI inspect retained factual change history for the current story and reread qualified rounds; it is not a complete audit and does not cover unrecorded manual edits. Historical text search lets the AI find saved user input, prose and final replies with a few keywords when summaries are insufficient, then reread matching rounds; memory importance scores do not affect this search. Memory-story consistency (switching a draft to an older version swaps facts, experiential memories and the story anchor to the selected prose, with per-variant derived snapshots saved and restored; rounds with later turns or already-compacted rounds refuse switching to avoid mixing timelines), single-slot queued message while generating (auto-sent once the round ends normally, withdrawable, overwrite needs confirmation, restores to the input box after restart without auto-sending), approval-base guarding (a fact rewritten by another path after staging is never silently overwritten and is traced), per-object relationship memory (each specific character relationship is its own attribute with traceable history; group relationships maintained wholesale), distinguishable identities for multiple subagents in the same round. Engineering context mode (experimental, session-level Director switch) — once enabled, the context sent to the model each round is assembled by projecting the event log (prose results and backstage traces share one replayable ledger), compaction becomes a two-phase committed transaction with full undo, auto-compaction gains rapid-refill circuit breaking and evidence gates, and mode anomalies are handled via a repair card in the session settings. Experimental capability; long-term benefit not yet validated by real runs. Backstage calc exact arithmetic and explicit date intervals are available as director references; they do not read the current clock or rewrite facts. In v0.5.0 development builds, backstage details and drafts load by round. Long sessions support jumping between rounds and remembering the reading position. Long-session memory maintenance and calibration — added the read-only list_facts catalog tool for browsing entities and counts, batch query_facts lookups by entity_id/entity_ids (including archived cards), and dynamic set_importance (levels 1–5) on update_facts; 7-turn lightweight gap nudges (4-round cooldown) and 50-turn dual-task relays (writing → periodic memory maintenance with +6 steps, a collapsible status capsule below the prose with cancel-safe prose preservation, and single-transaction finish_maintenance submission), replacing the retired standalone foreshadow-sweep stepper; Core Blocks now include a recent active non-core entity directory.
     moduleSettingsTitle: Settings features
     moduleSettingsBody: 'v0.1-v0.3. API provider management (7 built-in templates + custom; advanced parameters passed through as JSON for protocol-specific options), default model selection, per-step models (with "affects: XX" consumer labels), prompt template system, Story mode''s 10 customizable prompt segments, appearance (three axes: theme structure × palette family × light/dark, 12-22 font levels), language and input (interface language: Simplified Chinese/English, switching applies instantly), advanced settings (thinking budget/timeouts/title model/ask-wait including the always-wait level), display preferences, auto compaction, global generation defaults (Chat maxTokens left blank means the model decides), model testing, a provider-level "omit sampling parameters" switch (self-serve omission for relays and models that reject non-default temperature/top_p), Director mode toggle, character card/worldbook resource library entry, AI card building (chat with an agent to generate/edit character card and worldbook drafts, saved to the library after confirmation, with overwrite-save guardrails and exit interception), session-level settings panels (model/temperature/single-round steps + live draft preview + finish-create, auto-exits after saving), assistant-message Markdown rendering and revision-process lines, first-use model selection truly taking effect, dual config modes (the "Config display mode" toggle in Settings → General: Simple shows only everyday configuration, Advanced = everything; all settings pages and in-session panels filter by level, and hidden items with values keep working; the embedding (vector) model is visible even in Simple mode).'
     moduleDataTitle: Data maintenance features
-    moduleDataBody: v0.1+v0.3. Full export (multi-select + API Key toggle, v3 backups include character cards/worldbooks/self-built templates/Director event logs), single-session export (JSON/Markdown/TXT), full import (append/overwrite, completion report with asset counts and an API Key re-entry shortcut; overwrite import auto-snapshots to backups/ beforehand keeping the last 2, and aborts on snapshot failure), automatic backup (24h silent rolling retention of 3, domain-split by prefix without touching snapshots or foreign files), data recovery (orphan messages), table structure repair (purely additive, no data loss), clear all data, diagnostics page (failure history + logs + debug toggles), storage statistics (including Director event log counts and size, rolling retention of the last 20 rounds by default), import progress feedback (a non-dismissible overlay for the whole import), external-open routing (backup JSON opened via "Open with"/share goes straight to data import instead of the resource library).
+    moduleDataBody: v0.1+v0.3. Full export (multi-select + API Key toggle, v3 backups include character cards/worldbooks/self-built templates/Director event logs), single-session export (JSON/Markdown/TXT), full import (append/overwrite, completion report with asset counts and an API Key re-entry shortcut; overwrite verifies a recovery snapshot when existing data is affected and checks rollback on storage failure), automatic backup (24h silent rolling retention of 3, domain-split by prefix without touching snapshots or foreign files), data recovery (orphan messages), table structure repair (purely additive, no data loss), clear all data, diagnostics page (failure history + logs + debug toggles), storage statistics (including Director event log counts and size, rolling retention of the last 20 rounds by default), import progress feedback (a non-dismissible overlay for the whole import), external-open routing (backup JSON opened via "Open with"/share goes straight to data import instead of the resource library). If the database fails to open, native apps can test and activate a backup at startup. Web can inspect backups and browser snapshots.
     moduleHelpTitle: Help features
     moduleHelpBody: 'Delivered in v0.2. Beginner guide (six-step first launch + replayable), Wiki home (8 chapter groups, 47 entries, with search): Getting started / Using Chat mode / Using Story mode / How Story mode works / Director mode / Configuration and customization / Data and maintenance / Appendix.'
     moduleDemoTitle: First-launch demo features
-    moduleDemoBody: 'Delivered in v0.4 (mechanism layer). An interactive first-launch demo: on real pages, a zero-configuration user is guided through one full Director-mode round - invite dialog, real wizard picking demo models, the built-in isekai template, a locked first prompt sent by the user''s own tap, reviewing the memories it produced, and a session that stays in the normal list and can continue once a real model is configured. Everything replays locally with no network (a guard counter is the evidence), demo data is isolated from the real database, and a single-transaction handover preserves all results; exit/resume/replay are supported (a fresh run never overwrites a kept session). The bundled demo content is a real-capture official pack. Before the first round starts, the wizard model step offers five simulated candidates (GLM-5.3 default, DeepSeek-V4.1-Flash, GLM-5.3-Flash, Kimi-K3.1-Pro, MiMo-V2.6-Flash) with an explanatory note at selection time; the candidate locks after the first send, and switching models for a new experience goes through the existing replay path. Entry: the first-launch dialog, or Help > First launch > Start the tour.'
+    moduleDemoBody: "The offline tour takes you through one Director round on real pages. Pick a demo model, use a built-in template, send the first prompt, then read the story and its memory. The Chinese tour offers five simulated candidates. The English tour plays an authored story sample. You can save and exit, resume, or replay. After finishing the tour, keep the session and add your own model to continue. Start from the first-launch invitation or “Help → First time opening the app.”"
     entryTitle: How to enter
     entryBody: Help → Appendix → Feature index.
   versionHistoryWiki:
@@ -3910,6 +4170,28 @@ help:
     v03Body: 'Director mode: an AI showrunner retrieves memories, maintains settings and writes prose backstage following project rules; the prose is the only output. Implemented so far: project rules, main model and per-step models, per-round step/time budgets with soft landing, supervision mode (item-by-item write approval, with "always allow this session"), ask-director, onstage/backstage process layering (round timeline + a single fold group), interlude recap cards, event log and restart recovery, skill notes, subagents, memory store entity merging (AI merge of duplicate entities), a standalone settings system (global settings page + session panels, three-state tool permissions), three-level narrative pacing, context usage indication (ring + manual compaction). It reuses Story mode''s memory foundation with no standalone HUD; the old HUD blueprint is deprecated. Also delivered: the worldbook/character card resource library (SillyTavern-compatible import). The Director experience keeps being rounded out: draft variants, draft export, story anchor editing, clapperboard view, pure reading and in-round budget progress; context configuration converged into a single "context compaction threshold" knob (percentage ⇄ token dual display) replacing the three-ratio surface, with the window cap demoted to an advanced override; session configuration fully snapshotized (reset = new = copy the current global value; existing sessions materialize automatically when opened).'
     milestonesTitle: Milestones
     milestones:
+    - '2026-11-26 Director long-session memory maintenance and calibration: added the read-only list_facts catalog tool (with store distribution counts and stale-first ordering) and extended query_facts with entity_id/entity_ids batch lookups (up to 8 per call, including archived cards); added dynamic set_importance (levels 1–5) to update_facts alongside shared-source preflightDelta staging checks and a 1,000-character attribute limit; introduced 7-turn lightweight gap nudges (4-round cooldown) and 50-turn "writing → periodic memory maintenance" dual-task relays (+6 step budget, lower maintenance status capsule with cancel-safe prose preservation, and single-transaction finish_maintenance completion), retiring the standalone foreshadow-interval stepper and 3-round zero-memory hard gate; added a recent active non-core entity directory to Core Blocks, completed narrative_time backfill across event summaries and sessions, and fixed engineering-context snapshot re-sending.'
+    - 2026-11-23 Director mode shows suggested-reply and title failures, displays the main model in new sessions, and applies the saved compaction threshold in both context modes.
+    - 2026-11-23 Recover your first Director message from the home screen. If the main model is missing, configure it and continue in the same session. The first message and queued input are saved separately.
+    - 2026-11-23 Backup import and recovery check for drafts that share a number in a round. If two drafts conflict, the app asks for a different backup and keeps existing stories.
+    - 2026-11-23 The English first-launch tour includes a complete offline story sample. Saved tours resume from Help.
+    - 2026-11-23 The full Story mode setting row toggles the switch. Manual model IDs flag look-alike characters. Model-list and chat authentication errors direct you to the provider’s API Key settings.
+    - 2026-11-23 The resource library shows how to apply resources to Story and Director sessions. Session settings lists applied character cards and worldbooks.
+    - 2026-11-23 The Director composer stays usable with the keyboard open on narrow screens at large text sizes. Scroll to reach model notices and failure actions.
+    - 2026-11-23 The resource library shows a short retry message when it cannot save a file and explains file format errors.
+    - 2026-11-22 v0.5.0 development integration. Director sessions load backstage details and drafts as needed and can query recorded fact changes for the selected draft. This build includes database upgrade, overwrite recovery, and bilingual approval fixes.
+    - 2026-11-21 Director sessions show the manuscript first and load backstage details and draft variants as needed. Home reads fewer session records and demo packs on startup.
+    - 2026-11-21 A narrower, translucent navigation bar lets you jump between rounds. Long Director sessions open at the latest content or a search hit and keep your place when you tap the manuscript.
+    - '2026-11-21 New providers omit sampling parameters by default. Each mode shows the sampling controls available for the selected model.'
+    - '2026-11-19 Experimental Director memory-change query: added read-only query_memory_changes for retained factual changes in the current story and selected draft, with actual-delta filtering and read_story clues only when the current round evidence uniquely matches. It is not a complete audit and does not cover unrecorded manual edits.'
+    - 2026-11-18 Story and Director copies now restore their own character facts, history and memories when switching drafts. Drafts restore the facts that took effect when they were saved. The current draft is kept when its replacement cannot be fully restored. A backup overwrite keeps existing data if two sessions claim the same memory ID.
+    - '2026-11-16 Director backstage calc reference: exact BigInt arithmetic and strict explicit-date math (operators/functions, 1y2mo3d month clamping and dual interval output), with no current clock, IANA/DST or external service.'
+    - '2026-11-14 Engineering context mode (experimental branch): a session-level Director switch — once enabled the outbound context is projected from the event log (prose and backstage traces share one replayable ledger), compaction becomes a two-phase committed transaction with full undo, and auto-compaction gains rapid-refill circuit breaking and evidence gates; disabled sessions are unchanged. Experimental; real-run benefit not yet validated'
+    - '2026-11-10 Anthropic story stable-prefix cache conditions: story generation/review split the fixed role prompt, compaction summary and review rules into separate system blocks with cache markers, while dynamic world-setting/memory blocks and history breakpoints keep their layout; enabled by default on the official endpoint and explicitly opt-in on third-party endpoints via anthropic_capabilities.stable_system_cache, with other protocols and tool-carrying director requests unchanged. Real hits, latency and billing still require device measurement'
+    - '2026-11-10 Context usage trustworthiness: the headline number now means the estimated full input of the next main request (reported, ≈ local estimate, or — unknown); compaction/deletion recompute on the same material basis and subtract the replaced summary, while model, rule, resource and tool configuration changes invalidate stale values; cache hit rate aggregates only comparable samples, and conflicting or illegal metering shows unknown while keeping diagnostics; tool rounds subtract the temporary work surface at the next-round material boundary, an explicit zero cache is a valid sample, the post-compaction composition stays on the same revision without double-counting the directive, and an open detail panel refreshes with real controller compaction; last-request anomalies are separated from whole-turn diagnostics, and historical backfill keeps numbers and anomaly flags from the same sample'
+    - '2026-11-20 Quality improvements: failed fact writes are counted after a successful round; retrieval summary labels follow the display language; vector lanes share candidate reads; log exports merge current and rotated files and mask service URLs and common credentials.'
+    - 2026-11-20 Transactions and backup recovery. Director rolls back prose, memory and events together. Overwrite checks a recovery snapshot, and native apps can restore from backup at startup.
+    - 2026-11-20 Session and backup restore safeguards. Round starts and history edits are serialized per session, Director sends queued messages after a successful round, and all chat modes wait for a restore on the same database. When leaving a regular chat during a send, success clears only the submitted draft in the original chat.
     - '2026-11-07 First-launch demo multi-model: the wizard model step now offers five simulated candidates (GLM-5.3 default, DeepSeek-V4.1-Flash, GLM-5.3-Flash, Kimi-K3.1-Pro, MiMo-V2.6-Flash, all real-capture replay packs) with a selection-time note; choices bind atomically (pack/profile/persisted identity), lock after the first send, and resume targets the chosen candidate'
     - '2026-11-04 First-launch guided demo: a zero-configuration user can experience one full Director-mode round on real pages (local demo-model replay, real tool-chain persistence, session handover, resume/replay); bundled content is a test sample pending the official story'
     - '2026-11-04 Director wizard project rules: abstract genre and style directions, a stable narrator-template structure, and no narrative-person or viewpoint conventions when left unspecified'
@@ -3977,6 +4259,7 @@ help:
     - '2026-10-05 Frozen-window rendering for ultra-long streaming messages (pure performance work, zero visual change): the already-rendered prefix of a very long single-paragraph text is frozen line-aligned into cached Text chunks so each frame lays out only the live tail window, with block-splitting and plain-text checks made incremental — per-frame cost is now insensitive to total length (64k chars in the same range as 16k), shared automatically by all three modes plus thinking and compaction streaming areas'
     - '2026-10-06 Director failure true-resume: "continue from where it stopped" (including the E104 degrade-and-continue path) rebuilds the model-visible message sequence at failure time from the event-log projection — completed LLM steps and tool outputs are never re-burned, and step/token budgets count prior-attempt spend; the half-written prose kept after a stop is synthesized into the resume context; when resuming is not possible (model endpoint changed, no event log, etc.) it falls back to a full round re-run'
     - '2026-10-06 Diagnostics overhaul: developer gate re-lockable + 2s tap window; app version/schema numbers single-sourced (kAppVersion bridge + currentSchemaVersion, wiki count lock extended to en + app version); release log-level display unified and failure count reads the true total'
+    - '2026-11-08 Memory and prose consistency: switching draft variants synchronizes memory with the selected prose, with switching blocked when there are later rounds or the round has been compacted. Relationships with individual characters have independent, traceable entries, group relationships stay together, and existing entries migrate automatically. The batch also adds a single queued message during generation, fixes lorebook retrieval order and limits, allows keyless embedding endpoints, and gives newly imported characters standard importance by default. Automatic inclusion is capped at 10 key profiles and a default pool of 20; always-included resources are counted separately. The interface shows zero retrieval hits and unindexed memories, and resuming a failed long session preserves the compaction summary.'
     entryTitle: How to enter
     entryBody: Help → Appendix → Version history.
   directorModeWiki:
@@ -4044,7 +4327,7 @@ help:
     backstageLabel: Backstage
     backstageDesc: Tap the backstage summary row (or the right arrow) to expand the per-step work cards
     verbsTitle: The "lines" on backstage work cards
-    verbsBody: 'Work cards use stage verbs to show what each step does: review earlier events (dig up old happenings), search original text (find saved text by keyword), reread the original text (re-read the prose), verify settings (check facts), reread the mainline (go over summaries), revise the setting collection (change settings), merge settings (combine duplicate entries), record into the chronicle (log events), log the scene (note the current position), consult the handbook (check writing methods), dispatch a subagent (assign a small task), ask the director (get your call), bring down the curtain (deliver the draft).'
+    verbsBody: 'Work cards use stage verbs to show what each step does: review earlier events (dig up old happenings), search original text (find saved text by keyword), reread the original text (re-read the prose), verify settings (check facts), browse the setting catalog (view entity catalog and distribution), check memory changes (inspect recorded factual history), reread the mainline (go over summaries), revise the setting collection (change settings), merge settings (combine duplicate entries), record into the chronicle (log events), log the scene (note the current position), consult the handbook (check writing methods), dispatch a subagent (assign a small task), calculate exactly (check precise values), check dates (check explicit dates), ask the director (get your call), bring down the curtain (deliver the draft), complete maintenance (finish periodic memory maintenance).'
     costTitle: Cost hint
     costBody: The small ring by the input box shows how far the current context is from auto compaction; tap it for window usage, cache hit rate and the last round's request consumption, and to manually compact now — with a stable prefix, input costs drop to roughly a tenth.
   directorLogWiki:
@@ -4059,11 +4342,11 @@ help:
     diagramRecoverLabel: Recover on reopen
     diagramRecoverDesc: Progress restored from the log; writing continues
     recapTitle: Interlude recap card
-    recapBody: 'Every stretch of plot yields a "book spine"-styled recap card: which act, the current arc, and foreshadowing pending and resolved. It''s the plot''s milestone — a quick look back at where the story stands; the latest act''s recap card has an "Edit" entry when expanded (arc/narrative time/full foreshadowing list), sharing the same data source as the AI''s scene log, while historical acts are read-only. Additionally, every few rounds (default 8, adjustable in Director settings) a "foreshadow sweep" runs: round-end reminders of the unresolved list, and the sweep round''s submission is gated once by the final-review reminder — cross out resolved items or confirm before it passes.'
+    recapBody: 'Every stretch of plot yields a "book spine"-styled recap card: which act, the current arc, and foreshadowing pending and resolved. It''s the plot''s milestone — a quick look back at where the story stands; the latest act''s recap card has an "Edit" entry when expanded (arc/narrative time/full foreshadowing list), sharing the same data source as the AI''s scene log, while historical acts are read-only. Additionally, periodic foreshadowing and state checks are now integrated into the director''s memory maintenance mechanism: a lightweight gap nudge fires (with a 4-round cooldown) whenever facts, the scene anchor, or event memory go 7 rounds without updates, and every 50 rounds the session relays after prose delivery into a periodic memory maintenance phase to reconcile unresolved foreshadowing, settings, and events (scheduled automatically by the engine with no manual interval stepper in Director settings).'
   directorFailureWiki:
     title: Failures and retries
   directorFailure:
-    intro: A director round walks many steps, and any step can fail. Failure never corrupts data — memories landing in the store is the reward for a fully successful round; a mid-round failure writes nothing broken.
+    intro: A failed Director round rolls back its commit. Individual fact-write failures roll back separately; after a successful round, a brief notice counts unsaved changes while the prose, successful facts and experiential memory are saved.
     diagramTitle: What failure looks like
     diagramFailLabel: Failed-step card
     diagramFailDesc: Two states, red/yellow — failures that interrupt the round are red, failures already rescued by auto retry are yellow; one-tap copy for feedback
@@ -4087,7 +4370,7 @@ help:
     watchTitle: Supervision and tool permissions
     watchBody: 'With supervision mode on, every write pops a confirmation card; each tool can independently be set to a three-state Allow/Ask/Disable (disabled tools are invisible to the director). See "Supervision mode: asks and approvals".'
     contextTitle: Context and compaction
-    contextBody: 'The small ring by the input area shows context usage (full scale = context compaction threshold); tap to open the detail panel for window usage/cache hit rate/the last round''s breakdown, and "Compact now" once the conversation is long enough; the compaction summary card, expanded, offers "Undo compaction" to restore the archived conversation. Context has a single knob, "Context compaction threshold": when history usage reaches that share of the effective window (the smaller of the model window and the window cap), compaction runs automatically before the next round; the effective token value shows beside the percentage, or you can type tokens directly to back-compute the percentage. Two more engine-built protections sit off the settings surface: a forced wrap-up when in-round context hits the 85% survival line, and a soft landing for per-round cumulative consumption on a cost basis (a separate ledger from how much got loaded). The window cap lives in the "Advanced: window cap" fold — 0 = auto (use the model window); you only need to declare it manually when the model''s registration is inaccurate or to dodge TPM rate limits.'
+    contextBody: 'The small ring by the input area shows context usage (full scale = context compaction threshold); tap to open the detail panel for window usage/cache hit rate/the last round''s breakdown, and "Compact now" once the conversation is long enough; the compaction summary card, expanded, offers "Undo compaction" to restore the archived conversation. Context has a single knob, "Context compaction threshold": when history usage reaches that share of the effective window (the smaller of the model window and the window cap), compaction runs automatically before the next round; the effective token value shows beside the percentage, or you can type tokens directly to back-compute the percentage. Two more engine-built protections sit off the settings surface: a forced wrap-up when in-round context hits the 85% survival line, and a soft landing for per-round cumulative consumption on a cost basis (a separate ledger from how much got loaded). The window cap lives in the "Advanced: window cap" fold — 0 = auto (use the model window); you only need to declare it manually when the model''s registration is inaccurate or to dodge TPM rate limits. Engineering context is an experimental option for each Director session and is off by default. Enable it in this section to build context from the event log. Turning it off restores the usual prose-based context. In engineering mode, the output reserve may bring compaction forward. The usage panel shows the actual threshold.'
     suggestReplyTitle: Suggested replies
     suggestReplyBody: 'The model and parameters for the input box''s "Suggest" button live in the suggested-reply group of the "Models & generation" section: suggested model (blank uses the Director main model), prompt, temperature, generation cap, candidate count (how many to generate at once) and per-item maximum length (per-item length controlled at the prompt level).'
     memoryTitle: Memory store entry
@@ -4100,7 +4383,7 @@ help:
     seed1Label: Import
     seed1Desc: Settings → Character cards/Worldbooks
     seed2Label: Apply
-    seed2Desc: Session settings → Character cards/Worldbooks section (same in Story/Director)
+    seed2Desc: In a Story or Director session, open Session settings → Character card/Worldbook to apply resources and see what's applied to that session.
     seed3Label: Read-only seeds take effect
     seed3Desc: Settings join the world's operation as a baseline
     seed4Label: Grow alongside new facts
@@ -4431,15 +4714,15 @@ tutorial:
   waitingMessage: Follow the guide to continue. If nothing responds for a long while, exit and try again later.
 demo:
   candidates:
-    pickerHint: "Simulated models replay pre-recorded demo content — no network and no API quota. Pick a different model to experience its own round of the story."
-    selectedHint: This is a simulated model. For full use, configure your own model to continue the session.
+    pickerHint: "Read the sample story offline without an API Key."
+    selectedHint: "This is the English offline story sample. Set up your own model to write more rounds after the tour."
     bindFailed: Couldn't switch the demo model. Your current choice is kept — reopen the list to retry.
   invite:
     title: Welcome to LMStory
-    message: "Want a 3-minute walkthrough? We'll guide you through a real Director-mode round: pick demo models, start from a built-in template, and watch story and memory take shape. Everything runs locally — no network, no changes to your settings."
+    message: "Read a short story and see how Director mode works. You can take the offline tour without a model account or API Key."
     accept: Start the tour
     decline: Not now, show intro
-    sampleTag: Demo content is a built-in sample (not the final story)
+    sampleTag: "The English tour uses a bundled story sample."
   resume:
     title: Continue the demo?
     message: An unfinished guided demo was found. You can continue where you left off, or start over.
@@ -4468,16 +4751,16 @@ demo:
   steps:
     homeWizardEntry:
       title: Start with the Director wizard
-      message: Tap "Guided setup" on the home page. We'll configure a demo project through the real wizard.
+      message: "Tap \"Director Mode Setup Wizard\" on the home page to set up the sample."
     wizardModel:
       title: Pick a chat model
-      message: "These are simulated models: they replay pre-recorded demo content, with no network and no API quota. Pick any one to experience its story, then tap \"Next\" below to continue."
+      message: "Choose the English story sample, then tap Next. The tour plays a story stored on your device."
     wizardEmbedding:
       title: Pick a memory model
-      message: The demo embedding model for memory retrieval. Choose "Set up" and pick it (or "Skip for now"), then tap "Next".
+      message: "Choose \"Set one up (recommended)\" and pick the local memory model, or choose \"Skip for now\". Then tap Next."
     wizardRules:
       title: Use the built-in world rules
-      message: Choose the "Isekai narrator system prompt" template and tap "Use it" in the preview to confirm — this becomes the project rules the Director runs with. Then tap "Done".
+      message: "Choose \"Isekai narrator system prompt\". In the preview, tap \"Use this\" to confirm the rules, then tap Done."
     sessionInput:
       title: Press send yourself
       message: The first prompt is pre-filled and locked. Tap send and watch the Director complete a round.
@@ -4489,7 +4772,7 @@ demo:
       message: The top-right settings tune every aspect of this Director session. Next, let's visit the memory library.
     memoryView:
       title: See what this round built
-      message: Tap "Open memory library" in the session settings to see what this round really persisted.
+      message: "Tap \"Open memory store\" in session settings to see what this round saved."
     memoryInspect:
       title: This is this round's memory
       message: Look at whatever this round really persisted — episodic memories record story events, while factual memories record characters and lore. Tap cards to expand and inspect (read-only demo). Head back to the session when you're done.

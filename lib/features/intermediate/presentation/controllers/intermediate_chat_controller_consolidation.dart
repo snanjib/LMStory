@@ -40,6 +40,7 @@ extension IntermediateChatControllerConsolidation
       // 1. 估算上下文 token 占用率
       final budget = contextWindow - maxTokens;
       if (budget <= 0) return; // 配置异常，跳过
+      final sessionId = state.session.sessionId;
       final messageContents =
           state.messages.map((m) => m.content ?? '').toList(growable: false);
       final totalTokens =
@@ -50,7 +51,7 @@ extension IntermediateChatControllerConsolidation
 
       // 2. 查询未索引的低重要性记忆（按时间升序，最多 maxArtifactsToConsolidate 条）
       final unindexed = await _experienceRepository.getUnindexedExperiences(
-        state.session.sessionId,
+        sessionId,
         limit: consolidationConfig.maxArtifactsToConsolidate,
       );
       if (unindexed.length < consolidationConfig.minArtifactsToConsolidate) {
@@ -64,6 +65,7 @@ extension IntermediateChatControllerConsolidation
       );
 
       await _runConsolidation(
+        sessionId: sessionId,
         unindexed: unindexed,
         namingConfig: namingConfig,
         embeddingConfig: embeddingConfig,
@@ -87,12 +89,12 @@ extension IntermediateChatControllerConsolidation
   ///    事务写入合并记忆 + 删除原始记忆
   /// 4. LLM 返回空列表 → 跳过持久化（无可合并内容）
   Future<void> _runConsolidation({
+    required String sessionId,
     required List<ExperientialMemory> unindexed,
     required NamingConfig namingConfig,
     required EmbeddingApiConfig? embeddingConfig,
     required String consolidationPrompt,
   }) async {
-    final originalIds = unindexed.map((m) => m.memoryId).toList();
     final maxTurnNumber =
         unindexed.map((m) => m.turnNumber).reduce((a, b) => a > b ? a : b);
 
@@ -141,16 +143,20 @@ extension IntermediateChatControllerConsolidation
       );
     }
 
-    await _persistenceService.persistConsolidatedMemories(
-      sessionId: state.session.sessionId,
+    final persisted = await _persistenceService.persistConsolidatedMemories(
+      sessionId: sessionId,
       records: records,
-      originalMemoryIds: originalIds,
+      originalMemories: unindexed,
     );
+    if (!persisted) {
+      _logger.info('Memory consolidation skipped because its sources changed');
+      return;
+    }
 
     _logger.info(
       'Memory consolidation completed',
       detail: 'consolidated=${records.length} '
-          'removed=${originalIds.length}',
+          'removed=${unindexed.length}',
     );
   }
 }

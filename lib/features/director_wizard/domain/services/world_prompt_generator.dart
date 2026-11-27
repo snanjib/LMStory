@@ -1,3 +1,4 @@
+import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/network/llm_adapters/sampling_params.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
@@ -16,7 +17,7 @@ class WorldPromptGenerator {
 
   final LlmService _llmService;
 
-  /// 失败补 warn（模型/端点/耗时/异常摘要），排障有痕。
+  /// 失败时记录协议、耗时、异常类型和 HTTP 状态。
   final Logger? logger;
 
   /// 外层超时帽（默认 90s；测试可注入短值）。
@@ -76,13 +77,13 @@ class WorldPromptGenerator {
       if (content.isEmpty) return null;
       return content;
     } catch (e) {
-      final errorText = e.toString();
+      final status = e is AppHttpException ? e.statusCode : null;
+      final statusField = status == null ? '' : ', status=$status';
       logger?.warn(
         'World prompt generation failed',
-        detail: 'model=${namingConfig.modelId}, '
-            'endpoint=${namingConfig.baseUrl}, '
+        detail: 'protocol=${namingConfig.protocol.name}, '
             'elapsed=${stopwatch.elapsedMilliseconds}ms, '
-            'error=${errorText.length > 200 ? errorText.substring(0, 200) : errorText}',
+            'errorType=${e.runtimeType}$statusField',
       );
       return null;
     }

@@ -1,14 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/exceptions/app_exceptions.dart';
 import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
+import 'package:lmstory/core/services/data_store_operation_guard.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
+import 'package:lmstory/core/vector/vector_engine.dart';
+import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/chat/data/datasources/llm_remote_datasource.dart';
+import 'package:lmstory/features/chat/data/repositories/chat_repository_impl.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session_settings.dart';
@@ -17,23 +22,35 @@ import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
+import 'package:lmstory/features/intermediate/domain/services/intermediate_context_builder.dart';
 import 'package:lmstory/features/intermediate/presentation/controllers/intermediate_chat_controller.dart';
 import 'package:lmstory/features/intermediate/presentation/pages/intermediate_chat_page.dart'
     show canAcceptPartialReply;
+import 'package:lmstory/features/memory/data/repositories/experience_repository_impl.dart';
+import 'package:lmstory/features/memory/data/repositories/factual_repository_impl.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
 import 'package:lmstory/features/memory/domain/entities/scored_memory.dart';
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
 import 'package:lmstory/features/memory/domain/services/embedding_service.dart';
+import 'package:lmstory/features/memory/domain/services/fact_applier.dart';
+import 'package:lmstory/features/settings/domain/entities/data_management_models.dart';
+import 'package:lmstory/features/settings/domain/entities/llm_protocol.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/settings/domain/services/data_management_service.dart';
+import 'package:lmstory/features/story_runtime/data/persistence_service_impl.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/message_variant_record.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/services/compaction_service.dart';
 import 'package:lmstory/features/story_runtime/domain/services/manual_compact_result.dart';
 import 'package:lmstory/features/story_runtime/domain/services/persistence_service.dart';
+import '../../../../test_helpers/fact_write_failure_fixture.dart';
+import '../../../../test_helpers/paused_backup_restore.dart';
+import '../../../../test_helpers/paused_session_update.dart';
 import '../../../../test_helpers/stub_failure_log_repository.dart';
+import '../../../../test_helpers/stub_token_counter.dart';
 
 // ignore_for_file: avoid_redundant_argument_values
 // 集成测试中构造配置对象时常显式传默认值以表达"使用默认配置"的意图。
@@ -83,6 +100,9 @@ class _SseHttpClient implements HttpClient {
   /// 每次请求的 body 快照（注入断言用；对既有测试零影响）
   final List<String?> bodies = [];
 
+  /// 每次请求的 header 快照（验证各阶段 providerOptions 生效）
+  final List<Map<String, String>> headersList = [];
+
   @override
   Stream<String> streamPost(
     String url,
@@ -94,6 +114,7 @@ class _SseHttpClient implements HttpClient {
     Duration? readTimeout,
     Duration? responseStartTimeout,
   }) {
+    headersList.add(Map<String, String>.from(headers));
     if (hangAt != null && callCount == hangAt && !_hangFired) {
       // 挂住次不消费列表、不推进计数——被取消的调用半途而废，
       // 后续轮次从当前列表位续读。
@@ -148,6 +169,7 @@ class _IntegrationChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = 'simple',
     String? modelId,
     String? presetId,
@@ -155,7 +177,7 @@ class _IntegrationChatRepository implements ChatRepository {
     createSessionCalls.add(title);
     _sessionCounter++;
     return ChatSession(
-      sessionId: 'real-session-$_sessionCounter',
+      sessionId: sessionId ?? 'real-session-$_sessionCounter',
       title: title,
       mode: mode,
       createdAt: DateTime(2026),
@@ -321,6 +343,27 @@ class _FakeConfigurationResolver extends ConfigurationResolver {
   Future<EmbeddingApiConfig?> resolveEmbeddingConfig() async => null;
 }
 
+/// 按阶段返回 Anthropic NamingConfig，其余阶段复用基类受控值。
+class _AnthropicPhaseConfigurationResolver extends _FakeConfigurationResolver {
+  _AnthropicPhaseConfigurationResolver({
+    required this.generating,
+    required this.reviewing,
+  });
+
+  final NamingConfig generating;
+  final NamingConfig reviewing;
+
+  @override
+  Future<NamingConfig?> resolveIntermediatePhaseNamingConfig(
+    ChatSession session,
+    String phase,
+  ) {
+    if (phase == 'generating') return Future.value(generating);
+    if (phase == 'reviewing') return Future.value(reviewing);
+    return super.resolveIntermediatePhaseNamingConfig(session, phase);
+  }
+}
+
 class _StubApiPresetRepository implements ApiPresetRepository {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
@@ -457,6 +500,7 @@ class _StubPersistenceService implements StoryPersistenceService {
     FactualConfig? factualConfig,
     CompactionPersistenceData? compaction,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     persistRoundCalls++;
     recordedArtifacts.add(artifacts);
@@ -507,6 +551,7 @@ class _StubPersistenceService implements StoryPersistenceService {
     required int turnNumber,
     required int variantIndex,
     required String assistantMessageId,
+    FactualConfig? factualConfig,
   }) async =>
       false;
 
@@ -518,6 +563,39 @@ class _StubPersistenceService implements StoryPersistenceService {
   }) async {}
 
   /// 重新生成场景：stub 不实际删除数据，仅返回成功
+  @override
+  Future<RoundRollbackResult> rollbackRoundAndDownstream({
+    required String sessionId,
+    required int fromTurnNumber,
+    required List<String> messageIdsToDelete,
+    bool keepVariantsAtFromTurn = false,
+    RoundVariantSnapshot? variantSnapshot,
+    Future<bool> Function(String sessionId, int fromTurnNumber)? truncateEvents,
+  }) async {
+    if (variantSnapshot != null) {
+      await snapshotMessageVariant(
+        sessionId: sessionId,
+        turnNumber: fromTurnNumber,
+        content: variantSnapshot.assistant.content,
+        thinkingContent: variantSnapshot.assistant.thinkingContent,
+        sourceInput: variantSnapshot.sourceInput,
+        process: variantSnapshot.process,
+      );
+    }
+    final anchor = await deleteRoundAndDownstream(
+      sessionId: sessionId,
+      fromTurnNumber: fromTurnNumber,
+      messageIdsToDelete: messageIdsToDelete,
+      keepVariantsAtFromTurn: keepVariantsAtFromTurn || variantSnapshot != null,
+    );
+    return (
+      storyAnchor: anchor,
+      narrativeTime: null,
+      messageCount: 0,
+      deletedFrozenPrefix: false,
+    );
+  }
+
   @override
   Future<StoryAnchor?> deleteRoundAndDownstream({
     required String sessionId,
@@ -540,6 +618,7 @@ class _StubPersistenceService implements StoryPersistenceService {
     CompactionPersistenceData? compaction,
     bool recordVariant = false,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     persistRoundCalls++;
     recordedArtifacts.add(artifacts);
@@ -616,6 +695,7 @@ class _VariantAwarePersistenceService extends _StubPersistenceService {
     required int turnNumber,
     required int variantIndex,
     required String assistantMessageId,
+    FactualConfig? factualConfig,
   }) async =>
       true; // 控制器侧以重载的变体表为准更新 state
 
@@ -640,6 +720,7 @@ class _VariantAwarePersistenceService extends _StubPersistenceService {
     FactualConfig? factualConfig,
     CompactionPersistenceData? compaction,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     final result = await super.persistRound(
       userMessage: userMessage,
@@ -651,6 +732,7 @@ class _VariantAwarePersistenceService extends _StubPersistenceService {
       factsDeltas: factsDeltas,
       factualConfig: factualConfig,
       compaction: compaction,
+      hasVerifiedSourceTurn: hasVerifiedSourceTurn,
     );
     if (artifacts != null) storedArtifacts[artifacts.turnNumber] = artifacts;
     return result;
@@ -668,6 +750,7 @@ class _VariantAwarePersistenceService extends _StubPersistenceService {
     CompactionPersistenceData? compaction,
     bool recordVariant = false,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     final result = await super.persistRegeneratedRound(
       assistantMessage: assistantMessage,
@@ -680,6 +763,7 @@ class _VariantAwarePersistenceService extends _StubPersistenceService {
       compaction: compaction,
       recordVariant: recordVariant,
       variantSourceInput: variantSourceInput,
+      hasVerifiedSourceTurn: hasVerifiedSourceTurn,
     );
     if (artifacts != null) {
       storedArtifacts[artifacts.turnNumber] = artifacts;
@@ -733,6 +817,7 @@ class _GatedPersistenceService extends _StubPersistenceService {
     FactualConfig? factualConfig,
     CompactionPersistenceData? compaction,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     final result = await super.persistRound(
       userMessage: userMessage,
@@ -744,6 +829,7 @@ class _GatedPersistenceService extends _StubPersistenceService {
       factsDeltas: factsDeltas,
       factualConfig: factualConfig,
       compaction: compaction,
+      hasVerifiedSourceTurn: hasVerifiedSourceTurn,
     );
     if (artifacts != null) {
       storedArtifacts[artifacts.turnNumber] = artifacts;
@@ -1050,6 +1136,23 @@ class _DeleteRecordingPersistenceService
   }
 }
 
+class _UserEditPersistenceService extends _DeleteRecordingPersistenceService {
+  _UserEditPersistenceService(this.chatRepository);
+
+  final ChatRepository chatRepository;
+
+  @override
+  Future<bool> updateUserContentAndInvalidateSourceTurn({
+    required String sessionId,
+    required int? turnNumber,
+    required String userMessageId,
+    required String newContent,
+  }) async {
+    await chatRepository.updateMessageContent(userMessageId, newContent);
+    return true;
+  }
+}
+
 /// PersistenceService stub：persistRound 恒抛异常（测试 E018 持久化失败）。
 class _FailingPersistenceService implements StoryPersistenceService {
   @override
@@ -1064,6 +1167,7 @@ class _FailingPersistenceService implements StoryPersistenceService {
     FactualConfig? factualConfig,
     CompactionPersistenceData? compaction,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     throw Exception('Mock persist failure');
   }
@@ -1156,13 +1260,99 @@ class _GatedNamingConfigResolver extends _FakeConfigurationResolver {
   }
 }
 
+class _PausedStoryResolver extends _GatedNamingConfigResolver {
+  final entered = Completer<void>();
+  final resume = Completer<void>();
+  bool pauseDraft = false;
+  bool pauseSettings = false;
+  int visits = 0;
+
+  Future<void> _pause() {
+    visits++;
+    if (!entered.isCompleted) entered.complete();
+    return resume.future;
+  }
+
+  @override
+  Future<NamingConfig?> resolveIntermediatePhaseNamingConfig(
+    ChatSession session,
+    String phase,
+  ) async {
+    if (pauseDraft &&
+        phase == 'generating' &&
+        session.sessionId.startsWith(
+          IntermediateChatController.draftSessionIdPrefix,
+        )) {
+      await _pause();
+    }
+    return super.resolveIntermediatePhaseNamingConfig(session, phase);
+  }
+
+  @override
+  Future<({ChatSessionSettings settings, String? apiKey})>
+      resolveIntermediateSettings(ChatSession session) async {
+    if (pauseSettings) await _pause();
+    return super.resolveIntermediateSettings(session);
+  }
+}
+
+class _PausedStoryMutation extends _VariantAwarePersistenceService {
+  _PausedStoryMutation(this.operation);
+
+  final String operation;
+  final entered = Completer<void>();
+  final resume = Completer<void>();
+  int calls = 0;
+
+  Future<void> _before(String operation) async {
+    if (this.operation != operation) return;
+    calls++;
+    if (!entered.isCompleted) entered.complete();
+    await resume.future;
+  }
+
+  @override
+  Future<StoryAnchor?> deleteRoundAndDownstream({
+    required String sessionId,
+    required int fromTurnNumber,
+    required List<String> messageIdsToDelete,
+    bool keepVariantsAtFromTurn = false,
+  }) async {
+    await _before('delete');
+    return super.deleteRoundAndDownstream(
+      sessionId: sessionId,
+      fromTurnNumber: fromTurnNumber,
+      messageIdsToDelete: messageIdsToDelete,
+      keepVariantsAtFromTurn: keepVariantsAtFromTurn,
+    );
+  }
+
+  @override
+  Future<bool> switchMessageVariant({
+    required String sessionId,
+    required int turnNumber,
+    required int variantIndex,
+    required String assistantMessageId,
+    FactualConfig? factualConfig,
+  }) async {
+    await _before('switch');
+    return true;
+  }
+
+  @override
+  Future<bool> undoCompaction({required String sessionId}) async {
+    await _before('undo');
+    return true;
+  }
+}
+
 // ── 辅助函数 ─────────────────────────────────────────────────────────
 
 /// 构造 SSE 原始文本：一个 content chunk + DONE 信号。
 ///
 /// [content] 为 LLM 流式输出的完整内容（含分隔标记），
 /// 如 `'草稿正文<<<KEYWORDS>>>["古碑"]'`。
-String _buildSseText(String content) {
+String _buildSseText(String content, {Map<String, int>? usage}) {
   final chunkJson = jsonEncode({
     'choices': [
       {
@@ -1172,7 +1362,10 @@ String _buildSseText(String content) {
       },
     ],
   });
-  return 'data: $chunkJson\n\ndata: [DONE]\n\n';
+  final usageChunk = usage == null
+      ? ''
+      : 'data: ${jsonEncode({'choices': <Object>[], 'usage': usage})}\n\n';
+  return 'data: $chunkJson\n\n${usageChunk}data: [DONE]\n\n';
 }
 
 // ── V2 四步流程 SSE 响应构造（Phase 6 Step 6.4）─────────────────────
@@ -1183,6 +1376,44 @@ String _buildSseText(String content) {
 // 测试利用 handler 的 fallback 路径：stub 只提供 LlmTextDelta（无 LlmToolCall* 事件），
 // runWithToolCall 返回 ToolCallResult(fallbackText=...)，handler 调用
 // parseKeywords/parseEventSummary 解析 JSON 文本。无需构造工具调用 SSE 事件。
+
+/// Anthropic 流式纯文本响应（message_start → text delta → message_stop）。
+String _anthropicTextSse(String text) {
+  String event(String name, Map<String, dynamic> data) =>
+      'event: $name\ndata: ${jsonEncode(data)}\n\n';
+  return [
+    event('message_start', {
+      'type': 'message_start',
+      'message': {
+        'id': 'msg_synthetic',
+        'type': 'message',
+        'role': 'assistant',
+        'content': <dynamic>[],
+        'model': 'synthetic',
+        'stop_reason': null,
+        'stop_sequence': null,
+        'usage': {'input_tokens': 10, 'output_tokens': 0},
+      },
+    }),
+    event('content_block_start', {
+      'type': 'content_block_start',
+      'index': 0,
+      'content_block': {'type': 'text', 'text': ''},
+    }),
+    event('content_block_delta', {
+      'type': 'content_block_delta',
+      'index': 0,
+      'delta': {'type': 'text_delta', 'text': text},
+    }),
+    event('content_block_stop', {'type': 'content_block_stop', 'index': 0}),
+    event('message_delta', {
+      'type': 'message_delta',
+      'delta': {'stop_reason': 'end_turn'},
+      'usage': {'output_tokens': 5},
+    }),
+    event('message_stop', {'type': 'message_stop'}),
+  ].join();
+}
 
 /// V2 drafting SSE（纯文本草稿，无标记/JSON）。
 String _draftV2(String draft) => _buildSseText(draft);
@@ -1220,6 +1451,7 @@ String _summarizeSse({
   int importance = 3,
   List<String> tags = const ['探索'],
   bool eventEnded = false,
+  String? narrativeTime,
 }) =>
     _buildSseText(
       jsonEncode({
@@ -1227,8 +1459,42 @@ String _summarizeSse({
         'importance': importance,
         'tags': tags,
         'event_ended': eventEnded,
+        if (narrativeTime != null) 'narrativeTime': narrativeTime,
       }),
     );
+
+String _summarizeWithFactsSse(String summary, List<FactsDelta> deltas) {
+  final tools = <(String, Map<String, Object>)>[
+    ('extract_event_summary', {'summary': summary, 'importance': 3}),
+    (
+      'extract_facts',
+      {'deltas': deltas.map((delta) => delta.toJson()).toList()}
+    ),
+  ];
+  final calls = jsonEncode({
+    'choices': [
+      {
+        'delta': {
+          'tool_calls': [
+            for (final (index, (name, arguments)) in tools.indexed)
+              {
+                'index': index,
+                'id': 'summary-tool-$index',
+                'type': 'function',
+                'function': {
+                  'name': name,
+                  'arguments': jsonEncode(arguments),
+                },
+              },
+          ],
+        },
+      },
+    ],
+  });
+  return 'data: $calls\n\n'
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+      'data: [DONE]\n\n';
+}
 
 /// V2 完整成功路径的 4 个 SSE 响应（draft + extract + revise + summarize）。
 ///
@@ -1314,8 +1580,8 @@ ChatSession _draftSession() => ChatSession(
 IntermediateChatController _buildController({
   required ChatSession session,
   required HttpClient httpClient,
-  required _IntegrationChatRepository chatRepo,
-  required _StubExperienceRepository experienceRepo,
+  required ChatRepository chatRepo,
+  required ExperienceRepository experienceRepo,
   required StoryPersistenceService persistenceService,
   // V2 四步流程（Phase 6）：drafting/revising 走纯文本（runPlainText），
   // extracting/summarizing 走工具调用 fallback 路径（parseKeywords/parseEventSummary）。
@@ -1329,8 +1595,11 @@ IntermediateChatController _buildController({
   // 默认强制 reviewEnabled=true，保持既有测试（测 revising 路径）行为不变。
   // 测试 skip-revise 路径时传 false。
   bool forceReviewEnabled = true,
+  DataStoreOperationGuard? operationGuard,
+  TokenCounter? tokenCounter,
 }) {
   return IntermediateChatController(
+    operationGuard: operationGuard,
     chatRepository: chatRepo,
     compactionService: compactionService,
     configurationResolver:
@@ -1343,7 +1612,7 @@ IntermediateChatController _buildController({
     embeddingService: _StubEmbeddingService(),
     persistenceService: persistenceService,
     failureLogRepository: const StubFailureLogRepository(),
-    tokenCounter: TokenCounter(),
+    tokenCounter: tokenCounter ?? TokenCounter(),
     getConfig: () async =>
         forceReviewEnabled ? _forceReviewEnabled(config) : config,
     logger: const Logger('test'),
@@ -1382,9 +1651,611 @@ IntermediateConfig _forceReviewEnabled(IntermediateConfig c) {
   );
 }
 
+class _FailingCommittedReplyCounter extends StubTokenCounter {
+  _FailingCommittedReplyCounter(
+    this.chatRepository,
+    this.sessionId,
+    this.reply,
+  );
+
+  final ChatRepository chatRepository;
+  final String sessionId;
+  final String reply;
+  final startedAfterCommit = Completer<void>();
+  final resume = Completer<void>();
+  int failures = 0;
+
+  @override
+  Future<int> countTokens(String text) async {
+    if (text == reply) {
+      final messages = await chatRepository.getMessages(sessionId);
+      if (messages.any(
+        (message) => message.role == 'assistant' && message.content == reply,
+      )) {
+        startedAfterCommit.complete();
+        await resume.future;
+        failures++;
+        throw StateError('Synthetic token estimate failure after commit');
+      }
+    }
+    return super.countTokens(text);
+  }
+}
+
 // ── 测试 ─────────────────────────────────────────────────────────────
 
 void main() {
+  test('story mode publishes one warning for a committed partial fact write',
+      () async {
+    const input = 'Inspect the harbor.';
+    const reply = 'The keeper returned to the harbor.';
+    const summary = 'The keeper inspected the harbor.';
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final chat = ChatRepositoryImpl(database: db);
+    final session = await chat.createSession(
+      title: 'Synthetic story',
+      mode: 'intermediate',
+    );
+    final experiences = ExperienceRepositoryImpl(
+      database: db,
+      vectorEngine: const VectorEngine(),
+    );
+    final facts = FactualRepositoryImpl(database: db);
+    final persistence = StoryPersistenceServiceImpl(
+      database: db,
+      chatRepository: chat,
+      experienceRepository: experiences,
+      factApplier: FactApplier(repository: facts),
+    );
+    await rejectFixtureFactHistory(db);
+    final controller = _buildController(
+      session: session,
+      httpClient: _SseHttpClient([
+        _extractKeywordsSse(),
+        _draftV2(reply),
+        _summarizeWithFactsSse(summary, factWriteFixtureDeltas),
+        _extractKeywordsSse(),
+        _draftV2('The keeper rested at the beacon.'),
+        _summarizeWithFactsSse('The keeper rested.', guardedFactFixtureDeltas),
+      ]),
+      chatRepo: chat,
+      experienceRepo: experiences,
+      persistenceService: persistence,
+      forceReviewEnabled: false,
+    );
+    addTearDown(controller.dispose);
+    final warnings = <(String, int, int, IntermediatePhase)>[];
+    final removeListener = controller.addListener((state) {
+      final warning = state.factWriteWarning;
+      if (warning != null) {
+        warnings.add(
+          (
+            state.session.sessionId,
+            warning.turnNumber,
+            warning.count,
+            state.phase
+          ),
+        );
+      }
+    });
+    addTearDown(removeListener);
+
+    expect(await controller.sendMessage(input), isTrue);
+    expect(warnings, [(session.sessionId, 1, 1, IntermediatePhase.idle)]);
+    expect(
+      controller.state.artifactsByTurnNumber?[1]?.factsChanges.single.newValue,
+      savedFixtureFactName,
+    );
+    await expectCommittedFactFixtureRound(
+      db,
+      sessionId: session.sessionId,
+      userInput: input,
+      reply: reply,
+      summary: summary,
+      what: summary,
+    );
+
+    await controller.loadHistory();
+    expect(controller.state.factWriteWarning, isNull);
+    expect(await controller.sendMessage('Return to the beacon.'), isTrue);
+    expect(controller.state.artifactsByTurnNumber?[2]?.factsChanges, isEmpty);
+    expect(controller.state.factWriteWarning, isNull);
+    expect(warnings, hasLength(1));
+    expect(
+      (await experiences.getAllExperiences(session.sessionId)).last.summary,
+      'The keeper rested.',
+    );
+  });
+
+  for (final (name, cancelDuringEstimate) in [
+    ('story keeps saved text when token estimation fails after commit', false),
+    ('story reloads the saved round when canceled during its estimate', true),
+  ]) {
+    test(name, () async {
+      const input = 'Inspect the harbor.';
+      const reply = 'The keeper returned to the harbor.';
+      const summary = 'The keeper inspected the harbor.';
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final chat = ChatRepositoryImpl(database: db);
+      final session = await chat.createSession(
+        title: 'Synthetic story',
+        mode: 'intermediate',
+      );
+      final experiences = ExperienceRepositoryImpl(
+        database: db,
+        vectorEngine: const VectorEngine(),
+      );
+      final facts = FactualRepositoryImpl(database: db);
+      final persistence = StoryPersistenceServiceImpl(
+        database: db,
+        chatRepository: chat,
+        experienceRepository: experiences,
+        factApplier: FactApplier(repository: facts),
+      );
+      await rejectFixtureFactHistory(db);
+      final counter =
+          _FailingCommittedReplyCounter(chat, session.sessionId, reply);
+      final controller = _buildController(
+        session: session,
+        httpClient: _SseHttpClient([
+          _extractKeywordsSse(),
+          _buildSseText(
+            reply,
+            usage: const {'prompt_tokens': 128, 'completion_tokens': 13},
+          ),
+          _summarizeWithFactsSse(summary, factWriteFixtureDeltas),
+        ]),
+        chatRepo: chat,
+        experienceRepo: experiences,
+        persistenceService: persistence,
+        forceReviewEnabled: false,
+        tokenCounter: counter,
+      );
+      addTearDown(controller.dispose);
+      await controller.loadHistory();
+      final warnings = <(String, int, int)>[];
+      final removeListener = controller.addListener((state) {
+        final warning = state.factWriteWarning;
+        if (warning != null) {
+          warnings.add(
+            (state.session.sessionId, warning.turnNumber, warning.count),
+          );
+        }
+      });
+      addTearDown(removeListener);
+
+      final send = controller.sendMessage(input);
+      try {
+        await counter.startedAfterCommit.future
+            .timeout(const Duration(seconds: 5));
+        if (cancelDuringEstimate) await controller.cancel();
+      } finally {
+        counter.resume.complete();
+      }
+      expect(await send, isTrue);
+      expect(counter.failures, 1);
+      await expectCommittedFactFixtureRound(
+        db,
+        sessionId: session.sessionId,
+        userInput: input,
+        reply: reply,
+        summary: summary,
+        what: summary,
+      );
+      final state = controller.state;
+      expect(state.phase, IntermediatePhase.idle);
+      expect(state.failureContext, isNull);
+      expect(state.messages.map((message) => message.content), [input, reply]);
+      expect(
+        state.artifactsByTurnNumber?[1]?.factsChanges.single.newValue,
+        savedFixtureFactName,
+      );
+      expect(state.lastInputTokens, 128);
+      expect(state.lastCompletionTokens, 13);
+      expect(state.lastUsageIsEstimated, isFalse);
+      if (cancelDuringEstimate) {
+        expect(warnings, isEmpty);
+      } else {
+        expect(state.contextEstimate?.hasData, isFalse);
+        expect(warnings, [(session.sessionId, 1, 1)]);
+      }
+
+      await controller.loadHistory();
+      expect(controller.state.factWriteWarning, isNull);
+      expect(warnings, hasLength(cancelDuringEstimate ? 0 : 1));
+    });
+  }
+
+  group('故事会话打开与物化后的互斥', () {
+    test('存量会话回填先于同会话收稿，库和内存保留轮次元数据', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final repo = PausedSessionUpdate(database: db);
+      final session = await repo.createSession(
+        title: '旧故事',
+        mode: 'intermediate',
+      );
+      final exp = ExperienceRepositoryImpl(
+        database: db,
+        vectorEngine: const VectorEngine(),
+      );
+      final controller = _buildController(
+        session: session,
+        httpClient: _SseHttpClient([
+          _extractKeywordsSse(),
+          _draftV2('新正文'),
+          _summarizeSse(narrativeTime: '第二天清晨'),
+        ]),
+        chatRepo: repo,
+        experienceRepo: exp,
+        persistenceService: StoryPersistenceServiceImpl(
+          database: db,
+          chatRepository: repo,
+          experienceRepository: exp,
+        ),
+        forceReviewEnabled: false,
+      );
+      addTearDown(controller.dispose);
+      final stale =
+          await repo.entered.future.timeout(const Duration(seconds: 5));
+      expect(stale.messageCount, 0);
+      final round = controller.sendMessage('新输入');
+      final startedEarly = controller.state.phase != IntermediatePhase.idle;
+      try {
+        if (startedEarly) {
+          expect(await round, isTrue);
+          expect((await repo.getSession(session.sessionId)).messageCount, 2);
+        }
+      } finally {
+        repo.resume.complete();
+      }
+      await repo.written.future;
+      expect(await round, isTrue);
+      await Future<void>.delayed(Duration.zero);
+
+      final stored = await repo.getSession(session.sessionId);
+      expect(
+        (stored.messageCount, stored.nextTurn, stored.currentNarrativeTime),
+        (2, 2, '第二天清晨'),
+      );
+      final visible = controller.state.session;
+      expect(
+        (visible.messageCount, visible.nextTurn, visible.currentNarrativeTime),
+        (2, 2, '第二天清晨'),
+      );
+      expect(startedEarly, isFalse);
+    });
+
+    test('草稿 key 与真实 key 保护同一故事，停止后可从真实 key 发送', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final guard = DataStoreOperationGuard();
+      final repo = ChatRepositoryImpl(database: db);
+      final exp = ExperienceRepositoryImpl(
+        database: db,
+        vectorEngine: const VectorEngine(),
+      );
+      final persistence = StoryPersistenceServiceImpl(
+        database: db,
+        chatRepository: repo,
+        experienceRepository: exp,
+      );
+      IntermediateChatController open(
+        ChatSession session,
+        _SseHttpClient http,
+      ) {
+        final controller = _buildController(
+          session: session,
+          httpClient: http,
+          chatRepo: repo,
+          experienceRepo: exp,
+          persistenceService: persistence,
+          operationGuard: guard,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final firstHttp = _SseHttpClient([_extractKeywordsSse()], hangAt: 1);
+      final draft = open(_draftSession(), firstHttp);
+      final first = draft.sendMessage('草稿首轮');
+      await firstHttp.hangFired.future.timeout(const Duration(seconds: 5));
+      final realId = draft.state.session.sessionId;
+      final otherHttp = _SseHttpClient(_v2SuccessResponses(reply: '真实 key 收稿'));
+      final reopened = open(await repo.getSession(realId), otherHttp);
+      bool accepted;
+      try {
+        accepted = await reopened.sendMessage('保留的输入');
+        expect(accepted, isFalse);
+        expect(otherHttp.callCount, 0);
+        expect(await repo.getMessages(realId), isEmpty);
+      } finally {
+        await draft.cancel();
+        await first;
+      }
+      expect(await reopened.sendMessage('保留的输入'), isTrue);
+      expect(
+        (await repo.getMessages(realId)).map((message) => message.content),
+        ['保留的输入', '真实 key 收稿'],
+      );
+    });
+  });
+
+  group('故事会话操作互斥', () {
+    test('同库允许其他会话生成，覆盖与准备或写入双向互斥', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final guard = DataStoreOperationGuard();
+      final repo = ChatRepositoryImpl(database: db);
+      final backup = PausedBackupRestore(database: db);
+      final service = DataManagementService(
+        chatRepository: repo,
+        presetRepository: _StubApiPresetRepository(),
+        settingsRepository: _StubSettingsRepository(),
+        backupRepository: backup,
+        operationGuard: guard,
+      );
+      final exp = ExperienceRepositoryImpl(
+        database: db,
+        vectorEngine: const VectorEngine(),
+      );
+      final persistence = StoryPersistenceServiceImpl(
+        database: db,
+        chatRepository: repo,
+        experienceRepository: exp,
+      );
+      IntermediateChatController open(
+        ChatSession session,
+        _SseHttpClient http, {
+        ConfigurationResolver? resolver,
+      }) {
+        final controller = _buildController(
+          session: session,
+          httpClient: http,
+          chatRepo: repo,
+          experienceRepo: exp,
+          persistenceService: persistence,
+          configurationResolver: resolver,
+          operationGuard: guard,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      const payload = '{"version":3,"sessions":[{"session":'
+          '{"session_id":"restored","title":"Restored","mode":"intermediate"},'
+          '"messages":[]}]}';
+      final resolver = _PausedStoryResolver()
+        ..configured = true
+        ..pauseDraft = true;
+      final first = open(
+        _draftSession(),
+        _SseHttpClient(_v2SuccessResponses()),
+        resolver: resolver,
+      );
+      final otherSession = await repo.createSession(
+        title: '独立故事',
+        mode: 'intermediate',
+      );
+      final other = open(otherSession, _SseHttpClient(_v2SuccessResponses()));
+      final sending = first.sendMessage('第一则故事');
+      await resolver.entered.future;
+      try {
+        var snapshots = 0;
+        await expectLater(
+          service.importBackup(
+            payload,
+            ImportMode.overwrite,
+            preImportSnapshot: () async => snapshots++,
+          ),
+          throwsA(isA<BackupOverwriteBusyException>()),
+        );
+        expect([snapshots, backup.deletes, backup.writes], [0, 0, 0]);
+        expect(await other.sendMessage('独立输入'), isTrue);
+        expect(
+          (await repo.getMessages(otherSession.sessionId)).first.content,
+          '独立输入',
+        );
+      } finally {
+        resolver.resume.complete();
+      }
+      expect(await sending, isTrue);
+      expect(
+        (await repo.getMessages(first.state.session.sessionId)).first.content,
+        '第一则故事',
+      );
+
+      final snapshotEntered = Completer<void>();
+      final snapshotResume = Completer<void>();
+      final overwrite = service.importBackup(
+        payload,
+        ImportMode.overwrite,
+        preImportSnapshot: () async {
+          snapshotEntered.complete();
+          await snapshotResume.future;
+        },
+      );
+      final http = _SseHttpClient(_v2SuccessResponses());
+      final draft = open(
+        _draftSession().copyWith(
+          sessionId:
+              '${IntermediateChatController.draftSessionIdPrefix}restore',
+        ),
+        http,
+      );
+      try {
+        await snapshotEntered.future;
+        expect(await draft.sendMessage('保留输入'), isFalse);
+        snapshotResume.complete();
+        await backup.entered.future;
+        expect(await draft.sendMessage('保留输入'), isFalse);
+        expect(draft.state.pendingUserMessage, isNull);
+        expect(http.callCount, 0);
+        expect([backup.deletes, backup.writes], [1, 1]);
+      } finally {
+        if (!snapshotResume.isCompleted) snapshotResume.complete();
+        backup.resume.complete();
+      }
+      expect((await overwrite).importedSessions, 1);
+      expect((await repo.getAllSessions()).single.sessionId, 'restored');
+      expect(await draft.sendMessage('保留输入'), isTrue);
+      expect(
+        (await repo.getMessages(draft.state.session.sessionId)).first.content,
+        '保留输入',
+      );
+      expect(await repo.getMessages('restored'), isEmpty);
+    });
+
+    for (final retryFirst in [false, true]) {
+      test(retryFirst ? '草稿重试挡住重试和直发' : '草稿双发只物化一次', () async {
+        final resolver = _PausedStoryResolver()..configured = !retryFirst;
+        final repo = _IntegrationChatRepository();
+        final persistence = _StubPersistenceService();
+        final http = _SseHttpClient(_v2SuccessResponses());
+        final controller = _buildController(
+          session: _draftSession(),
+          httpClient: http,
+          chatRepo: repo,
+          experienceRepo: _StubExperienceRepository(),
+          persistenceService: persistence,
+          configurationResolver: resolver,
+        );
+        addTearDown(controller.dispose);
+        if (retryFirst) {
+          expect(await controller.sendMessage('原输入'), isTrue);
+          expect(controller.state.pendingUserMessage?.content, '原输入');
+          resolver.configured = true;
+        }
+        resolver.pauseDraft = true;
+        final first = retryFirst
+            ? controller.retry()
+            : controller.sendMessage('原输入').then<void>((accepted) {
+                expect(accepted, isTrue);
+              });
+        await resolver.entered.future;
+        final repeated = retryFirst ? controller.retry() : Future<void>.value();
+        final second = controller.sendMessage('冲突输入');
+        await Future<void>.delayed(Duration.zero);
+        final visits = resolver.visits;
+        resolver.resume.complete();
+        final accepted = await second;
+        await Future.wait([first, repeated]);
+
+        expect(visits, 1);
+        expect(repo.createSessionCalls, hasLength(1));
+        expect(accepted, isFalse);
+        expect(persistence.persistRoundCalls, 1);
+        expect(http.callCount, _v2SuccessResponses().length);
+        expect(controller.state.messages.first.content, '原输入');
+      });
+    }
+
+    test('中断续跑保护配置重读与同一轮收稿', () async {
+      final resolver = _PausedStoryResolver()..configured = true;
+      final persistence = _StubPersistenceService();
+      final http = _SseHttpClient([
+        _extractKeywordsSse(),
+        _partialThenErrorSse('未完前缀'),
+        _draftV2('续跑正文'),
+        _summarizeSse(),
+      ]);
+      final controller = _buildController(
+        session: _realSession(),
+        httpClient: http,
+        chatRepo: _IntegrationChatRepository(),
+        experienceRepo: _StubExperienceRepository(),
+        persistenceService: persistence,
+        configurationResolver: resolver,
+        config: const IntermediateConfig(
+          retry: RetryConfig(streamInterruptRetry: 0),
+        ),
+        forceReviewEnabled: false,
+      );
+      addTearDown(controller.dispose);
+      expect(await controller.sendMessage('起始输入'), isTrue);
+      expect(controller.state.phase, IntermediatePhase.failed);
+      resolver.pauseSettings = true;
+      final first = controller.continueFromFailed();
+      await resolver.entered.future;
+      final second = controller.continueFromFailed();
+      await Future<void>.delayed(Duration.zero);
+      final visits = resolver.visits;
+      resolver.resume.complete();
+      await Future.wait([first, second]);
+      expect(visits, 1);
+      expect(http.callCount, 4);
+      expect(persistence.persistRoundCalls, 1);
+      expect(controller.state.messages.last.content, '续跑正文');
+    });
+
+    for (final operation in ['delete', 'switch', 'undo']) {
+      test('$operation 与发送双向互斥且释放后可再发', () async {
+        final persistence = _PausedStoryMutation(operation)
+          ..variants[1] = [
+            const MessageVariantRecord(
+              variantIndex: 0,
+              createdAtMs: 0,
+              content: '备选正文',
+            ),
+          ];
+        final http = _SseHttpClient([
+          ..._v2SuccessResponses(),
+          ..._v2SuccessResponses(reply: '后续正文'),
+        ]);
+        final repo = _IntegrationChatRepository();
+        final resolver = _PausedStoryResolver()..configured = true;
+        final controller = _buildController(
+          session: _realSession(),
+          httpClient: http,
+          chatRepo: repo,
+          experienceRepo: _RollbackSafeExperienceRepository(),
+          persistenceService: persistence,
+          configurationResolver: resolver,
+        );
+        addTearDown(controller.dispose);
+        await controller.sendMessage('已收稿输入');
+        repo.messages = controller.state.messages;
+        final target = controller.state.messages.last;
+        Future<void> mutate() async {
+          switch (operation) {
+            case 'delete':
+              await controller.deleteRound(target);
+            case 'switch':
+              await controller.switchMessageVariant(target, 0);
+            case 'undo':
+              await controller.undoCompaction();
+          }
+        }
+
+        final first = mutate();
+        await persistence.entered.future;
+        final conflicting = await controller.sendMessage('冲突输入');
+        persistence.resume.complete();
+        await first;
+        expect(conflicting, isFalse);
+        expect(persistence.persistRoundCalls, 1);
+        expect(persistence.calls, 1);
+        if (operation == 'delete') expect(controller.state.messages, isEmpty);
+        if (operation == 'switch') {
+          expect(controller.state.messages.last.content, '备选正文');
+        }
+        repo.messages = controller.state.messages;
+
+        resolver.pauseSettings = true;
+        final next = controller.sendMessage('合法输入');
+        await resolver.entered.future;
+        await mutate();
+        resolver.resume.complete();
+        expect(await next, isTrue);
+        expect(persistence.calls, 1);
+        expect(persistence.persistRoundCalls, 2);
+        expect(controller.state.messages.last.content, '后续正文');
+      });
+    }
+  });
+
   group('IntermediateChatController - sendMessage 集成', () {
     test(
         '1. 成功路径：完整链路 idle→drafting→extracting→retrieving→revising→summarizing→persisting→idle',
@@ -3930,6 +4801,45 @@ void main() {
   // 页面凭返回值弹「已保存/保存失败」floating SnackBar；旧签名
   // Future<void> 让成功/失败在 UI 上完全无差别（B线亲证）。
   group('editMessageContent 返回值', () {
+    test('不保存无法定位轮次的过时助手消息', () async {
+      final chatRepo = _IntegrationChatRepository()
+        ..messages = [
+          ChatMessage(
+            messageId: 'u1',
+            sessionId: 'real-session-1',
+            role: 'user',
+            content: '输入',
+            createdAt: DateTime(2026),
+          ),
+          ChatMessage(
+            messageId: 'a1',
+            sessionId: 'real-session-1',
+            role: 'assistant',
+            content: '现有正文',
+            createdAt: DateTime(2026),
+          ),
+        ];
+      final controller = _buildController(
+        session: _realSession(),
+        httpClient: _SseHttpClient(const []),
+        chatRepo: chatRepo,
+        experienceRepo: _StubExperienceRepository(),
+        persistenceService: _DeleteRecordingPersistenceService(),
+        forceReviewEnabled: false,
+      );
+      await Future<void>.delayed(Duration.zero);
+      final stale = ChatMessage(
+        messageId: 'stale',
+        sessionId: 'real-session-1',
+        role: 'assistant',
+        content: '过时正文',
+        createdAt: DateTime(2026),
+      );
+
+      expect(await controller.editMessageContent(stale, '新正文'), isFalse);
+      expect(controller.state.messages.last.content, '现有正文');
+    });
+
     test('保存成功返回 true 且内存消息更新', () async {
       final chatRepo = _IntegrationChatRepository()
         ..messages = [
@@ -3946,7 +4856,7 @@ void main() {
         httpClient: _SseHttpClient(const []),
         chatRepo: chatRepo,
         experienceRepo: _StubExperienceRepository(),
-        persistenceService: _DeleteRecordingPersistenceService(),
+        persistenceService: _UserEditPersistenceService(chatRepo),
         forceReviewEnabled: false,
       );
       await Future<void>.delayed(Duration.zero);
@@ -3980,7 +4890,7 @@ void main() {
         httpClient: _SseHttpClient(const []),
         chatRepo: chatRepo,
         experienceRepo: _StubExperienceRepository(),
-        persistenceService: _DeleteRecordingPersistenceService(),
+        persistenceService: _UserEditPersistenceService(chatRepo),
         forceReviewEnabled: false,
       );
       await Future<void>.delayed(Duration.zero);
@@ -4424,6 +5334,184 @@ void main() {
       expect(controller.state.messages, hasLength(2));
       expect(controller.state.messages.first.content, '第二条');
       expect(controller.state.messages.last.content, '完整的第二轮正文。');
+    });
+  });
+
+  // ── Anthropic 故事固定 system 前缀缓存接线 ─────────────────────
+  //
+  // 生成/审查走真实控制器 → 真实 LlmRemoteDataSource → 桩 HTTP，
+  // 断言两个生产入口都把稳定段元数据与各自 providerOptions 送到最终 body。
+  group('Anthropic 故事固定 system 前缀缓存接线', () {
+    NamingConfig anthropicConfig({
+      required String modelId,
+      required String beta,
+      String baseUrl = 'https://api.anthropic.com',
+    }) =>
+        NamingConfig(
+          baseUrl: baseUrl,
+          apiKey: 'test-api-key',
+          modelId: modelId,
+          protocol: LlmProtocol.anthropic,
+          providerOptions: {
+            'anthropic_capabilities': const {'stable_system_cache': true},
+            'anthropic_beta': [beta],
+          },
+          maxOutputTokens: 8192,
+        );
+
+    int markerCount(Map<String, dynamic> body) =>
+        jsonEncode(body).split('cache_control').length - 1;
+
+    String reviewSuffix() {
+      const prompts = PromptsConfig();
+      return prompts.reviewSuffixV2
+          .replaceAll('{factInjectionTitle}', prompts.factInjectionTitle)
+          .replaceAll(
+            '{memoriesInjectionTitle}',
+            prompts.memoriesInjectionTitle,
+          );
+    }
+
+    test('官方端点：生成/审查按稳定段分块，重生成不丢元数据', () async {
+      final httpClient = _SseHttpClient([
+        _extractKeywordsSse(),
+        _anthropicTextSse('第一版草稿'),
+        _anthropicTextSse('第一版正文'),
+        _summarizeSse(),
+        _extractKeywordsSse(),
+        _anthropicTextSse('重生成草稿'),
+        _anthropicTextSse('第二版正文'),
+        _summarizeSse(),
+      ]);
+      final controller = _buildController(
+        session: _realSession(),
+        httpClient: httpClient,
+        chatRepo: _IntegrationChatRepository(),
+        experienceRepo: _RollbackSafeExperienceRepository(),
+        persistenceService: _StubPersistenceService(),
+        configurationResolver: _AnthropicPhaseConfigurationResolver(
+          generating: anthropicConfig(
+            modelId: 'claude-sonnet-4-6',
+            beta: 'gen-beta',
+          ),
+          reviewing: anthropicConfig(
+            modelId: 'claude-haiku-4-5',
+            beta: 'review-beta',
+          ),
+        ),
+      );
+
+      await controller.sendMessage('勇者前往后山');
+      expect(controller.state.phase, IntermediatePhase.idle);
+      expect(httpClient.bodies, hasLength(4));
+
+      const prompts = PromptsConfig();
+      final role = IntermediateContextBuilder.resolveRolePrompt(
+        null,
+        '',
+        prompts,
+      );
+
+      final generate =
+          jsonDecode(httpClient.bodies[1]!) as Map<String, dynamic>;
+      expect(generate['model'], 'claude-sonnet-4-6');
+      expect(httpClient.headersList[1]['anthropic-beta'], 'gen-beta');
+      final generateSystem =
+          (generate['system'] as List).cast<Map<String, dynamic>>();
+      expect(generateSystem, hasLength(1));
+      expect(generateSystem.single['text'], role);
+      expect(generateSystem.single['cache_control'], {'type': 'ephemeral'});
+      final generateMessages =
+          (generate['messages'] as List).cast<Map<String, dynamic>>();
+      expect(generateMessages.single['role'], 'user');
+      expect(generateMessages.single['content'], '勇者前往后山');
+      expect(jsonEncode(generate), isNot(contains('stable_system_cache')));
+      expect(jsonEncode(generate), isNot(contains('anthropic_capabilities')));
+      expect(markerCount(generate), lessThanOrEqualTo(4));
+
+      final review = jsonDecode(httpClient.bodies[2]!) as Map<String, dynamic>;
+      expect(review['model'], 'claude-haiku-4-5');
+      expect(httpClient.headersList[2]['anthropic-beta'], 'review-beta');
+      final reviewSystem =
+          (review['system'] as List).cast<Map<String, dynamic>>();
+      expect(reviewSystem, hasLength(2));
+      expect(reviewSystem[0]['text'], role);
+      expect(reviewSystem[1]['text'], '\n\n${reviewSuffix()}');
+      expect(reviewSystem[0]['cache_control'], {'type': 'ephemeral'});
+      expect(reviewSystem[1]['cache_control'], {'type': 'ephemeral'});
+      expect(markerCount(review), 2);
+      final reviewMessages =
+          (review['messages'] as List).cast<Map<String, dynamic>>();
+      expect(reviewMessages, hasLength(1));
+      expect(reviewMessages.single['content'], contains('第一版草稿'));
+
+      await controller.regenerateMessage(controller.state.messages.last);
+      expect(controller.state.phase, IntermediatePhase.idle);
+      expect(httpClient.bodies, hasLength(8));
+
+      final regenerated =
+          jsonDecode(httpClient.bodies[5]!) as Map<String, dynamic>;
+      final regeneratedSystem =
+          (regenerated['system'] as List).cast<Map<String, dynamic>>();
+      expect(regeneratedSystem, hasLength(1));
+      expect(
+        regeneratedSystem.single['cache_control'],
+        {'type': 'ephemeral'},
+      );
+      expect(httpClient.headersList[5]['anthropic-beta'], 'gen-beta');
+
+      final regeneratedReview =
+          jsonDecode(httpClient.bodies[6]!) as Map<String, dynamic>;
+      final regeneratedReviewSystem =
+          (regeneratedReview['system'] as List).cast<Map<String, dynamic>>();
+      expect(regeneratedReviewSystem, hasLength(2));
+      expect(
+        regeneratedReviewSystem.every(
+          (block) => block['cache_control'] != null,
+        ),
+        isTrue,
+      );
+      expect(httpClient.headersList[6]['anthropic-beta'], 'review-beta');
+    });
+
+    test('第三方未声明能力：生成/审查保持旧字符串 system', () async {
+      final httpClient = _SseHttpClient([
+        _extractKeywordsSse(),
+        _anthropicTextSse('第一版草稿'),
+        _anthropicTextSse('第一版正文'),
+        _summarizeSse(),
+      ]);
+      const thirdParty = NamingConfig(
+        baseUrl: 'https://relay.example.com/v1',
+        apiKey: 'test-api-key',
+        modelId: 'relay-claude',
+        protocol: LlmProtocol.anthropic,
+        maxOutputTokens: 8192,
+      );
+      final controller = _buildController(
+        session: _realSession(),
+        httpClient: httpClient,
+        chatRepo: _IntegrationChatRepository(),
+        experienceRepo: _StubExperienceRepository(),
+        persistenceService: _StubPersistenceService(),
+        configurationResolver: _AnthropicPhaseConfigurationResolver(
+          generating: thirdParty,
+          reviewing: thirdParty,
+        ),
+      );
+
+      await controller.sendMessage('勇者前往后山');
+      expect(controller.state.phase, IntermediatePhase.idle);
+      expect(httpClient.bodies, hasLength(4));
+
+      final generate =
+          jsonDecode(httpClient.bodies[1]!) as Map<String, dynamic>;
+      expect(generate['system'], isA<String>());
+      expect(jsonEncode(generate), isNot(contains('cache_control')));
+
+      final review = jsonDecode(httpClient.bodies[2]!) as Map<String, dynamic>;
+      expect(review['system'], isA<String>());
+      expect(jsonEncode(review), isNot(contains('cache_control')));
     });
   });
 }

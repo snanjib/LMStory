@@ -289,4 +289,75 @@ void main() {
       expect(withoutSweep, hasLength(3));
     });
   });
+
+  group('定期维护缺口提示与大周期重叠消解', () {
+    test('maintenanceGapReminderText：全未达阈值或间隔<=0 时返回 null', () {
+      expect(
+        maintenanceGapReminderText(
+          factsGap: 6,
+          anchorGap: 3,
+          eventGap: 0,
+        ),
+        isNull,
+      );
+      expect(
+        maintenanceGapReminderText(
+          factsGap: 10,
+          anchorGap: 10,
+          eventGap: 10,
+          gapInterval: 0,
+        ),
+        isNull,
+      );
+    });
+
+    test('maintenanceGapReminderText：仅报告超限维度轮数，不枚举具体内容维度', () {
+      final line = maintenanceGapReminderText(
+        factsGap: 8,
+        anchorGap: 4,
+        eventGap: 9,
+      );
+      expect(line, isNotNull);
+      expect(line, contains('【维护提醒】'));
+      expect(line, contains('8 轮'));
+      expect(line, contains('9 轮'));
+      expect(line, isNot(contains('4 轮')));
+      for (final forbidden in const ['伤势', '物品', '位置', '关系', '装备', '好感']) {
+        expect(line, isNot(contains(forbidden)));
+      }
+    });
+
+    test('surfaceTailMessages：常规轮注入维护缺口提示；大周期轮抑制小提示并附收尾说明', () {
+      final normalTail = surfaceTailMessages(
+        pacing: NarrativePacing.balanced,
+        isFirstTurn: false,
+        toolNames: const {'list_facts', 'update_facts', 'finish_round'},
+        maintenanceGapLine: '【维护提醒】测试缺口',
+      );
+      expect(normalTail, hasLength(4));
+      expect(normalTail[0].content, contains('【工作契约】'));
+      expect(normalTail[1].content, contains('【维护提醒】测试缺口'));
+      expect(normalTail[2].content, contains(kStyleIronRuleLine));
+
+      final majorTail = surfaceTailMessages(
+        pacing: NarrativePacing.balanced,
+        isFirstTurn: false,
+        toolNames: const {
+          'list_facts',
+          'update_facts',
+          'finish_round',
+          'finish_maintenance',
+        },
+        maintenanceGapLine: '【维护提醒】测试缺口',
+        isMajorReviewRound: true,
+      );
+      expect(majorTail, hasLength(3));
+      expect(majorTail[0].content, contains('finish_round'));
+      expect(majorTail[0].content, contains('finish_maintenance'));
+      expect(
+        majorTail.every((m) => !(m.content ?? '').contains('【维护提醒】')),
+        isTrue,
+      );
+    });
+  });
 }

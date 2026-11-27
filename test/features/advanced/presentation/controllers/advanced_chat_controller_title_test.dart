@@ -16,6 +16,7 @@ import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
 import 'package:lmstory/features/story_runtime/data/persistence_service_impl.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/auxiliary_generation_failure.dart';
 import 'package:lmstory/features/story_runtime/domain/services/session_title_generator.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -79,7 +80,7 @@ class _FakeTitleGenerator extends SessionTitleGenerator {
   String? lastAssistantReply;
 
   @override
-  Future<String?> generate({
+  Future<AuxiliaryGenerationResult<String>> generateWithResult({
     required String userMessage,
     required String assistantReply,
     required NamingConfig namingConfig,
@@ -89,7 +90,14 @@ class _FakeTitleGenerator extends SessionTitleGenerator {
     callCount++;
     lastUserMessage = userMessage;
     lastAssistantReply = assistantReply;
-    return resultTitle;
+    return (
+      value: resultTitle,
+      failure: resultTitle == null
+          ? const AuxiliaryGenerationFailure(
+              AuxiliaryGenerationFailureKind.emptyOutput,
+            )
+          : null,
+    );
   }
 }
 
@@ -171,7 +179,7 @@ void main() {
     expect(updatedSession.title, '深海探险记');
   });
 
-  test('force: true 当标题生成失败时保持原标题不变（不落截断名），返回 false', () async {
+  test('手动更新标题时返回空输出原因并保留原标题', () async {
     await db.customStatement(
       '''INSERT INTO chat_sessions (session_id, mode, title) VALUES ('s1', 'advanced', '不可改变的标题')''',
     );
@@ -187,9 +195,10 @@ void main() {
     final controller = createController(session: session);
     await controller.loadHistory();
 
-    final result = await controller.updateTitle(force: true);
+    final result = await controller.updateTitleWithResult(force: true);
 
-    expect(result, isFalse);
+    expect(result.updated, isFalse);
+    expect(result.failure?.kind, AuxiliaryGenerationFailureKind.emptyOutput);
     expect(controller.state.session.title, '不可改变的标题');
     final sessionInDb = await chatRepo.getSession('s1');
     expect(sessionInDb.title, '不可改变的标题');
@@ -204,9 +213,10 @@ void main() {
     final controller = createController(session: session);
     await controller.loadHistory();
 
-    final result = await controller.updateTitle(force: true);
+    final result = await controller.updateTitleWithResult(force: true);
 
-    expect(result, isFalse);
+    expect(result.updated, isFalse);
+    expect(result.failure?.kind, AuxiliaryGenerationFailureKind.noConversation);
     expect(titleGen.callCount, 0);
   });
 
@@ -229,9 +239,10 @@ void main() {
       '''UPDATE chat_sessions SET title = '用户独家命名' WHERE session_id = 's1' ''',
     );
 
-    final result = await controller.updateTitle(force: true);
+    final result = await controller.updateTitleWithResult(force: true);
 
-    expect(result, isFalse);
+    expect(result.updated, isFalse);
+    expect(result.failure?.kind, AuxiliaryGenerationFailureKind.titleChanged);
     final finalSession = await chatRepo.getSession('s1');
     expect(finalSession.title, '用户独家命名');
   });

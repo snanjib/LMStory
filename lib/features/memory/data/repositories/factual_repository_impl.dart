@@ -8,6 +8,7 @@ import 'package:lmstory/features/memory/data/repositories/memory_fts_rebuilder.d
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_memory_changes_snapshot.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_memory_history.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/memory/domain/entities/force_inject_target.dart';
@@ -206,6 +207,262 @@ class FactualRepositoryImpl implements FactualRepository {
     return rows.isEmpty ? null : _entityFromTyped(rows.first);
   }
 
+  @override
+  Future<List<FactualEntity>> getEntitiesByIds(
+    String sessionId,
+    List<String> entityIds,
+  ) async {
+    if (entityIds.isEmpty) return const [];
+    final seen = <String>{};
+    final orderedIds = <String>[
+      for (final id in entityIds)
+        if (id.isNotEmpty && seen.add(id)) id,
+    ];
+    if (orderedIds.isEmpty) return const [];
+    final rows = await (_database.select(_database.factualEntitiesTable)
+          ..where(
+            (t) => t.sessionId.equals(sessionId) & t.entityId.isIn(orderedIds),
+          ))
+        .get();
+    final byId = {for (final row in rows) row.entityId: _entityFromTyped(row)};
+    return [
+      for (final id in orderedIds)
+        if (byId[id] case final entity?) entity,
+    ];
+  }
+
+  @override
+  Future<FactualEntityCatalogPage> listEntityCatalog(
+    String sessionId, {
+    FactualEntityType? entityType,
+    String sourceFilter = 'dynamic',
+    String sort = 'stale_first',
+    int? updatedBeforeTurn,
+    int? updatedAfterTurn,
+    bool includeArchived = false,
+    int limit = 25,
+    int offset = 0,
+  }) async {
+    if (sourceFilter != 'dynamic' &&
+        sourceFilter != 'auto' &&
+        sourceFilter != 'worldbook' &&
+        sourceFilter != 'card' &&
+        sourceFilter != 'all') {
+      throw ArgumentError.value(
+        sourceFilter,
+        'sourceFilter',
+        '未知的 sourceFilter，仅支持 dynamic/auto/worldbook/card/all',
+      );
+    }
+    if (sort != 'stale_first' &&
+        sort != 'recently_updated' &&
+        sort != 'importance_desc' &&
+        sort != 'created_desc') {
+      throw ArgumentError.value(
+        sort,
+        'sort',
+        '未知的 sort，仅支持 stale_first/recently_updated/importance_desc/created_desc',
+      );
+    }
+    final effectiveLimit = limit.clamp(1, 50);
+    final effectiveOffset = offset < 0 ? 0 : offset;
+
+    return _database.transaction(() async {
+      final entitiesTable = _database.factualEntitiesTable;
+      final summaryRows = await (_database.selectOnly(entitiesTable)
+            ..addColumns([
+              entitiesTable.type,
+              entitiesTable.isArchived,
+              entitiesTable.source,
+              entitiesTable.updatedTurn,
+            ])
+            ..where(entitiesTable.sessionId.equals(sessionId)))
+          .get();
+
+      var activeCount = 0;
+      var archivedCount = 0;
+      var dynamicCount = 0;
+      var staticWorldbookCount = 0;
+      var staticCardCount = 0;
+      final typeCounts = <FactualEntityType, int>{
+        for (final type in FactualEntityType.values) type: 0,
+      };
+      for (final row in summaryRows) {
+        final isArchived = row.read(entitiesTable.isArchived) ?? false;
+        if (isArchived) {
+          archivedCount++;
+          continue;
+        }
+        activeCount++;
+        final type = FactualEntityType.fromString(
+          row.read(entitiesTable.type) ?? '',
+        );
+        typeCounts[type] = (typeCounts[type] ?? 0) + 1;
+        final source = FactualSource.fromString(
+          row.read(entitiesTable.source) ?? 'auto',
+        );
+        final updatedTurn = row.read(entitiesTable.updatedTurn);
+        if (source == FactualSource.auto || updatedTurn != null) {
+          dynamicCount++;
+        } else if (source == FactualSource.worldbook) {
+          staticWorldbookCount++;
+        } else if (source == FactualSource.card) {
+          staticCardCount++;
+        }
+      }
+
+      Expression<bool> buildCondition($FactualEntitiesTableTable t) {
+        var condition = t.sessionId.equals(sessionId);
+        if (!includeArchived) {
+          condition = condition & t.isArchived.equals(false);
+        }
+        if (entityType != null) {
+          condition = condition & t.type.equals(entityType.toDbString());
+        }
+        switch (sourceFilter) {
+          case 'dynamic':
+            condition = condition &
+                (t.source.equals('auto') | t.updatedTurn.isNotNull());
+          case 'auto':
+            condition = condition & t.source.equals('auto');
+          case 'worldbook':
+            condition = condition & t.source.equals('worldbook');
+          case 'card':
+            condition = condition & t.source.equals('card');
+          case 'all':
+            break;
+        }
+        final effectiveTurn = coalesce<int>([t.updatedTurn, t.createdTurn]);
+        if (updatedBeforeTurn != null) {
+          condition =
+              condition & effectiveTurn.isSmallerThanValue(updatedBeforeTurn);
+        }
+        if (updatedAfterTurn != null) {
+          condition =
+              condition & effectiveTurn.isBiggerThanValue(updatedAfterTurn);
+        }
+        return condition;
+      }
+
+      final countExpr = entitiesTable.entityId.count();
+      final totalMatchedRow = await (_database.selectOnly(entitiesTable)
+            ..addColumns([countExpr])
+            ..where(buildCondition(entitiesTable)))
+          .getSingle();
+      final totalMatched = totalMatchedRow.read(countExpr) ?? 0;
+
+      final pagedQuery = _database.select(entitiesTable)
+        ..where(buildCondition)
+        ..orderBy([
+          (t) {
+            final effectiveTurn = coalesce<int>([t.updatedTurn, t.createdTurn]);
+            return switch (sort) {
+              'recently_updated' => OrderingTerm(
+                  expression: effectiveTurn,
+                  mode: OrderingMode.desc,
+                ),
+              'created_desc' => OrderingTerm(
+                  expression: t.createdTurn,
+                  mode: OrderingMode.desc,
+                ),
+              _ => OrderingTerm(
+                  expression: t.importance,
+                  mode: OrderingMode.desc,
+                ),
+            };
+          },
+          (t) {
+            final effectiveTurn = coalesce<int>([t.updatedTurn, t.createdTurn]);
+            return switch (sort) {
+              'stale_first' => OrderingTerm(expression: effectiveTurn),
+              'recently_updated' => OrderingTerm(
+                  expression: t.updatedAt,
+                  mode: OrderingMode.desc,
+                ),
+              'importance_desc' => OrderingTerm(
+                  expression: effectiveTurn,
+                  mode: OrderingMode.desc,
+                ),
+              'created_desc' => OrderingTerm(
+                  expression: t.createdAt,
+                  mode: OrderingMode.desc,
+                ),
+              _ => OrderingTerm(expression: effectiveTurn),
+            };
+          },
+          (t) => switch (sort) {
+                'recently_updated' => OrderingTerm(
+                    expression: t.createdAt,
+                    mode: OrderingMode.desc,
+                  ),
+                'created_desc' => OrderingTerm(expression: t.entityId),
+                _ => OrderingTerm(expression: t.createdAt),
+              },
+          (t) => OrderingTerm(expression: t.entityId),
+        ])
+        ..limit(effectiveLimit, offset: effectiveOffset);
+      final pagedRows = await pagedQuery.get();
+
+      final attributeCounts = <String, int>{};
+      if (pagedRows.isNotEmpty) {
+        final pagedIds = pagedRows.map((row) => row.entityId).toList();
+        final attrTable = _database.factualAttributesTable;
+        final attrCountExpr = attrTable.attributeId.count();
+        final countRows = await (_database.selectOnly(attrTable)
+              ..addColumns([attrTable.entityId, attrCountExpr])
+              ..where(
+                attrTable.sessionId.equals(sessionId) &
+                    attrTable.entityId.isIn(pagedIds),
+              )
+              ..groupBy([attrTable.entityId]))
+            .get();
+        for (final row in countRows) {
+          final entityId = row.read(attrTable.entityId);
+          final count = row.read(attrCountExpr) ?? 0;
+          if (entityId != null) {
+            attributeCounts[entityId] = count;
+          }
+        }
+      }
+
+      return FactualEntityCatalogPage(
+        items: [
+          for (final row in pagedRows)
+            FactualEntityCatalogItem(
+              entity: _entityFromTyped(row),
+              attributeCount: attributeCounts[row.entityId] ?? 0,
+            ),
+        ],
+        totalMatched: totalMatched,
+        limit: effectiveLimit,
+        offset: effectiveOffset,
+        summary: FactualEntityCatalogSummary(
+          activeCount: activeCount,
+          archivedCount: archivedCount,
+          dynamicCount: dynamicCount,
+          staticWorldbookCount: staticWorldbookCount,
+          staticCardCount: staticCardCount,
+          typeCounts: typeCounts,
+        ),
+      );
+    });
+  }
+
+  @override
+  Future<FactualEntityType?> getEntityTypeInSession(
+    String sessionId,
+    String entityId,
+  ) async {
+    final table = _database.factualEntitiesTable;
+    final row = await (_database.selectOnly(table)
+          ..addColumns([table.type])
+          ..where(
+            table.entityId.equals(entityId) & table.sessionId.equals(sessionId),
+          ))
+        .getSingleOrNull();
+    return FactualEntityType.tryFromString(row?.read(table.type));
+  }
+
   // ==================== 实体写入 ====================
 
   @override
@@ -265,6 +522,29 @@ class FactualRepositoryImpl implements FactualRepository {
       'WHERE entity_id = ?',
       [aliases.join(' '), entityId, entityId],
     );
+  }
+
+  @override
+  Future<void> updateEntityImportance(
+    String entityId,
+    int importance,
+    int updatedTurn,
+  ) async {
+    RangeError.checkValueInInterval(importance, 1, 5, 'importance');
+    // 仅更新重要度与轮次/时间，放行 auto 与导入实体（与 updateEntityForceInject 同源）
+    final now = DateTime.now();
+    final affected = await (_database.update(_database.factualEntitiesTable)
+          ..where((t) => t.entityId.equals(entityId)))
+        .write(
+      FactualEntitiesTableCompanion(
+        importance: Value(importance),
+        updatedAt: Value(now),
+        updatedTurn: Value(updatedTurn),
+      ),
+    );
+    if (affected == 0) {
+      throw ModelNotFoundException(entityId);
+    }
   }
 
   @override
@@ -465,6 +745,154 @@ class FactualRepositoryImpl implements FactualRepository {
   }
 
   @override
+  Future<FactualMemoryChangesSnapshot> readMemoryChangesSnapshot(
+    String sessionId,
+  ) async {
+    return _database.transaction(() async {
+      final entityRows = await (_database.select(
+        _database.factualEntitiesTable,
+      )..where((t) => t.sessionId.equals(sessionId)))
+          .get();
+      final attributeRows = await (_database.select(
+        _database.factualAttributesTable,
+      )..where((t) => t.sessionId.equals(sessionId)))
+          .get();
+      final entityIds = entityRows.map((row) => row.entityId).toList();
+      final historyRows = entityIds.isEmpty
+          ? const <FactualMemoryHistoryTableData>[]
+          : await (_database.select(_database.factualMemoryHistoryTable)
+                ..where((t) => t.entityId.isIn(entityIds))
+                ..orderBy([
+                  (t) => OrderingTerm(
+                        expression: t.turnNumber,
+                        mode: OrderingMode.desc,
+                      ),
+                  (t) => OrderingTerm(
+                        expression: t.id,
+                        mode: OrderingMode.desc,
+                      ),
+                ]))
+              .get();
+      final artifactRows = await _database.customSelect(
+        'SELECT a.turn_number, a.current_variant_index, a.facts_changes, '
+        'a.reply_text, a.generated_text, a.event_summary, a.created_at, '
+        'v.content AS selected_variant_content, '
+        'v.facts_changes AS selected_variant_facts_changes, '
+        'v.event_summary AS selected_variant_event_summary '
+        'FROM intermediate_round_artifacts a '
+        'LEFT JOIN message_variants v ON v.session_id = a.session_id '
+        'AND v.turn_number = a.turn_number '
+        'AND v.variant_index = a.current_variant_index '
+        'WHERE a.session_id = ? ORDER BY a.turn_number, a.id',
+        variables: [Variable.withString(sessionId)],
+      ).get();
+      final messageRows = await _database.customSelect(
+        'SELECT id, message_id, role, content, parent_user_msg_id, branch_index, '
+        'is_summary, created_at FROM chat_messages WHERE session_id = ? '
+        'ORDER BY created_at, id',
+        variables: [Variable.withString(sessionId)],
+      ).get();
+      final factsChangesByTurn = <int, String>{};
+      final variantsByTurn = <int, int?>{};
+      var storyRoundsByTurn = <int, FactualMemoryStoryRound>{};
+      final revisionParts = <Object?>[];
+      final userTurnById = <String, int>{};
+      final userTexts = <int, String>{};
+      final assistantTexts = <int, String>{};
+      var currentTurn = 0;
+      for (final row in messageRows) {
+        if (row.read<bool>('is_summary')) continue;
+        final role = row.read<String>('role');
+        if (role == 'user') {
+          currentTurn++;
+          final messageId = row.read<String>('message_id');
+          userTurnById[messageId] = currentTurn;
+          final content = row.readNullable<String>('content');
+          if (content != null) userTexts[currentTurn] = content;
+        } else if (role == 'assistant') {
+          final content = row.readNullable<String>('content');
+          final turn =
+              userTurnById[row.readNullable<String>('parent_user_msg_id')] ??
+                  currentTurn;
+          if (content != null && turn > 0) assistantTexts[turn] = content;
+        }
+      }
+      for (final row in artifactRows) {
+        final turn = row.read<int>('turn_number');
+        final selectedFactsChanges =
+            row.readNullable<String>('selected_variant_facts_changes');
+        final factsChanges = selectedFactsChanges ??
+            row.readNullable<String>('facts_changes') ??
+            '[]';
+        factsChangesByTurn[turn] = factsChanges;
+        variantsByTurn[turn] = row.readNullable<int>('current_variant_index');
+        final generatedText = row.readNullable<String>('generated_text');
+        final replyText = row.readNullable<String>('reply_text');
+        final assistantText = assistantTexts[turn];
+        storyRoundsByTurn[turn] = FactualMemoryStoryRound(
+          turnNumber: turn,
+          createdAt: DateTime.fromMillisecondsSinceEpoch(
+            row.read<int>('created_at'),
+          ),
+          narrativeText: assistantText ??
+              row.readNullable<String>('selected_variant_content') ??
+              generatedText,
+          replyText: replyText == generatedText
+              ? assistantText ?? replyText
+              : replyText,
+          eventSummaryText: row.readNullable<String>(
+                'selected_variant_event_summary',
+              ) ??
+              row.readNullable<String>('event_summary'),
+        );
+        revisionParts.add([
+          turn,
+          row.readNullable<int>('current_variant_index'),
+          factsChanges,
+          row.readNullable<String>('reply_text'),
+          row.readNullable<String>('generated_text'),
+          row.readNullable<String>('selected_variant_content'),
+          row.readNullable<String>('event_summary'),
+          row.readNullable<String>('selected_variant_event_summary'),
+        ]);
+      }
+      if (storyRoundsByTurn.isNotEmpty && messageRows.isNotEmpty) {
+        storyRoundsByTurn = {
+          for (final entry in storyRoundsByTurn.entries)
+            entry.key: FactualMemoryStoryRound(
+              turnNumber: entry.value.turnNumber,
+              createdAt: entry.value.createdAt,
+              userText: userTexts[entry.key],
+              narrativeText: entry.value.narrativeText,
+              replyText: entry.value.replyText,
+              eventSummaryText: entry.value.eventSummaryText,
+            ),
+        };
+      }
+      for (final row in messageRows) {
+        revisionParts.add([
+          row.read<String>('message_id'),
+          row.read<String>('role'),
+          row.readNullable<String>('content'),
+          row.readNullable<String>('parent_user_msg_id'),
+          row.read<int>('branch_index'),
+          row.read<bool>('is_summary'),
+          row.read<DateTime>('created_at').millisecondsSinceEpoch,
+        ]);
+      }
+      return FactualMemoryChangesSnapshot(
+        entities: entityRows.map(_entityFromTyped).toList(),
+        attributes: attributeRows.map(_attributeFromTyped).toList(),
+        history: historyRows.map(_historyFromTyped).toList(),
+        currentFactsChangesByTurn: factsChangesByTurn,
+        currentVariantByTurn: variantsByTurn,
+        storyRoundsByTurn: storyRoundsByTurn,
+        storyRevision: jsonEncode(revisionParts),
+      );
+    });
+  }
+
+  @override
   Future<int> countRecentUpdates(
     String entityId, {
     required int fromTurn,
@@ -518,6 +946,25 @@ class FactualRepositoryImpl implements FactualRepository {
     required String sessionId,
     required int fromTurn,
   }) async {
+    // 旧流水可能把另一个对象的属性当作回滚目标。
+    // 在任何删除前核对实际外键，保留整份现场供用户恢复。
+    final mismatch = await _database.customSelect(
+      'SELECT 1 FROM factual_entities e JOIN factual_attributes a '
+      'ON a.entity_id = e.entity_id WHERE e.session_id = ? '
+      'AND a.session_id <> e.session_id '
+      'UNION ALL SELECT 1 FROM factual_memory_history h '
+      'JOIN factual_entities e ON e.entity_id = h.entity_id '
+      'JOIN factual_attributes a ON a.attribute_id = h.attribute_id '
+      'WHERE e.session_id = ? AND h.turn_number >= ? '
+      'AND (a.session_id <> e.session_id OR a.entity_id <> e.entity_id) LIMIT 1',
+      variables: [
+        Variable.withString(sessionId),
+        Variable.withString(sessionId),
+        Variable.withInt(fromTurn),
+      ],
+    ).get();
+    if (mismatch.isNotEmpty) throw const FactTargetMismatch();
+
     // 1. 收集待删实体 IDs（createdTurn >= fromTurn）
     final entitiesToDelete = await (_database.select(
       _database.factualEntitiesTable,
@@ -587,7 +1034,14 @@ class FactualRepositoryImpl implements FactualRepository {
 
   @override
   Future<T> runInTransaction<T>(Future<T> Function() action) {
-    return _database.transaction(action);
+    return _database
+        .transaction(action, requireNew: true)
+        .onError<CouldNotRollBackException>(
+          (_, stackTrace) => Error.throwWithStackTrace(
+            const SavepointRollbackException(),
+            stackTrace,
+          ),
+        );
   }
 
   // ==================== FTS5 索引（世界书词条，DOC-15 §7.3）====================
@@ -648,6 +1102,10 @@ class FactualRepositoryImpl implements FactualRepository {
     );
   }
 
+  /// searchWorldFacts 两通道候选安全上限（防御值）：会话内世界书词条
+  /// 量级有界，候选全取后按合并序截断；上限只防异常膨胀数据拖垮单次检索。
+  static const int _kWorldFactsCandidateCap = 500;
+
   @override
   Future<List<FactualEntity>> searchWorldFacts(
     String sessionId,
@@ -661,14 +1119,24 @@ class FactualRepositoryImpl implements FactualRepository {
     // 短词走子串匹配，长词照旧 FTS，两路合并去重。
     // 2026-09-09：切词收口到 MemoryQuery——此前整串当一个短语
     //（"图书馆 值班员"要求字面连续出现），空格分隔的关键词列表必空。
+    //
+    // 检索顺序/数量/过滤收口：两通道候选全取（各受
+    // [_kWorldFactsCandidateCap] 上限约束），合并候选序 = FTS rank 序
+    // 在前、LIKE 命中按（importance DESC, primary_name ASC）稳定序去重
+    // 追加（短词无相关性分数，不伪造分数）；归档/停用/会话过滤在候选
+    // 序上执行，被过滤候选不占 limit 名额，沿候选序补足后 take(limit)。
+    // 此前 FTS/LIKE 各取 limit 条、Set 并集丢 rank 序、回表无 ORDER BY
+    //——limit=1 且最优项归档时返回空（合格后续候选被名额挤掉）、
+    // 长短词混合时可能返回 2 条。
+    if (limit <= 0) return const [];
     final cleaned = MemoryQuery.tokenizeAll(terms);
     if (cleaned.isEmpty) return const [];
 
     final ftsTerms = cleaned.where((t) => !MemoryQuery.isShortTerm(t)).toList();
     final shortTerms = cleaned.where(MemoryQuery.isShortTerm).toList();
 
-    final entityIds = <String>{};
-
+    // FTS 通道：保留 rank 序，候选全取（≤ 上限），保序去重
+    final ftsIds = <String>[];
     if (ftsTerms.isNotEmpty) {
       final expression = MemoryQuery.buildMatchExpression(ftsTerms);
       if (expression.isNotEmpty) {
@@ -679,16 +1147,21 @@ class FactualRepositoryImpl implements FactualRepository {
           variables: [
             Variable.withString(expression),
             Variable.withString(sessionId),
-            Variable.withInt(limit),
+            Variable.withInt(_kWorldFactsCandidateCap),
           ],
         ).get();
-        entityIds.addAll(rows.map((r) => r.read<String>('entity_id')));
+        for (final id in rows.map((r) => r.read<String>('entity_id'))) {
+          if (!ftsIds.contains(id)) ftsIds.add(id);
+        }
       }
     }
 
+    // LIKE 通道：候选全取（≤ 上限），稳定序在合并阶段按实体表列补齐
+    //（FTS 行不带 importance）。LIKE 逐词 OR 扫描（FTS5 虚拟表支持列值
+    // 扫描；数据量为会话级词条量级，全扫开销可接受）。转义 LIKE 通配符
+    // 防注入式误匹配。
+    final likeIds = <String>{};
     if (shortTerms.isNotEmpty) {
-      // LIKE 逐词 OR 扫描（FTS5 虚拟表支持列值扫描；数据量为会话级
-      // 词条量级，全扫开销可接受）。转义 LIKE 通配符防注入式误匹配。
       final conditions = <String>[];
       final params = <Variable>[];
       for (final term in shortTerms) {
@@ -712,21 +1185,29 @@ class FactualRepositoryImpl implements FactualRepository {
         variables: [
           Variable.withString(sessionId),
           ...params,
-          Variable.withInt(limit),
+          Variable.withInt(_kWorldFactsCandidateCap),
         ],
       ).get();
-      entityIds.addAll(likeRows.map((r) => r.read<String>('entity_id')));
+      likeIds.addAll(likeRows.map((r) => r.read<String>('entity_id')));
     }
 
-    if (entityIds.isEmpty) return const [];
+    final ftsIdSet = ftsIds.toSet();
+    final candidateIds = [
+      ...ftsIds,
+      ...likeIds.where((id) => !ftsIdSet.contains(id)),
+    ];
+    if (candidateIds.isEmpty) return const [];
 
-    final entities = await (_database.select(_database.factualEntitiesTable)
+    // 回表：过滤条件不变（FF13 会话过滤 + 归档剔除 + 可选停用剔除）；
+    // 顺序不靠 SQL（无 ORDER BY 也不再丢失相关性序），按候选序在
+    // Dart 侧重建映射。
+    final rows = await (_database.select(_database.factualEntitiesTable)
           ..where(
             (t) {
               // FF13（2026-09-09 审查）：最终实体查询补 session 过滤——
               // 此前正确性完全依赖 FTS 行 session_id，一旦索引行写错
               //（导入/维护路径）就会跨会话泄漏实体。
-              var condition = t.entityId.isIn(entityIds.toList()) &
+              var condition = t.entityId.isIn(candidateIds) &
                   t.sessionId.equals(sessionId) &
                   t.isArchived.equals(false);
               // （批 J-b 漏桶收口）：注入面剔除停用词条——FTS/LIKE
@@ -738,19 +1219,39 @@ class FactualRepositoryImpl implements FactualRepository {
             },
           ))
         .get();
-    return entities.map(_entityFromTyped).toList();
+    final rowById = {for (final row in rows) row.entityId: row};
+
+    // LIKE 独有命中按（importance DESC, primary_name ASC）稳定序——
+    // importance 在实体表，排序只能在回表之后做
+    final likeOnly = [
+      for (final id in likeIds)
+        if (!ftsIdSet.contains(id) && rowById.containsKey(id)) id,
+    ]..sort((a, b) {
+        final left = rowById[a]!;
+        final right = rowById[b]!;
+        final byImportance = right.importance.compareTo(left.importance);
+        return byImportance != 0
+            ? byImportance
+            : left.primaryName.compareTo(right.primaryName);
+      });
+
+    // 沿候选序取数：被过滤（归档/停用/跨会话/孤儿索引行）候选跳过
+    // 不占名额，继续补足到 limit 或候选耗尽
+    final result = <FactualEntity>[];
+    for (final id in [...ftsIds, ...likeOnly]) {
+      final row = rowById[id];
+      if (row == null) continue;
+      result.add(_entityFromTyped(row));
+      if (result.length >= limit) break;
+    }
+    return result;
   }
 
   /// 回滚非待删实体在 [fromTurn] 及之后的变更
   ///
-  /// 步骤：
-  /// 1. 读取这些实体在 turnNumber >= [fromTurn] 的所有历史记录
-  /// 2. 按 (entityId, attributeId) 分组属性类操作
-  /// 3. 对每个受影响属性，查询 turnNumber < [fromTurn] 的最新历史记录
-  ///    - 若存在：把属性值恢复为该历史记录的 newValue
-  ///    - 若不存在：说明属性是在 [fromTurn] 及之后创建的，直接删除该属性
-  /// 4. 对 add_alias 操作：从当前 aliases 列表中移除这些轮次添加的别名
-  /// 5. 对 archive_entity 操作：把 isArchived 恢复为 false
+  /// 属性恢复到最早被撤销记录的旧值。缺旧值的历史格式可以回放此前
+  /// 的存留记录。两处都没有旧值证据时，撤销新增的属性行。
+  /// 同时移除这些轮次添加的别名，并撤销归档。
   Future<void> _rollbackSurvivingEntities({
     required String sessionId,
     required int fromTurn,
@@ -775,16 +1276,24 @@ class FactualRepositoryImpl implements FactualRepository {
     // 读取这些实体在 fromTurn 及之后的历史记录
     final historiesToRollback = await (_database.select(
       _database.factualMemoryHistoryTable,
-    )..where(
+    )
+          ..where(
             (t) =>
                 t.turnNumber.isBiggerOrEqualValue(fromTurn) &
                 t.entityId.isIn(survivingIds.toList()),
-          ))
+          )
+          // 同轮的多个变更可能同秒写入，以自增主键还原写入顺序。
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.turnNumber),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .get();
     if (historiesToRollback.isEmpty) return;
 
-    // 按 entityId + attributeId 分组属性类操作（attributeId 非空）
-    final affectedAttributeKeys = <({String entityId, String attributeId})>{};
+    final firstChangeByAttribute = <({String entityId, String attributeId}),
+        FactualMemoryHistoryTableData>{};
+    final firstImportanceChangeByEntity =
+        <String, FactualMemoryHistoryTableData>{};
     final aliasesToRemove = <String, List<String>>{};
     final entitiesToUnarchive = <String>{};
 
@@ -794,9 +1303,11 @@ class FactualRepositoryImpl implements FactualRepository {
         case FactAction.updateAttr:
         case FactAction.appendList:
         case FactAction.removeFromList:
-          if (history.attributeId != null) {
-            affectedAttributeKeys.add(
-              (entityId: history.entityId, attributeId: history.attributeId!),
+          final attributeId = history.attributeId;
+          if (attributeId != null) {
+            firstChangeByAttribute.putIfAbsent(
+              (entityId: history.entityId, attributeId: attributeId),
+              () => history,
             );
           }
         case FactAction.addAlias:
@@ -812,6 +1323,11 @@ class FactualRepositoryImpl implements FactualRepository {
           }
         case FactAction.archiveEntity:
           entitiesToUnarchive.add(history.entityId);
+        case FactAction.setImportance:
+          firstImportanceChangeByEntity.putIfAbsent(
+            history.entityId,
+            () => history,
+          );
         case FactAction.createEntity:
           // create_entity 的实体已在步骤 1 删除，这里不会遇到
           break;
@@ -819,7 +1335,8 @@ class FactualRepositoryImpl implements FactualRepository {
     }
 
     // 回滚属性
-    for (final key in affectedAttributeKeys) {
+    for (final entry in firstChangeByAttribute.entries) {
+      final key = entry.key;
       // 查询该属性在 fromTurn 之前的最新历史记录
       final previousHistory = await (_database.select(
         _database.factualMemoryHistoryTable,
@@ -836,56 +1353,57 @@ class FactualRepositoryImpl implements FactualRepository {
                   ]),
             )
             ..orderBy([
-              (t) => OrderingTerm(
-                    expression: t.turnNumber,
-                    mode: OrderingMode.desc,
-                  ),
+              (t) => OrderingTerm.desc(t.turnNumber),
+              (t) => OrderingTerm.desc(t.id),
             ])
             ..limit(1))
           .getSingleOrNull();
 
+      String? previousValue;
       if (previousHistory != null) {
-        // 恢复到 fromTurn 前的值：
-        // - update_attr 的 newValue 是"该次更新后的全量值"，直接写回；
-        // - append_list / remove_from_list 的 newValue 只存单个追加/移除项，
-        //   全量列表在 oldValue——需按行内语义重放出该行应用后的列表，
-        //   否则 list 属性会被写坏成裸字符串、listValue() 解析失败退化为
-        //   空表（归并把大量 append_list 集中到一轮，重生成回滚必经此路）。
-        final previousAction = FactAction.fromString(previousHistory.action);
-        final String restoreValue;
-        switch (previousAction) {
-          case FactAction.appendList:
-            restoreValue = _replayAppendValue(
+        // 列表的 newValue 仅是增删项，需与旧值合成该条记录之后的全量。
+        previousValue = switch (FactAction.fromString(previousHistory.action)) {
+          FactAction.appendList => _replayAppendValue(
               previousHistory.oldValue,
               previousHistory.newValue,
-            );
-          case FactAction.removeFromList:
-            restoreValue = _replayRemoveValue(
+            ),
+          FactAction.removeFromList => _replayRemoveValue(
               previousHistory.oldValue,
               previousHistory.newValue,
-            );
-          case FactAction.updateAttr:
-          case FactAction.createEntity:
-          case FactAction.addAlias:
-          case FactAction.archiveEntity:
-            restoreValue = previousHistory.newValue ?? '';
-        }
-        await (_database.update(_database.factualAttributesTable)
-              ..where((t) => t.attributeId.equals(key.attributeId)))
-            .write(
-          FactualAttributesTableCompanion(
-            value: Value(restoreValue),
-            updatedAt: Value(DateTime.now()),
-            updatedTurn: Value(previousHistory.turnNumber),
-            updateReason: const Value('rolled back to pre-turn state'),
-          ),
-        );
-      } else {
-        // 该属性是在 fromTurn 及之后创建的，直接删除
-        await (_database.delete(_database.factualAttributesTable)
-              ..where((t) => t.attributeId.equals(key.attributeId)))
-            .go();
+            ),
+          _ => previousHistory.newValue ?? '',
+        };
       }
+      // 随实体创建和手动改值可能没有对应的属性流水。
+      final restoreValue = entry.value.oldValue ?? previousValue;
+      if (restoreValue == null) {
+        await (_database.delete(_database.factualAttributesTable)
+              ..where(
+                (t) =>
+                    t.sessionId.equals(sessionId) &
+                    t.entityId.equals(key.entityId) &
+                    t.attributeId.equals(key.attributeId),
+              ))
+            .go();
+        continue;
+      }
+      await (_database.update(_database.factualAttributesTable)
+            ..where(
+              (t) =>
+                  t.sessionId.equals(sessionId) &
+                  t.entityId.equals(key.entityId) &
+                  t.attributeId.equals(key.attributeId),
+            ))
+          .write(
+        FactualAttributesTableCompanion(
+          value: Value(restoreValue),
+          updatedAt: Value(DateTime.now()),
+          updatedTurn: Value(
+            restoreValue == previousValue ? previousHistory?.turnNumber : null,
+          ),
+          updateReason: const Value('rolled back to pre-turn state'),
+        ),
+      );
     }
 
     // 回滚别名
@@ -925,11 +1443,67 @@ class FactualRepositoryImpl implements FactualRepository {
       );
     }
 
+    // 回滚重要度：恢复 fromTurn 前最近一次 set_importance 新值或首个回滚条目的 oldValue
+    for (final entry in firstImportanceChangeByEntity.entries) {
+      final entityId = entry.key;
+      final previousSetImportance = await (_database.select(
+        _database.factualMemoryHistoryTable,
+      )
+            ..where(
+              (t) =>
+                  t.entityId.equals(entityId) &
+                  t.turnNumber.isSmallerThanValue(fromTurn) &
+                  t.action.equals('set_importance'),
+            )
+            ..orderBy([
+              (t) => OrderingTerm.desc(t.turnNumber),
+              (t) => OrderingTerm.desc(t.id),
+            ])
+            ..limit(1))
+          .getSingleOrNull();
+      final previousImportance = int.tryParse(
+        previousSetImportance?.newValue ?? '',
+      );
+      final restoredImportance =
+          int.tryParse(entry.value.oldValue ?? '') ?? previousImportance;
+      if (restoredImportance == null) continue;
+
+      final latestPriorEntityHistory = await (_database.select(
+        _database.factualMemoryHistoryTable,
+      )
+            ..where(
+              (t) =>
+                  t.entityId.equals(entityId) &
+                  t.turnNumber.isSmallerThanValue(fromTurn) &
+                  t.action.isIn(
+                    const ['set_importance', 'add_alias', 'archive_entity'],
+                  ),
+            )
+            ..orderBy([
+              (t) => OrderingTerm.desc(t.turnNumber),
+              (t) => OrderingTerm.desc(t.id),
+            ])
+            ..limit(1))
+          .getSingleOrNull();
+      final restoredUpdatedTurn = latestPriorEntityHistory?.turnNumber;
+      await (_database.update(_database.factualEntitiesTable)
+            ..where((t) => t.entityId.equals(entityId)))
+          .write(
+        FactualEntitiesTableCompanion(
+          importance: Value(restoredImportance),
+          updatedAt: Value(
+            restoredUpdatedTurn != null ? DateTime.now() : null,
+          ),
+          updatedTurn: Value(restoredUpdatedTurn),
+        ),
+      );
+    }
+
     // 属性回滚（改值恢复/整行删除）可能
     // 触碰世界书演变 description 行——按实体重建 factual_fts，防已回滚
     // 文本残留索引（幽灵召回）。内部对非 worldbook 实体仅删索引行。
     for (final entityId
-        in affectedAttributeKeys.map((k) => k.entityId).toSet()) {
+        in firstChangeByAttribute.keys.map((k) => k.entityId).toSet()) {
       await rebuildEntityFts(entityId);
     }
   }
@@ -1157,6 +1731,7 @@ class FactualRepositoryImpl implements FactualRepository {
   FactualMemoryHistory _historyFromTyped(FactualMemoryHistoryTableData row) {
     return FactualMemoryHistory(
       entityId: row.entityId,
+      historyId: row.id,
       attributeId: row.attributeId,
       action: FactAction.fromString(row.action),
       oldValue: row.oldValue,

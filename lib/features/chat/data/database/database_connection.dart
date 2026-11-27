@@ -14,10 +14,12 @@ import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
+import 'package:lmstory/core/storage/native_database_paths.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart'
     show AppDatabase;
-import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+
+export 'package:lmstory/core/storage/native_database_paths.dart';
 
 /// 创建数据库执行器（原生平台）
 ///
@@ -25,7 +27,12 @@ import 'package:path_provider/path_provider.dart';
 /// 实际打开操作延迟到首次查询时执行。
 Future<QueryExecutor> createDatabaseExecutor() async {
   final dbFolder = await getApplicationDocumentsDirectory();
-  final file = File(p.join(dbFolder.path, 'lmstory.db'));
+  final (file, _) = await activeNativeDatabase(dbFolder);
+  return openNativeDatabase(file);
+}
+
+Future<QueryExecutor> openNativeDatabase(File file) async {
+  await validateNativeDatabaseHeader(file);
   return NativeDatabase.createInBackground(
     file,
     setup: (rawDb) {
@@ -42,4 +49,36 @@ Future<QueryExecutor> createDatabaseExecutor() async {
         ..execute('PRAGMA journal_size_limit = 8388608');
     },
   );
+}
+
+// SQLite can remove sidecars when closing a file with an invalid header.
+// Inspect the signature before opening the file for writing.
+Future<void> validateNativeDatabaseHeader(File file) async {
+  bool hasSidecars() =>
+      File('${file.path}-wal').existsSync() ||
+      File('${file.path}-shm').existsSync() ||
+      File('${file.path}-journal').existsSync();
+
+  if (!file.existsSync()) {
+    if (hasSidecars()) {
+      throw FileSystemException(
+        'Database sidecars have no main file',
+        file.path,
+      );
+    }
+    return;
+  }
+  const signature = 'SQLite format 3\u0000';
+  final handle = await file.open();
+  final List<int> header;
+  try {
+    header = await handle.read(signature.length);
+  } finally {
+    await handle.close();
+  }
+  if (String.fromCharCodes(header) == signature) return;
+
+  // SQLite can initialize a zero-byte database left by an interrupted create.
+  if (header.isEmpty && !hasSidecars()) return;
+  throw FileSystemException('Invalid SQLite database header', file.path);
 }

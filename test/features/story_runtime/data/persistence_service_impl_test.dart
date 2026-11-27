@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:drift/drift.dart' show Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/vector/vector_engine.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/chat/data/repositories/chat_repository_impl.dart';
@@ -11,8 +12,10 @@ import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/story_anchor.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/memory/data/repositories/experience_repository_impl.dart';
+import 'package:lmstory/features/memory/data/repositories/factual_repository_impl.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
+import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
 import 'package:lmstory/features/memory/domain/entities/scored_memory.dart';
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
 import 'package:lmstory/features/memory/domain/services/fact_applier.dart';
@@ -48,6 +51,22 @@ void main() {
   });
 
   tearDown(() async => db.close());
+
+  Future<List<ExperientialMemory>> seedConsolidationSources(
+    String sessionId,
+  ) async {
+    for (var turn = 1; turn <= 2; turn++) {
+      await expRepo.appendExperience(
+        sessionId: sessionId,
+        summary: 'Source $turn',
+        importance: 2,
+        tags: const ['original'],
+        turnNumber: turn,
+        indexForRetrieval: false,
+      );
+    }
+    return expRepo.getUnindexedExperiences(sessionId, limit: 2);
+  }
 
   /// 构造测试用会话 + 用户消息 + 助手消息 + 事件摘要
   Future<
@@ -149,6 +168,70 @@ void main() {
   }
 
   group('persistRound', () {
+    test('单条事实在写流水时失败，人物和初始属性一并撤销，其余事实正常保存', () async {
+      final round = await setupRound();
+      final facts = FactualRepositoryImpl(database: db);
+      final serviceWithFacts = StoryPersistenceServiceImpl(
+        database: db,
+        chatRepository: chatRepo,
+        experienceRepository: expRepo,
+        factApplier: FactApplier(repository: facts),
+      );
+      await db.customStatement(
+        'CREATE TEMP TRIGGER abort_middle_history BEFORE INSERT ON factual_memory_history '
+        "WHEN NEW.new_value = '药师' BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+      );
+      await serviceWithFacts.persistRound(
+        userMessage: round.userMsg,
+        assistantMessage: round.assistantMsg,
+        eventSummary: round.summary,
+        embedding: null,
+        artifacts: StoryRoundArtifacts(
+          sessionId: round.sessionId,
+          turnNumber: 1,
+          createdAt: DateTime(2026),
+        ),
+        factsDeltas: [
+          for (final name in ['向导', '药师', '掌柜'])
+            FactsDelta(
+              action: FactAction.createEntity,
+              entityType: 'character',
+              primaryName: name,
+              attrKey: 'background',
+              value: '随队出发',
+              confidence: 5,
+            ),
+        ],
+        factualConfig: const FactualConfig(),
+      );
+      for (final name in ['向导', '掌柜']) {
+        final entity = (await facts.findByName(round.sessionId, [name])).single;
+        expect((await facts.getHistory(entity.entityId)).single.newValue, name);
+        expect(
+          (await facts.getAttributesByKey(entity.entityId, 'background'))
+              .single
+              .value,
+          '随队出发',
+        );
+      }
+      expect(await facts.findByName(round.sessionId, ['药师']), isEmpty);
+      final attributes = await db.customSelect(
+        'SELECT * FROM factual_attributes WHERE session_id = ?',
+        variables: [Variable.withString(round.sessionId)],
+      ).get();
+      expect(attributes, hasLength(2));
+      expect(
+        (await chatRepo.getMessages(round.sessionId)).last.content,
+        round.assistantMsg.content,
+      );
+      expect(
+        (await expRepo.getRecentExperiences(round.sessionId, limit: 5))
+            .single
+            .summary,
+        round.summary.summary,
+      );
+    });
+
     test('1. 成功：5 步全部写入（消息+记忆+FTS+会话元数据）', () async {
       final r = await setupRound();
 
@@ -514,6 +597,84 @@ void main() {
       final messages = await chatRepo.getMessages(r.sessionId);
       expect(messages.length, 1);
       expect(messages[0].role, 'user');
+    });
+  });
+
+  group('persistConsolidatedMemories', () {
+    const records = [
+      ConsolidatedMemoryRecord(
+        summary: 'Unwanted synthesis',
+        tags: [],
+        importance: 4,
+        turnNumber: 2,
+      ),
+    ];
+
+    test('源经历的标签改变后丢弃整批提炼', () async {
+      final r = await setupRound();
+      final sources = await seedConsolidationSources(r.sessionId);
+      final firstId = sources.first.memoryId;
+      await expRepo.updateExperience(
+        memoryId: firstId,
+        sessionId: r.sessionId,
+        tags: const ['revised'],
+      );
+
+      final persisted = await service.persistConsolidatedMemories(
+        sessionId: r.sessionId,
+        records: records,
+        originalMemories: sources,
+      );
+
+      final remaining = await expRepo.getAllExperiences(r.sessionId);
+      final indexed = await db.customSelect(
+        'SELECT summary FROM memories_fts WHERE session_id = ?',
+        variables: [Variable.withString(r.sessionId)],
+      ).get();
+      expect(
+        [
+          remaining.map((memory) => memory.summary).toList(),
+          indexed.map((row) => row.read<String>('summary')).toList(),
+        ],
+        [
+          unorderedEquals(['Source 1', 'Source 2']),
+          isEmpty,
+        ],
+      );
+      expect(
+        remaining.singleWhere((memory) => memory.memoryId == firstId).tags,
+        ['revised'],
+      );
+      expect(persisted, isFalse);
+    });
+
+    test('源经历已被索引时保留源经历和已有全文索引', () async {
+      final r = await setupRound();
+      final sources = await seedConsolidationSources(r.sessionId);
+      final source = sources.first;
+      await expRepo.insertFtsIndex(
+        memoryId: source.memoryId,
+        sessionId: r.sessionId,
+        summary: source.summary,
+      );
+
+      final persisted = await service.persistConsolidatedMemories(
+        sessionId: r.sessionId,
+        records: records,
+        originalMemories: sources,
+      );
+
+      expect(persisted, isFalse);
+      final remaining = await expRepo.getAllExperiences(r.sessionId);
+      expect(
+        remaining.map((memory) => memory.memoryId),
+        unorderedEquals(sources.map((memory) => memory.memoryId)),
+      );
+      final indexed = await db.customSelect(
+        'SELECT memory_id FROM memories_fts WHERE session_id = ?',
+        variables: [Variable.withString(r.sessionId)],
+      ).get();
+      expect(indexed.single.read<String>('memory_id'), source.memoryId);
     });
   });
 
@@ -1704,23 +1865,30 @@ void main() {
       expect(await macroFtsCount(row.memoryId), 1);
     });
 
-    test('C4. persistConsolidatedMemories 对照组：合并记忆向量照常落库', () async {
+    test('提炼替换原经历并写入合并记忆的向量与全文索引', () async {
       final r = await setupRound();
+      final sources = await seedConsolidationSources(r.sessionId);
 
-      await service.persistConsolidatedMemories(
+      final persisted = await service.persistConsolidatedMemories(
         sessionId: r.sessionId,
         records: [
           ConsolidatedMemoryRecord(
             summary: '合并后的记忆',
             tags: const ['合并'],
             importance: 5,
-            turnNumber: 1,
+            turnNumber: 2,
             embedding: fakeMacroVector(),
           ),
         ],
-        originalMemoryIds: const [],
+        originalMemories: sources,
       );
 
+      expect(persisted, isTrue);
+      final remaining = await expRepo.getAllExperiences(r.sessionId);
+      final synthesized = remaining.single;
+      expect(synthesized.summary, '合并后的记忆');
+      expect(synthesized.turnNumber, 2);
+      expect(await macroFtsCount(synthesized.memoryId), 1);
       final rows = await db.customSelect(
         'SELECT has_embedding, embedding, embedding_dimensions '
         'FROM experiential_memories WHERE session_id = ? '
@@ -1854,6 +2022,7 @@ class _FailingExperienceRepository implements ExperienceRepository {
     String? extra,
     bool indexForRetrieval = true,
     String source = 'auto',
+    bool hasVerifiedSourceTurn = false,
   }) async {
     throw Exception('Simulated append failure');
   }

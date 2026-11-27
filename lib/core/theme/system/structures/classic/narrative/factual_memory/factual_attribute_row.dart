@@ -7,7 +7,7 @@ import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
-import 'package:lmstory/features/memory/domain/services/fact_applier.dart';
+import 'package:lmstory/i18n/factual_labels.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 // 从 factual_memory_tab.dart 拆出（原 _AttributeRow，逐字符搬运，
@@ -71,7 +71,8 @@ class FactualAttributeRow extends StatelessWidget {
                   children: [
                     Flexible(
                       child: Text(
-                        AttributeSchema.labelFor(
+                        factualAttributeLabel(
+                              t,
                               entityType,
                               attribute.attrKey,
                             ) ??

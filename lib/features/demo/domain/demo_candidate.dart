@@ -6,7 +6,7 @@
 ///
 /// 候选与包的对账契约：
 /// - `locale` == 包 `manifest.locale`；
-/// - `sourceModelId` == 包 `manifest.source.textModel`（来源真实模型）；
+/// - `sourceModelId` == 包 `manifest.source.textModel`（采集的模型或本地样例标识）；
 /// - `packSha256` == 包文件字节 SHA-256（内容身份锚，防资产漂移）；
 /// - `virtualModelId` 为演示命名空间内的虚拟模型 id（`demo-narrator-*`），
 ///   仅存在于演示库虚拟供应商缓存清单中，绝不代表真实供应商配置。
@@ -83,7 +83,7 @@ class DemoCandidate {
   /// 稳定候选 id（目录内唯一；持久身份引用它）
   final String id;
 
-  /// 来源真实模型 id（对账包 `manifest.source.textModel`）
+  /// 来源标识（对账包 `manifest.source.textModel`）
   final String sourceModelId;
 
   /// 演示命名空间虚拟模型 id（播种进演示库缓存清单；交接时清理）
@@ -98,7 +98,7 @@ class DemoCandidate {
   /// 包文件字节 SHA-256（null=不校验字节，仅旧目录缺省兜底路径使用）
   final String? packSha256;
 
-  /// 是否默认候选（原 glm-5.3 官方包）
+  /// 是否显式标为默认。当前语言没有该标记时按目录顺序选用。
   final bool isDefault;
 
   final String displayNameZh;

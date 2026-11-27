@@ -13,11 +13,13 @@ import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/chat/data/datasources/llm_remote_datasource.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
+import 'package:lmstory/features/chat/domain/entities/session_phase_models.dart';
 import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
 import 'package:lmstory/features/intermediate/presentation/controllers/intermediate_chat_controller.dart';
 import 'package:lmstory/features/intermediate/presentation/pages/intermediate_chat_page.dart';
 import 'package:lmstory/features/intermediate/presentation/widgets/intermediate_session_settings_sheet.dart';
+import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
 import 'package:lmstory/features/memory/domain/services/embedding_service.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
@@ -31,6 +33,7 @@ import 'package:lmstory/features/templates/domain/repositories/template_reposito
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../../helpers/fake_factual_repository.dart';
 import '../../../../test_helpers/stub_failure_log_repository.dart';
 
 /// IntermediateSessionSettingsSheet Widget 测试（2026-07-18 重构后）
@@ -48,8 +51,12 @@ import '../../../../test_helpers/stub_failure_log_repository.dart';
 // ── Fakes / Stubs ─────────────────────────────────────────────────────
 
 class _FakeApiPresetRepository implements ApiPresetRepository {
+  _FakeApiPresetRepository([this.presets = const []]);
+
+  final List<ApiPreset> presets;
+
   @override
-  Future<List<ApiPreset>> getAllPresets() async => [];
+  Future<List<ApiPreset>> getAllPresets() async => presets;
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>
@@ -92,6 +99,18 @@ class _StubHttpClient implements HttpClient {
 
 class _StubExperienceRepository implements ExperienceRepository {
   @override
+  Future<int?> getLatestEmbeddingDimensions(String sessionId) async => null;
+
+  @override
+  Future<List<ExperientialMemory>> getMemoriesWithoutEmbedding(
+    String sessionId, {
+    int limit = 500,
+    int? minImportance,
+    int? expectedDimensions,
+  }) async =>
+      [];
+
+  @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('Not implemented: ${invocation.memberName}');
 }
@@ -115,12 +134,14 @@ class _StubChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = ChatMode.chat,
     String? modelId,
     String? presetId,
   }) async {
     return ChatSession(
-      sessionId: 'materialized-${DateTime.now().microsecondsSinceEpoch}',
+      sessionId:
+          sessionId ?? 'materialized-${DateTime.now().microsecondsSinceEpoch}',
       title: title,
       mode: mode,
       modelId: modelId,
@@ -167,6 +188,7 @@ Future<ProviderContainer> _pumpSheet(
   WidgetTester tester,
   ChatSession session, {
   ConfigLevel level = ConfigLevel.advanced,
+  List<ApiPreset> presets = const [],
 }) async {
   // Sheet 内容较长（5 个区段），默认 800x600 视口下底部"工具调用"区段
   // 会被裁剪到屏幕外导致 tap 无法命中。改用手机尺寸的视口。
@@ -188,8 +210,9 @@ Future<ProviderContainer> _pumpSheet(
         // override sheet 依赖的 provider，避免触发真实数据库初始化
         // 2026-07-21 补充 experienceRepositoryProvider：_loadInitialData 新增
         // getMemoriesWithoutEmbedding 调用，未 override 会导致 hang 住 pumpAndSettle
+        factualRepositoryProvider.overrideWithValue(FakeFactualRepository()),
         apiPresetRepositoryProvider
-            .overrideWithValue(_FakeApiPresetRepository()),
+            .overrideWithValue(_FakeApiPresetRepository(presets)),
         templateRepositoryProvider.overrideWithValue(_StubTemplateRepository()),
         settingsRepositoryProvider.overrideWithValue(_StubSettingsRepository()),
         experienceRepositoryProvider
@@ -241,6 +264,59 @@ Future<ProviderContainer> _pumpSheet(
 // ── Tests ─────────────────────────────────────────────────────────────
 
 void main() {
+  testWidgets('生成和审查按所用模型决定共享采样控件', (tester) async {
+    final presets = [
+      ApiPreset(
+        presetId: 'no-sampling',
+        name: 'Relay',
+        baseUrl: 'https://relay.test',
+        providerOptions: const {'omit_sampling_params': true},
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+      ),
+      ApiPreset(
+        presetId: 'supports-sampling',
+        name: 'Reviewer',
+        baseUrl: 'https://review.test',
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+      ),
+    ];
+    final session = _draftSession().copyWith(
+      phaseModels: const SessionPhaseModels(
+        generatingPresetId: 'no-sampling',
+        generatingModelId: 'grok-4.7',
+        extractingPresetId: 'supports-sampling',
+        extractingModelId: 'gpt-4o',
+      ),
+    );
+    final container = await _pumpSheet(tester, session, presets: presets);
+    final labels = t.intermediate.chat.sessionSettings;
+    final samplingLabels = [
+      labels.temperature,
+      labels.topP,
+      labels.presencePenalty,
+      labels.frequencyPenalty,
+    ];
+
+    for (final label in samplingLabels) {
+      expect(find.text(label), findsNothing);
+    }
+    expect(find.text(labels.maxTokens), findsOneWidget);
+
+    final controller =
+        container.read(intermediateChatControllerProvider(session).notifier);
+    expect(
+      await controller
+          .updateSession(session.copyWith(reviewEnabledOverride: true)),
+      isTrue,
+    );
+    await tester.pumpAndSettle();
+    for (final label in samplingLabels) {
+      expect(find.text(label), findsOneWidget);
+    }
+  });
+
   setUpAll(() {
     LocaleSettings.setLocale(AppLocale.zhCn);
   });
@@ -342,9 +418,9 @@ void main() {
       final materializedSession =
           container.read(intermediateChatControllerProvider(session)).session;
       expect(
-        materializedSession.sessionId.startsWith('materialized-'),
-        isTrue,
-        reason: '物化后 sessionId 应以 materialized- 开头',
+        materializedSession.sessionId,
+        isNot(startsWith(IntermediateChatController.draftSessionIdPrefix)),
+        reason: '物化后应使用真实会话 ID',
       );
 
       // 滚动到"查看记忆库"按钮并点击

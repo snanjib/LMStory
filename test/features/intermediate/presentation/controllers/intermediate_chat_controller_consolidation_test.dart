@@ -1,13 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:drift/drift.dart' show Variable;
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
+import 'package:lmstory/core/services/data_store_operation_guard.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
+import 'package:lmstory/core/vector/vector_engine.dart';
+import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/chat/data/datasources/llm_remote_datasource.dart';
+import 'package:lmstory/features/chat/data/repositories/chat_repository_impl.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session_settings.dart';
@@ -17,6 +23,7 @@ import 'package:lmstory/features/chat/domain/services/configuration_resolver.dar
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
 import 'package:lmstory/features/intermediate/presentation/controllers/intermediate_chat_controller.dart';
+import 'package:lmstory/features/memory/data/repositories/experience_repository_impl.dart';
 import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/entities/facts_delta.dart';
@@ -25,6 +32,7 @@ import 'package:lmstory/features/memory/domain/repositories/experience_repositor
 import 'package:lmstory/features/memory/domain/services/embedding_service.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/story_runtime/data/persistence_service_impl.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/message_variant_record.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/services/memory_consolidator.dart';
@@ -41,6 +49,91 @@ import '../../../../test_helpers/stub_failure_log_repository.dart';
 /// 内置 `Completer` 等待异步触发完成后再断言。
 void main() {
   group('IntermediateChatController - 批量记忆提炼触发', () {
+    test('删轮先于模型返回时，不重新写入原经历或全文索引', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final chatRepo = ChatRepositoryImpl(database: db);
+      final experienceRepo = ExperienceRepositoryImpl(
+        database: db,
+        vectorEngine: const VectorEngine(),
+      );
+      final persistence = _ObservedConsolidationPersistence(
+        database: db,
+        chatRepository: chatRepo,
+        experienceRepository: experienceRepo,
+      );
+      final session = await chatRepo.createSession(
+        title: 'Consolidation test',
+        mode: 'intermediate',
+      );
+      for (final summary in ['low source one', 'low source two']) {
+        await experienceRepo.appendExperience(
+          sessionId: session.sessionId,
+          summary: summary,
+          importance: 2,
+          tags: const [],
+          turnNumber: 1,
+          indexForRetrieval: false,
+        );
+      }
+      final model = _GatedConsolidationLlm();
+      final guard = DataStoreOperationGuard();
+      final controller = _buildController(
+        session: session,
+        httpClient: _SseHttpClient(_v2SuccessResponses(importance: 2)),
+        chatRepo: chatRepo,
+        experienceRepo: experienceRepo,
+        persistenceService: persistence,
+        consolidator: MemoryConsolidator(llmService: model),
+        config: _triggerConfig(),
+        operationGuard: guard,
+      );
+      addTearDown(controller.dispose);
+      await controller.loadHistory();
+
+      Future<List<List<String?>>> readExperienceAndFts() async {
+        final memories = await experienceRepo.getAllExperiences(
+          session.sessionId,
+        );
+        final fts = await db.customSelect(
+          'SELECT summary FROM memories_fts WHERE session_id = ?',
+          variables: [Variable.withString(session.sessionId)],
+        ).get();
+        return [
+          memories.map((memory) => memory.summary).toList(),
+          fts.map((row) => row.read<String>('summary')).toList(),
+        ];
+      }
+
+      const deadline = Duration(seconds: 5);
+      expect(await controller.sendMessage('Synthetic round'), isTrue);
+      final request = await model.started.future.timeout(deadline);
+      try {
+        expect(request.messages.last['content'], contains('low source one'));
+        expect(request.messages.last['content'], contains('low source two'));
+        expect((await readExperienceAndFts()).first, hasLength(3));
+        expect(guard.tryBeginOverwrite(), isNull);
+        final target = controller.state.messages.firstWhere(
+          (message) => message.role == 'user',
+        );
+        await controller.deleteRound(target).timeout(deadline);
+        expect(await chatRepo.getMessages(session.sessionId), isEmpty);
+        expect(await readExperienceAndFts(), [isEmpty, isEmpty]);
+      } finally {
+        final finished = persistence.finished.future.timeout(deadline);
+        model.reply.complete(
+          const LlmResponse(
+            content: '{"consolidated":[{"summary":"late synthesis", '
+                '"importance":4}]}',
+          ),
+        );
+        await finished;
+      }
+
+      expect(await readExperienceAndFts(), [isEmpty, isEmpty]);
+      expect(await persistence.finished.future, isFalse);
+    });
+
     test('1. 条件满足 → 触发 consolidator + persistConsolidatedMemories', () async {
       final httpClient = _SseHttpClient(_v2SuccessResponses());
       final chatRepo = _IntegrationChatRepository();
@@ -81,7 +174,7 @@ void main() {
       expect(persistenceService.lastRecords, hasLength(1));
       expect(persistenceService.lastRecords![0].summary, '合并后的剧情节点');
       expect(persistenceService.lastRecords![0].importance, 4);
-      expect(persistenceService.lastOriginalIds, hasLength(3));
+      expect(persistenceService.lastOriginalMemories, hasLength(3));
     });
 
     test('2. usageRatio 低于阈值 → 不触发', () async {
@@ -471,11 +564,13 @@ class _IntegrationChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = 'simple',
     String? modelId,
     String? presetId,
   }) async {
-    return _realSession();
+    final session = _realSession();
+    return session.copyWith(sessionId: sessionId ?? session.sessionId);
   }
 
   @override
@@ -667,7 +762,7 @@ class _RecordingPersistenceService implements StoryPersistenceService {
   int persistRoundCalls = 0;
   int persistConsolidatedMemoriesCalls = 0;
   List<ConsolidatedMemoryRecord>? lastRecords;
-  List<String>? lastOriginalIds;
+  List<ExperientialMemory>? lastOriginalMemories;
   Completer<void>? _persistCompleter;
 
   /// 等待 persistConsolidatedMemories 被调用。
@@ -691,6 +786,7 @@ class _RecordingPersistenceService implements StoryPersistenceService {
     FactualConfig? factualConfig,
     CompactionPersistenceData? compaction,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     persistRoundCalls++;
     return PersistRoundResult(
@@ -718,6 +814,7 @@ class _RecordingPersistenceService implements StoryPersistenceService {
     CompactionPersistenceData? compaction,
     bool recordVariant = false,
     String? variantSourceInput,
+    bool hasVerifiedSourceTurn = false,
   }) async {
     return PersistRoundResult(
       memory: ExperientialMemory(
@@ -729,6 +826,29 @@ class _RecordingPersistenceService implements StoryPersistenceService {
         turnNumber: eventSummary.turnNumber,
         createdAt: DateTime(2026),
       ),
+    );
+  }
+
+  @override
+  Future<RoundRollbackResult> rollbackRoundAndDownstream({
+    required String sessionId,
+    required int fromTurnNumber,
+    required List<String> messageIdsToDelete,
+    bool keepVariantsAtFromTurn = false,
+    RoundVariantSnapshot? variantSnapshot,
+    Future<bool> Function(String sessionId, int fromTurnNumber)? truncateEvents,
+  }) async {
+    final anchor = await deleteRoundAndDownstream(
+      sessionId: sessionId,
+      fromTurnNumber: fromTurnNumber,
+      messageIdsToDelete: messageIdsToDelete,
+      keepVariantsAtFromTurn: keepVariantsAtFromTurn || variantSnapshot != null,
+    );
+    return (
+      storyAnchor: anchor,
+      narrativeTime: null,
+      messageCount: 0,
+      deletedFrozenPrefix: false,
     );
   }
 
@@ -768,18 +888,19 @@ class _RecordingPersistenceService implements StoryPersistenceService {
       const {};
 
   @override
-  Future<void> persistConsolidatedMemories({
+  Future<bool> persistConsolidatedMemories({
     required String sessionId,
     required List<ConsolidatedMemoryRecord> records,
-    required List<String> originalMemoryIds,
+    required List<ExperientialMemory> originalMemories,
   }) async {
     persistConsolidatedMemoriesCalls++;
     lastRecords = records;
-    lastOriginalIds = originalMemoryIds;
+    lastOriginalMemories = originalMemories;
     _persistCompleter ??= Completer<void>();
     if (!_persistCompleter!.isCompleted) {
       _persistCompleter!.complete();
     }
+    return true;
   }
 
   @override
@@ -838,6 +959,47 @@ class _NoOpLlmService implements LlmService {
   }
 }
 
+class _GatedConsolidationLlm extends _NoOpLlmService {
+  final started = Completer<LlmRequest>();
+  final reply = Completer<LlmResponse>();
+
+  @override
+  Future<LlmResponse> chat(LlmRequest request) {
+    started.complete(request);
+    return reply.future;
+  }
+}
+
+class _ObservedConsolidationPersistence extends StoryPersistenceServiceImpl {
+  _ObservedConsolidationPersistence({
+    required super.database,
+    required super.chatRepository,
+    required super.experienceRepository,
+  });
+
+  final finished = Completer<bool>();
+
+  @override
+  Future<bool> persistConsolidatedMemories({
+    required String sessionId,
+    required List<ConsolidatedMemoryRecord> records,
+    required List<ExperientialMemory> originalMemories,
+  }) async {
+    try {
+      final persisted = await super.persistConsolidatedMemories(
+        sessionId: sessionId,
+        records: records,
+        originalMemories: originalMemories,
+      );
+      finished.complete(persisted);
+      return persisted;
+    } catch (error, stackTrace) {
+      finished.completeError(error, stackTrace);
+      rethrow;
+    }
+  }
+}
+
 /// EmbeddingService stub：noSuchMethod 兜底（consolidation 测试不验证 embedding）。
 class _StubEmbeddingService implements EmbeddingService {
   @override
@@ -850,11 +1012,12 @@ class _StubEmbeddingService implements EmbeddingService {
 IntermediateChatController _buildController({
   required ChatSession session,
   required HttpClient httpClient,
-  required _IntegrationChatRepository chatRepo,
-  required _StubExperienceRepositoryWithUnindexed experienceRepo,
-  required _RecordingPersistenceService persistenceService,
+  required ChatRepository chatRepo,
+  required ExperienceRepository experienceRepo,
+  required StoryPersistenceService persistenceService,
   required MemoryConsolidator? consolidator,
   required IntermediateConfig config,
+  DataStoreOperationGuard? operationGuard,
 }) {
   return IntermediateChatController(
     chatRepository: chatRepo,
@@ -872,5 +1035,6 @@ IntermediateChatController _buildController({
     logger: const Logger('test'),
     session: session,
     consolidator: consolidator,
+    operationGuard: operationGuard,
   );
 }

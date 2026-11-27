@@ -105,6 +105,8 @@ void main() {
     test('物化后改全局重开：会话值保持旧快照不变（不跟随漂移）', () async {
       settingsRepo.advanced = const AdvancedConfig(
         generation: GenerationConfig(temperature: 0.9),
+        generatingPresetId: 'first-provider',
+        generatingModelId: 'first-model',
       );
       final first = buildController(legacySession());
       for (var i = 0; i < 100 && first.state.session.temperature == null; i++) {
@@ -115,6 +117,8 @@ void main() {
       // 全局改成 1.5——存量会话不得跟随
       settingsRepo.advanced = const AdvancedConfig(
         generation: GenerationConfig(temperature: 1.5),
+        generatingPresetId: 'different-provider',
+        generatingModelId: 'different-model',
       );
       final persisted = chatRepo.sessions['legacy-1']!;
       final second = buildController(persisted);
@@ -124,6 +128,11 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
 
       expect(second.state.session.temperature, 0.9, reason: '快照会话不受后续全局修改影响');
+      expect(
+        second.state.session.phaseModels.generatingPresetId,
+        'first-provider',
+      );
+      expect(second.state.session.phaseModels.generatingModelId, 'first-model');
       expect(chatRepo.updateCalls, hasLength(1), reason: '已物化会话重开零写入');
     });
 
@@ -136,12 +145,11 @@ void main() {
         lastActiveAt: DateTime(2026),
         messageCount: 0,
       );
+      chatRepo.sessions[storySession.sessionId] = storySession;
       final controller = buildController(storySession);
-      for (var i = 0; i < 100 && controller.state.loadingHistory; i++) {
-        await Future<void>.delayed(Duration.zero);
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await controller.loadHistory();
 
+      expect(controller.state.session.mode, 'intermediate');
       expect(chatRepo.updateCalls, isEmpty, reason: '导演惰性物化仅处理 mode=advanced');
     });
 
@@ -213,12 +221,13 @@ class _MemoryChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = 'advanced',
     String? modelId,
     String? presetId,
   }) async {
     final session = ChatSession(
-      sessionId: 'real-$title-$mode',
+      sessionId: sessionId ?? 'real-$title-$mode',
       title: title,
       mode: mode,
       createdAt: DateTime(2026),
@@ -238,6 +247,10 @@ class _MemoryChatRepository implements ChatRepository {
 
   @override
   Future<List<ChatMessage>> getMessages(String sessionId) async => const [];
+
+  @override
+  Future<DirectorInputs> getDirectorInputs(String sessionId) async =>
+      (pending: null, queued: null);
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>

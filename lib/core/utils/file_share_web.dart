@@ -9,8 +9,13 @@ library;
 import 'dart:html' as html;
 import 'dart:ui' show Rect;
 
+import 'package:flutter/widgets.dart' show BuildContext;
+
 /// 当前平台桌面标记 - Web 恒为 false（原生实现见 file_share.dart）
 const bool isDesktopPlatform = false;
+
+/// Browser downloads use no native share-sheet anchor.
+Rect? shareOriginFrom(BuildContext context) => null;
 
 /// 将文本内容作为文件下载（Web 平台）
 ///

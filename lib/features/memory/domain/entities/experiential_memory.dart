@@ -116,6 +116,7 @@ class ExperientialMemory {
     this.parentEventIds,
     this.macroTriggerReason,
     this.source = 'auto',
+    this.hasVerifiedSourceTurn = false,
   });
 
   /// 从 JSON 反序列化
@@ -146,6 +147,7 @@ class ExperientialMemory {
         json['macroTriggerReason'] as String?,
       ),
       source: json['source'] as String? ?? 'auto',
+      hasVerifiedSourceTurn: json['hasVerifiedSourceTurn'] as bool? ?? false,
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
   }
@@ -220,6 +222,9 @@ class ExperientialMemory {
   /// 手动记忆不参与按 turn 窗的轮回滚清理（deleteExperienceByTurns）。
   final String source;
 
+  /// 当前记忆可追溯到 [turnNumber] 对应的单轮输入和正文。
+  final bool hasVerifiedSourceTurn;
+
   final DateTime createdAt;
 
   /// 是否为宏摘要记忆（便捷判断）
@@ -272,6 +277,7 @@ class ExperientialMemory {
         'parentEventIds': parentEventIds,
         'macroTriggerReason': macroTriggerReason?.toDbString(),
         'source': source,
+        'hasVerifiedSourceTurn': hasVerifiedSourceTurn,
         'createdAt': createdAt.toIso8601String(),
       };
 

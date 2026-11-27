@@ -76,6 +76,9 @@ class ScrollFollowStateMachine {
   /// 发送新消息/点「回到最新」强制回底恢复跟随。
   void forceFollowing() => _following = true;
 
+  /// Explicit navigation to a reading position suspends live following.
+  void pauseFollowing() => _following = false;
+
   /// 进入会话/重置：回到初始跟随态。
   void reset() => _following = true;
 }

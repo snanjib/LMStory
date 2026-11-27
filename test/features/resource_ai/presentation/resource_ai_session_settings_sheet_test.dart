@@ -16,6 +16,7 @@ import 'package:lmstory/features/resource_ai/presentation/widgets/resource_ai_se
 import 'package:lmstory/features/resource_library/domain/entities/character_card.dart';
 import 'package:lmstory/features/resource_library/domain/entities/worldbook.dart';
 import 'package:lmstory/features/resource_library/domain/repositories/resource_library_repository.dart';
+import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -156,13 +157,14 @@ void main() {
   /// 经真实入口（modal bottom sheet）泵出面板。
   Future<void> pumpSheet(
     WidgetTester tester,
-    ResourceAiController controller,
-  ) async {
+    ResourceAiController controller, {
+    List<ApiPreset>? presets,
+  }) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           settingsNotifierProvider.overrideWith((ref) {
-            return StubSettingsNotifier();
+            return StubSettingsNotifier(presets: presets);
           }),
         ],
         child: TranslationProvider(
@@ -209,6 +211,27 @@ void main() {
     expect(find.text('测试供应商 / 测试模型'), findsOneWidget);
     expect(find.text('温度'), findsOneWidget);
     expect(find.text('单轮最大步数'), findsOneWidget);
+  });
+
+  testWidgets('资源助手按当前供应商设置隐藏温度', (tester) async {
+    final controller = await buildController();
+    await pumpSheet(
+      tester,
+      controller,
+      presets: [
+        ApiPreset(
+          presetId: 'preset-1',
+          name: 'Relay',
+          baseUrl: 'https://relay.test',
+          createdAt: DateTime(2026),
+          updatedAt: DateTime(2026),
+          providerOptions: const {'omit_sampling_params': true},
+        ),
+      ],
+    );
+
+    expect(find.text(t.resourceAi.temperatureLabel), findsNothing);
+    expect(find.text(t.resourceAi.maxStepsLabel), findsOneWidget);
   });
 
   testWidgets('干净草稿：完成按钮禁用 + 提示文案', (tester) async {

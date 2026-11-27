@@ -7,6 +7,7 @@ import 'package:lmstory/core/model_registry/model_registry.dart';
 import 'package:lmstory/core/network/llm_adapters/sampling_params.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/utils/logger.dart';
+import 'package:lmstory/core/utils/secret_redactor.dart';
 import 'package:lmstory/features/chat/domain/entities/reasoning_effort.dart';
 import 'package:lmstory/features/settings/data/provider_templates.dart'
     show ProviderTemplates;
@@ -32,6 +33,7 @@ class SettingsState {
     this.error,
     this.testResult,
     this.fetchModelsError,
+    this.fetchModelsHttpStatus,
     this.fontSize = 15,
     this.contentWidthMode = LmContentWidthMode.fluid,
     this.autoCompaction = true,
@@ -87,6 +89,9 @@ class SettingsState {
 
   /// 获取模型列表错误
   final String? fetchModelsError;
+
+  /// 获取模型列表失败时服务端实际返回的 HTTP 状态码。
+  final int? fetchModelsHttpStatus;
 
   /// 字体大小（int，与 SimpleTextStyles.body 基准字号 15px 联动）。
   ///
@@ -157,7 +162,7 @@ class SettingsState {
 
   SettingsState copyWith({
     List<ApiPreset>? presets,
-    String? defaultPresetId,
+    Object? defaultPresetId = _sentinel,
     Map<String, bool>? apiKeyStatus,
     List<Template>? templates,
     bool? isLoading,
@@ -169,7 +174,7 @@ class SettingsState {
     LmContentWidthMode? contentWidthMode,
     bool? autoCompaction,
     double? compactionThreshold,
-    String? defaultModelId,
+    Object? defaultModelId = _sentinel,
     SendKey? sendKey,
     NewlineKey? newlineKey,
     DisplayPreferences? displayPreferences,
@@ -182,6 +187,7 @@ class SettingsState {
     Object? defaultReasoningEffort = _sentinel,
     Object? titleModelPresetId = _sentinel,
     Object? fetchModelsError = _sentinel,
+    Object? fetchModelsHttpStatus = _sentinel,
     Object? titleModelModelId = _sentinel,
     double? globalTemperature,
     double? globalTopP,
@@ -190,7 +196,9 @@ class SettingsState {
   }) =>
       SettingsState(
         presets: presets ?? this.presets,
-        defaultPresetId: defaultPresetId ?? this.defaultPresetId,
+        defaultPresetId: defaultPresetId == _sentinel
+            ? this.defaultPresetId
+            : defaultPresetId as String?,
         apiKeyStatus: apiKeyStatus ?? this.apiKeyStatus,
         templates: templates ?? this.templates,
         isLoading: isLoading ?? this.isLoading,
@@ -205,11 +213,16 @@ class SettingsState {
         fetchModelsError: fetchModelsError == _sentinel
             ? this.fetchModelsError
             : fetchModelsError as String?,
+        fetchModelsHttpStatus: fetchModelsHttpStatus == _sentinel
+            ? this.fetchModelsHttpStatus
+            : fetchModelsHttpStatus as int?,
         fontSize: fontSize ?? this.fontSize,
         contentWidthMode: contentWidthMode ?? this.contentWidthMode,
         autoCompaction: autoCompaction ?? this.autoCompaction,
         compactionThreshold: compactionThreshold ?? this.compactionThreshold,
-        defaultModelId: defaultModelId ?? this.defaultModelId,
+        defaultModelId: defaultModelId == _sentinel
+            ? this.defaultModelId
+            : defaultModelId as String?,
         sendKey: sendKey ?? this.sendKey,
         newlineKey: newlineKey ?? this.newlineKey,
         displayPreferences: displayPreferences ?? this.displayPreferences,
@@ -1150,19 +1163,29 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
 
   /// 获取模型列表
   Future<List<ModelInfo>> fetchModels(String presetId) async {
-    state = state.copyWith(isFetchingModels: true);
+    state = state.copyWith(
+      isFetchingModels: true,
+      fetchModelsError: null,
+      fetchModelsHttpStatus: null,
+    );
     try {
       final models = await _presetRepo.fetchModels(presetId);
       // 成功时清掉旧错误——此前 error 粘在
       // state 上且 copyWith 结构性无法置回 null，修好 Key 后的成功获取
       // 仍被旧错误短路，模型弹窗永不出现
-      state = state.copyWith(isFetchingModels: false, fetchModelsError: null);
-      return models;
-    } catch (e) {
-      _log.error('Failed to fetch models', detail: '$e');
       state = state.copyWith(
         isFetchingModels: false,
-        fetchModelsError: e.toString(),
+        fetchModelsError: null,
+        fetchModelsHttpStatus: null,
+      );
+      return models;
+    } catch (e) {
+      final detail = redactDiagnosticText('$e');
+      _log.error('Failed to fetch models', detail: detail);
+      state = state.copyWith(
+        isFetchingModels: false,
+        fetchModelsError: detail,
+        fetchModelsHttpStatus: e is AppHttpException ? e.statusCode : null,
       );
       return [];
     }

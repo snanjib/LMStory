@@ -198,6 +198,7 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
           //（旧版已在删除阶段前快照）
           recordVariant: true,
           variantSourceInput: round.userInput,
+          hasVerifiedSourceTurn: true,
         );
       } else {
         // 普通发送/编辑重发：写 user + assistant + 事件摘要
@@ -215,14 +216,16 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
           factualConfig: round.config.memory.factual,
           compaction: compaction,
           variantSourceInput: round.userInput,
+          hasVerifiedSourceTurn: true,
         );
       }
       // 轮次身份验证：DB 写入是 async，期间用户可能 cancel + 发新消息
+      if (!mounted || state.session.sessionId != assistantMsg.sessionId) return;
       if (_round != round) {
         // (c)：事务已提交但身份已丢失（后台复位/取消清空了 _round）
         // ——DB 是完整的，仅内存态落后。若没有新一轮接管，重载历史让
         // 「第 N 轮 · 摘要已生成」等完成态回到 UI（否则重进会话才自愈）。
-        unawaited(_resyncAfterCommittedPersistLoss(turnNumber));
+        await _resyncAfterCommittedPersistLoss(turnNumber);
         return;
       }
 
@@ -266,7 +269,7 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
       int? newVariantIndex;
       try {
         reloadedVariants = await _persistenceService.loadMessageVariants(
-          state.session.sessionId,
+          assistantMsg.sessionId,
         );
         final turnVariants =
             reloadedVariants[turnNumber] ?? const <MessageVariantRecord>[];
@@ -276,6 +279,11 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
             turnVariants.isNotEmpty ? turnVariants.last.variantIndex : null;
       } catch (e) {
         _logger.warn('Reload variants after persist failed', detail: '$e');
+      }
+      if (!mounted || state.session.sessionId != assistantMsg.sessionId) return;
+      if (_round != round) {
+        await _resyncAfterCommittedPersistLoss(turnNumber);
+        return;
       }
 
       // 把本轮 artifacts 写入 state.artifactsByTurnNumber
@@ -287,9 +295,46 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
           currentVariantIndex: newVariantIndex,
         );
 
+      // 刚完成请求的实报输入不含本轮新回复；下一轮会带上它。按同一
+      // 材料边界增量调整当前预计并降级为 estimated。
+      var carriedEstimate = state.contextEstimate;
+      if (reply.isNotEmpty) {
+        try {
+          final replyTokens = await _tokenCounter.countTokens(reply);
+          if (replyTokens > 0) {
+            carriedEstimate = carriedEstimate?.shift(
+              removedTokens: 0,
+              addedTokens: replyTokens,
+              at: DateTime.now(),
+            );
+          }
+        } catch (error) {
+          // 事务已提交；新回复无法计量时，下一次请求的预计用量未知。
+          _logger.warn(
+            'Reply token estimate failed after commit',
+            detail: 'type=${error.runtimeType}',
+          );
+          carriedEstimate = const ContextUsageEstimate.unknown();
+        }
+        if (!mounted || state.session.sessionId != assistantMsg.sessionId) {
+          return;
+        }
+        if (_round != round) {
+          await _resyncAfterCommittedPersistLoss(turnNumber);
+          return;
+        }
+      }
+
       state = state.copyWith(
         phase: IntermediatePhase.idle,
+        factWriteWarning: persistResult.factWriteFailureCount > 0
+            ? (
+                turnNumber: turnNumber,
+                count: persistResult.factWriteFailureCount
+              )
+            : null,
         messages: newMessages,
+        contextEstimate: carriedEstimate,
         // + 修复：同步刷新 session.messageCount，避免下游依赖
         // （如 canOperateMessage / 历史会话卡片显示）拿到过期值。
         // 与 regenerateMessage / editAndResend / deleteRound 风格一致。
@@ -345,9 +390,11 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
       // 2026-07-21 重构：标题生成独立于业务模型，统一走 common.title_model 配置
       if (!isRegenerate && turnNumber == 1 && _titleGenerator != null) {
         unawaited(
-          _autoNameSession(
-            userInput: round.userInput,
-            assistantReply: reply,
+          _sessionOperations.runBackgroundWrite(
+            () => _autoNameSession(
+              userInput: round.userInput,
+              assistantReply: reply,
+            ),
           ),
         );
       }
@@ -357,16 +404,18 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
       // 重新生成会删除下游记忆（context 收缩），无需触发提炼。
       if (!isRegenerate && _consolidator != null) {
         unawaited(
-          _maybeConsolidateMemories(
-            contextWindow: round.contextWindow,
-            maxTokens: _outputTokenReserveFor(
-              round.settings.maxTokens,
-              modelMaxOutput: round.generatingNamingConfig.maxOutputTokens,
+          _sessionOperations.runBackgroundWrite(
+            () => _maybeConsolidateMemories(
+              contextWindow: round.contextWindow,
+              maxTokens: _outputTokenReserveFor(
+                round.settings.maxTokens,
+                modelMaxOutput: round.generatingNamingConfig.maxOutputTokens,
+              ),
+              consolidationConfig: round.config.consolidation,
+              namingConfig: round.namingConfig,
+              embeddingConfig: round.embeddingConfig,
+              consolidationPrompt: round.config.prompts.consolidationPrompt,
             ),
-            consolidationConfig: round.config.consolidation,
-            namingConfig: round.namingConfig,
-            embeddingConfig: round.embeddingConfig,
-            consolidationPrompt: round.config.prompts.consolidationPrompt,
           ),
         );
       }
@@ -396,6 +445,6 @@ extension IntermediateChatControllerPersist on IntermediateChatController {
       'Persist committed but round identity lost, resyncing history',
       detail: 'turn=$turnNumber',
     );
-    await loadHistory();
+    await _loadHistory();
   }
 }

@@ -44,6 +44,7 @@ class _TrackingChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = 'simple',
     String? modelId,
     String? presetId,
@@ -52,7 +53,7 @@ class _TrackingChatRepository implements ChatRepository {
       (title: title, mode: mode, modelId: modelId, presetId: presetId),
     );
     return ChatSession(
-      sessionId: 'real-${createCalls.length}',
+      sessionId: sessionId ?? 'real-${createCalls.length}',
       title: title,
       mode: mode,
       modelId: modelId,
@@ -78,6 +79,10 @@ class _TrackingChatRepository implements ChatRepository {
 }
 
 class _FakeApiPresetRepository implements ApiPresetRepository {
+  _FakeApiPresetRepository(this.additionalPresets);
+
+  final List<ApiPreset> additionalPresets;
+
   @override
   Future<List<ApiPreset>> getAllPresets() async => [
         ApiPreset(
@@ -87,6 +92,7 @@ class _FakeApiPresetRepository implements ApiPresetRepository {
           createdAt: DateTime(2026),
           updatedAt: DateTime(2026),
         ),
+        ...additionalPresets,
       ];
 
   @override
@@ -165,6 +171,7 @@ Future<ProviderContainer> _pumpSheet(
   WidgetTester tester,
   ChatSession session, {
   _TrackingChatRepository? trackingRepo,
+  List<ApiPreset> additionalPresets = const [],
   ConfigLevel level = ConfigLevel.advanced,
 }) async {
   // Sheet 内容较长，用手机尺寸视口避免裁剪
@@ -180,7 +187,7 @@ Future<ProviderContainer> _pumpSheet(
   final configPrefs = Preferences(prefs: await SharedPreferences.getInstance());
 
   final chatRepo = trackingRepo ?? _TrackingChatRepository();
-  final presetRepo = _FakeApiPresetRepository();
+  final presetRepo = _FakeApiPresetRepository(additionalPresets);
   final settingsRepo = _StubSettingsRepository();
   final httpClient = _StubHttpClient();
   final llmService = _StubLlmService();
@@ -249,6 +256,42 @@ Future<ProviderContainer> _pumpSheet(
 void main() {
   setUpAll(() {
     LocaleSettings.setLocale(AppLocale.zhCn);
+  });
+
+  testWidgets('切换供应商会隐藏和恢复当前会话的采样控件', (tester) async {
+    final session = _materializedSession().copyWith(
+      presetId: 'test-preset',
+      modelId: 'grok-4.7',
+    );
+    final container = await _pumpSheet(
+      tester,
+      session,
+      additionalPresets: [
+        ApiPreset(
+          presetId: 'no-sampling',
+          name: 'Relay',
+          baseUrl: 'https://relay.test',
+          providerOptions: const {'omit_sampling_params': true},
+          createdAt: DateTime(2026),
+          updatedAt: DateTime(2026),
+        ),
+      ],
+    );
+    final controller =
+        container.read(chatModeControllerProvider(session).notifier);
+    expect(find.text(t.chat.sessionSettings.temperature), findsOneWidget);
+
+    await controller.updateSession(session.copyWith(presetId: 'no-sampling'));
+    await tester.pumpAndSettle();
+    expect(find.text(t.chat.sessionSettings.temperature), findsNothing);
+    expect(find.text(t.chat.sessionSettings.topP), findsNothing);
+    expect(find.text(t.chat.sessionSettings.maxTokens), findsOneWidget);
+
+    await controller.updateSession(session);
+    await tester.pumpAndSettle();
+    expect(find.text(t.chat.sessionSettings.temperature), findsOneWidget);
+    expect(find.text(t.chat.sessionSettings.topP), findsOneWidget);
+    expect(find.text('全局 0.70'), findsOneWidget);
   });
 
   group('跟随全局标注判据', () {

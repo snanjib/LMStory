@@ -1,9 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/agent/agent_tool.dart';
+import 'package:lmstory/core/agent/agent_tool_pipeline.dart';
 import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_approval_composer.dart';
+import 'package:lmstory/features/advanced/presentation/utils/agent_approval_labels.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_hitl_banner.dart';
+import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/i18n/strings.g.dart';
+
+import '../../../../helpers/fake_factual_repository.dart';
 
 /// DirectorAskBanner / DirectorApprovalBanner widget 测试
 ///
@@ -16,8 +25,9 @@ void _noopResolve({
 }) {}
 
 void main() {
-  setUpAll(() {
-    LocaleSettings.setLocale(AppLocale.zhCn);
+  setUpAll(() async {
+    await LocaleSettings.setLocale(AppLocale.enUs);
+    await LocaleSettings.setLocale(AppLocale.zhCn);
   });
 
   Widget wrap(Widget child) {
@@ -33,6 +43,148 @@ void main() {
     question: '守碑人是谁？',
     options: ['旧友', '仇人'],
   );
+
+  group('Approval details follow the interface language', () {
+    final createdAt = DateTime(2026);
+
+    Future<void> showPendingApproval(
+      WidgetTester tester, {
+      required String tool,
+      required Map<String, dynamic> arguments,
+      EventSummary? previousEvent,
+    }) async {
+      LocaleSettings.setLocaleSync(AppLocale.zhCn);
+      addTearDown(() => LocaleSettings.setLocaleSync(AppLocale.zhCn));
+      final repo = FakeFactualRepository()
+        ..entitiesById['target'] = FactualEntity(
+          entityId: 'target',
+          sessionId: 'story',
+          type: FactualEntityType.character,
+          primaryName: '林晚',
+          aliases: const [],
+          importance: 3,
+          createdTurn: 1,
+          createdAt: createdAt,
+        )
+        ..seedAttribute(
+          FactualAttribute(
+            attributeId: 'skills',
+            entityId: 'target',
+            sessionId: 'story',
+            attrKey: 'skills',
+            value: '[]',
+            valueType: AttributeValueType.list,
+            importance: 3,
+            createdAt: createdAt,
+          ),
+        );
+      final changes = await AgentApprovalComposer(
+        repository: repo,
+        sessionId: 'story',
+        draftTurnNumber: 2,
+        currentAnchor: null,
+        draftAnchor: null,
+        draftEventSummary: previousEvent,
+      ).compose(
+        ToolExecutionRequest(
+          callId: 'call',
+          toolName: tool,
+          arguments: arguments,
+          permission: AgentToolPermission.write,
+        ),
+      );
+      await tester.pumpWidget(
+        wrap(
+          DirectorApprovalBanner(
+            prompt: AgentApprovalPrompt(
+              toolName: tool,
+              summary: '待处置',
+              summaryData: approvalSummaryDataOf(tool, arguments),
+              changes: changes,
+            ),
+            onResolve: _noopResolve,
+            timeout: null,
+          ),
+        ),
+      );
+      await tester.tap(find.text('查看 ${changes.length} 处变更明细'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> switchToEnglish(WidgetTester tester) async {
+      LocaleSettings.setLocaleSync(AppLocale.enUs);
+      await tester.pumpAndSettle();
+      expect(find.text('Hide details'), findsOneWidget);
+    }
+
+    testWidgets('the archive badge switches and the entity name stays intact', (
+      tester,
+    ) async {
+      await showPendingApproval(
+        tester,
+        tool: 'update_facts',
+        arguments: {
+          'deltas': [
+            {
+              'action': 'archive_entity',
+              'entity_id': 'target',
+              'reason': '离开港口',
+              'confidence': 5,
+            },
+          ],
+        },
+      );
+      expect(find.text('归档'), findsOneWidget);
+      await switchToEnglish(tester);
+      expect(find.text('Archive'), findsOneWidget);
+      expect(find.text('林晚'), findsOneWidget);
+      expect(find.textContaining('离开港口'), findsOneWidget);
+      expect(find.textContaining(RegExp('^(Old|New)[：:]')), findsNothing);
+    });
+
+    testWidgets('a merge reference localizes the empty list and built-in key', (
+      tester,
+    ) async {
+      await showPendingApproval(
+        tester,
+        tool: 'merge_entities',
+        arguments: {
+          'source_name': '守碑人',
+          'target_entity_id': 'target',
+          'reason': '同一个人在用化名',
+        },
+      );
+      final zhValue = find.text('新：技能：无').evaluate().length;
+      await switchToEnglish(tester);
+      expect(find.text('林晚 · Skills'), findsOneWidget);
+      expect(find.text('New: Skills: None'), findsOneWidget);
+      expect(find.textContaining('Merge "守碑人" into "林晚"'), findsOneWidget);
+      expect(find.textContaining('同一个人在用化名'), findsOneWidget);
+      expect(zhValue, 1);
+    });
+
+    testWidgets('an event replacement localizes placeholders and labels', (
+      tester,
+    ) async {
+      await showPendingApproval(
+        tester,
+        tool: 'record_event_memory',
+        arguments: {'what': '她说「人物：无」', 'who': '林晚'},
+        previousEvent: const EventSummary(
+          importance: 3,
+          tags: [],
+          turnNumber: 2,
+        ),
+      );
+      expect(find.textContaining('空事件'), findsOneWidget);
+      await switchToEnglish(tester);
+      expect(find.text('Old: (Empty event)'), findsOneWidget);
+      expect(find.text('New: 她说「人物：无」'), findsOneWidget);
+      expect(find.textContaining('Who: 林晚'), findsOneWidget);
+      expect(find.textContaining('Will replace the previous'), findsOneWidget);
+      expect(find.textContaining('When:'), findsNothing);
+    });
+  });
 
   group('DirectorAskBanner 倒计时与首释（B8）', () {
     testWidgets('有超时：头部显示剩余分钟倒计时', (tester) async {

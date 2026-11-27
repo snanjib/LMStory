@@ -6,6 +6,8 @@ import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
 import 'package:lmstory/features/memory/domain/entities/factual_source.dart';
 import 'package:lmstory/features/memory/domain/services/facts_delta_projection.dart';
 
+import '../../../../helpers/fake_factual_repository.dart';
+
 /// 干跑投影器单测（2026-10-15 批 A）
 ///
 /// 目标：FactApplier 落库转写规则的**每个判定分支**都有对应断言——
@@ -403,7 +405,7 @@ void main() {
       expect(v.note, FactsProjectionNote.baselineSingleRedirect);
     });
 
-    test('精确去重与语义相似去重 → skipped', () {
+    test('精确去重 → skipped；编辑距离相近不再判重', () {
       final exact = FactsDeltaProjectionEvaluator.evaluateAppendList(
         delta: const FactsDelta(
           action: FactAction.appendList,
@@ -420,12 +422,13 @@ void main() {
       );
       expect(exact.note, FactsProjectionNote.duplicateExact);
 
+      // 与"剑术"编辑距离 1，但含义不同：不做模糊判重，应 applied
       final similar = FactsDeltaProjectionEvaluator.evaluateAppendList(
         delta: const FactsDelta(
           action: FactAction.appendList,
           entityId: 'ent_001',
           attrKey: 'skills',
-          value: '剑法', // 与"剑术"编辑距离 1
+          value: '剑法',
           confidence: 4,
         ),
         config: config,
@@ -434,12 +437,66 @@ void main() {
           attr(key: 'skills', value: '["剑术"]', type: AttributeValueType.list),
         ],
       );
-      expect(similar.note, FactsProjectionNote.duplicateSimilar);
+      expect(similar.outcome, FactsProjectionOutcome.applied);
+
+      // 首尾空白变体仍判重
+      final whitespace = FactsDeltaProjectionEvaluator.evaluateAppendList(
+        delta: const FactsDelta(
+          action: FactAction.appendList,
+          entityId: 'ent_001',
+          attrKey: 'skills',
+          value: ' 剑术 ',
+          confidence: 4,
+        ),
+        config: config,
+        entity: character(),
+        attrRows: [
+          attr(key: 'skills', value: '["剑术"]', type: AttributeValueType.list),
+        ],
+      );
+      expect(whitespace.note, FactsProjectionNote.duplicateExact);
+    });
+
+    test('dict 行 append → skipped(dictRejectsAppend)，不覆盖', () {
+      final v = FactsDeltaProjectionEvaluator.evaluateAppendList(
+        delta: const FactsDelta(
+          action: FactAction.appendList,
+          entityId: 'ent_001',
+          attrKey: 'relationships',
+          value: '苏晴=信任',
+          confidence: 4,
+        ),
+        config: config,
+        entity: character(),
+        attrRows: [
+          attr(
+            key: 'relationships',
+            value: '{"顾远": "戒心"}',
+            type: AttributeValueType.dict,
+          ),
+        ],
+      );
+      expect(v.outcome, FactsProjectionOutcome.skipped);
+      expect(v.note, FactsProjectionNote.dictRejectsAppend);
+    });
+
+    test('dict 键无行时 append → skipped(dictKeyCreatesList)，不建错型行', () {
+      final v = FactsDeltaProjectionEvaluator.evaluateAppendList(
+        delta: const FactsDelta(
+          action: FactAction.appendList,
+          entityId: 'ent_001',
+          attrKey: 'relationships',
+          value: '苏晴=信任',
+          confidence: 4,
+        ),
+        config: config,
+        entity: character(),
+      );
+      expect(v.outcome, FactsProjectionOutcome.skipped);
+      expect(v.note, FactsProjectionNote.dictKeyCreatesList);
     });
 
     test('正常追加 → applied；无属性行 → applied(createsAttrRow)', () {
-      // 注意选词：任意两个双字词编辑距离恒 <= 2 会命中语义相似去重
-      //（与落库同源行为），故用长词避开。
       final v = FactsDeltaProjectionEvaluator.evaluateAppendList(
         delta: const FactsDelta(
           action: FactAction.appendList,
@@ -615,6 +672,289 @@ void main() {
       );
       expect(ok.outcome, FactsProjectionOutcome.applied);
       expect(ok.entityLabel, '林晚');
+    });
+  });
+
+  group('evaluateSetImportance', () {
+    test('校验必填字段、实体存在、1..5范围与无变化跳过', () {
+      final missing = FactsDeltaProjectionEvaluator.evaluateSetImportance(
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_001',
+          confidence: 5,
+        ),
+        entity: character(),
+      );
+      expect(missing.outcome, FactsProjectionOutcome.skipped);
+      expect(missing.note, FactsProjectionNote.missingFields);
+
+      final noEntity = FactsDeltaProjectionEvaluator.evaluateSetImportance(
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_404',
+          importance: 4,
+          confidence: 5,
+        ),
+      );
+      expect(noEntity.outcome, FactsProjectionOutcome.skipped);
+      expect(noEntity.note, FactsProjectionNote.entityMissing);
+
+      final low = FactsDeltaProjectionEvaluator.evaluateSetImportance(
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_001',
+          importance: 0,
+          confidence: 5,
+        ),
+        entity: character(importance: 3),
+      );
+      expect(low.outcome, FactsProjectionOutcome.skipped);
+      expect(low.note, FactsProjectionNote.importanceOutOfRange);
+
+      final high = FactsDeltaProjectionEvaluator.evaluateSetImportance(
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_001',
+          importance: 6,
+          confidence: 5,
+        ),
+        entity: character(importance: 3),
+      );
+      expect(high.outcome, FactsProjectionOutcome.skipped);
+      expect(high.note, FactsProjectionNote.importanceOutOfRange);
+
+      final unchanged = FactsDeltaProjectionEvaluator.evaluateSetImportance(
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_001',
+          importance: 5,
+          confidence: 5,
+        ),
+        entity: character(),
+      );
+      expect(unchanged.outcome, FactsProjectionOutcome.skipped);
+      expect(unchanged.note, FactsProjectionNote.valueUnchanged);
+
+      final applied = FactsDeltaProjectionEvaluator.evaluateSetImportance(
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_001',
+          importance: 5,
+          reason: '晋升核心同伴',
+          confidence: 4,
+        ),
+        entity: character(importance: 2, source: FactualSource.worldbook),
+      );
+      expect(applied.outcome, FactsProjectionOutcome.applied);
+      expect(applied.before, '2');
+      expect(applied.after, '5');
+      expect(applied.entityLabel, '林晚');
+    });
+  });
+
+  group('skipFrequencyGuard 与 preflightDelta', () {
+    test('skipFrequencyGuard 仅放行频控，不放开白名单与置信度门', () {
+      final freqBypassed = FactsDeltaProjectionEvaluator.evaluateUpdateAttr(
+        delta: const FactsDelta(
+          action: FactAction.updateAttr,
+          entityId: 'ent_001',
+          attrKey: 'personality',
+          value: '果断',
+          confidence: 5,
+          skipFrequencyGuard: true,
+        ),
+        config: config,
+        entity: character(),
+        attrRows: [attr()],
+        recentUpdates: 4,
+      );
+      expect(freqBypassed.outcome, FactsProjectionOutcome.applied);
+
+      final confidenceBlocked =
+          FactsDeltaProjectionEvaluator.evaluateUpdateAttr(
+        delta: const FactsDelta(
+          action: FactAction.updateAttr,
+          entityId: 'ent_001',
+          attrKey: 'personality',
+          value: '果断',
+          confidence: 2,
+          skipFrequencyGuard: true,
+        ),
+        config: config,
+        entity: character(),
+        attrRows: [attr()],
+        recentUpdates: 4,
+      );
+      expect(confidenceBlocked.outcome, FactsProjectionOutcome.skipped);
+      expect(confidenceBlocked.note, FactsProjectionNote.confidenceGate);
+
+      final loc = FactualEntity(
+        entityId: 'ent_loc',
+        sessionId: 's1',
+        type: FactualEntityType.location,
+        primaryName: '客栈',
+        aliases: const [],
+        importance: 3,
+        createdTurn: 1,
+        createdAt: t,
+      );
+      final whitelistBlocked = FactsDeltaProjectionEvaluator.evaluateUpdateAttr(
+        delta: const FactsDelta(
+          action: FactAction.updateAttr,
+          entityId: 'ent_loc',
+          attrKey: 'personality',
+          value: '安静',
+          confidence: 5,
+          skipFrequencyGuard: true,
+        ),
+        config: config,
+        entity: loc,
+        recentUpdates: 4,
+      );
+      expect(whitelistBlocked.outcome, FactsProjectionOutcome.skipped);
+      expect(
+        whitelistBlocked.note,
+        FactsProjectionNote.attrKeyNotWhitelisted,
+      );
+    });
+
+    test('preflightDelta 覆盖按名定位、长度、频控、基线只读、置信度与 set_importance', () async {
+      final repo = FakeFactualRepository();
+      repo.entitiesById['ent_001'] = character(importance: 3);
+      repo.seedAttribute(attr());
+      repo.recentUpdateCounts['ent_001'] = 4;
+
+      // 按 primaryName 定位且命中频控
+      final tooFreq = await FactsDeltaProjectionEvaluator.preflightDelta(
+        repository: repo,
+        sessionId: 's1',
+        delta: const FactsDelta(
+          action: FactAction.updateAttr,
+          primaryName: '林晚',
+          attrKey: 'personality',
+          value: '热情',
+          confidence: 5,
+        ),
+        config: config,
+        turnNumber: 10,
+      );
+      expect(tooFreq.outcome, FactsProjectionOutcome.skipped);
+      expect(tooFreq.note, FactsProjectionNote.tooFrequent);
+
+      // skipFrequencyGuard 放行
+      final allowed = await FactsDeltaProjectionEvaluator.preflightDelta(
+        repository: repo,
+        sessionId: 's1',
+        delta: const FactsDelta(
+          action: FactAction.updateAttr,
+          primaryName: '林晚',
+          attrKey: 'personality',
+          value: '热情',
+          confidence: 5,
+          skipFrequencyGuard: true,
+        ),
+        config: config,
+        turnNumber: 10,
+      );
+      expect(allowed.outcome, FactsProjectionOutcome.applied);
+
+      // 长度超限
+      final tooLong = await FactsDeltaProjectionEvaluator.preflightDelta(
+        repository: repo,
+        sessionId: 's1',
+        delta: FactsDelta(
+          action: FactAction.updateAttr,
+          entityId: 'ent_001',
+          attrKey: 'personality',
+          value: '字' * 501,
+          confidence: 5,
+          skipFrequencyGuard: true,
+        ),
+        config: config,
+        turnNumber: 10,
+      );
+      expect(tooLong.outcome, FactsProjectionOutcome.skipped);
+      expect(tooLong.note, FactsProjectionNote.valueTooLong);
+
+      // 静态基线列表移除拦截
+      repo.entitiesById['ent_wb'] = character(
+        id: 'ent_wb',
+        name: '守卫',
+        source: FactualSource.worldbook,
+      );
+      repo.seedAttribute(
+        attr(
+          attrId: 'attr_wb_skills',
+          entityId: 'ent_wb',
+          key: 'skills',
+          value: '["长枪"]',
+          type: AttributeValueType.list,
+          source: FactualSource.worldbook,
+        ),
+      );
+      final staticRemove = await FactsDeltaProjectionEvaluator.preflightDelta(
+        repository: repo,
+        sessionId: 's1',
+        delta: const FactsDelta(
+          action: FactAction.removeFromList,
+          entityId: 'ent_wb',
+          attrKey: 'skills',
+          value: '长枪',
+          confidence: 5,
+        ),
+        config: config,
+        turnNumber: 10,
+      );
+      expect(staticRemove.outcome, FactsProjectionOutcome.skipped);
+      expect(staticRemove.note, FactsProjectionNote.noMutableList);
+
+      // 未知实体返回 entityMissing
+      final missingName = await FactsDeltaProjectionEvaluator.preflightDelta(
+        repository: repo,
+        sessionId: 's1',
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          primaryName: '路人乙',
+          importance: 4,
+          confidence: 5,
+        ),
+        config: config,
+        turnNumber: 10,
+      );
+      expect(missingName.outcome, FactsProjectionOutcome.skipped);
+      expect(missingName.note, FactsProjectionNote.entityMissing);
+
+      // set_importance 命中同值跳过、有效值放行
+      final sameImp = await FactsDeltaProjectionEvaluator.preflightDelta(
+        repository: repo,
+        sessionId: 's1',
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_001',
+          importance: 3,
+          confidence: 5,
+        ),
+        config: config,
+        turnNumber: 10,
+      );
+      expect(sameImp.outcome, FactsProjectionOutcome.skipped);
+      expect(sameImp.note, FactsProjectionNote.valueUnchanged);
+
+      final changedImp = await FactsDeltaProjectionEvaluator.preflightDelta(
+        repository: repo,
+        sessionId: 's1',
+        delta: const FactsDelta(
+          action: FactAction.setImportance,
+          entityId: 'ent_001',
+          importance: 5,
+          confidence: 5,
+        ),
+        config: config,
+        turnNumber: 10,
+      );
+      expect(changedImp.outcome, FactsProjectionOutcome.applied);
+      expect(changedImp.before, '3');
+      expect(changedImp.after, '5');
     });
   });
 }

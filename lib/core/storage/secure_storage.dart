@@ -17,9 +17,17 @@ class SecureStorage {
   final FlutterSecureStorage _storage;
   final _log = const Logger('SecureStorage');
 
+  /// 用于需要区分缺键和底层失败的导入回退。
+  Future<String?> readStrict(String key) => _storage.read(key: key);
+
+  Future<void> writeStrict(String key, String value) =>
+      _storage.write(key: key, value: value);
+
+  Future<void> deleteStrict(String key) => _storage.delete(key: key);
+
   Future<String?> read(String key) async {
     try {
-      return await _storage.read(key: key);
+      return await readStrict(key);
     } on PlatformException catch (e) {
       _log.warn('Read failed, key=$key', detail: '$e');
       return null;
@@ -28,7 +36,7 @@ class SecureStorage {
 
   Future<void> write(String key, String value) async {
     try {
-      await _storage.write(key: key, value: value);
+      await writeStrict(key, value);
     } on PlatformException catch (e) {
       _log.error('Write failed, key=$key', detail: '$e');
       // 不吞异常：API Key 等关键数据保存失败时调用方需感知，否则数据静默丢失
@@ -38,7 +46,7 @@ class SecureStorage {
 
   Future<void> delete(String key) async {
     try {
-      await _storage.delete(key: key);
+      await deleteStrict(key);
     } on PlatformException catch (e) {
       _log.warn('Delete failed, key=$key', detail: '$e');
     }

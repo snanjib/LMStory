@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:lmstory/core/llm/llm_usage.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_spacing.dart';
 import 'package:lmstory/core/theme/intermediate/intermediate_text_styles.dart';
@@ -253,6 +254,14 @@ class ContextUsageDetailSheet extends StatefulWidget {
     this.composition,
     this.compositionNote,
     this.isEstimated = false,
+    this.currentEstimateTokens,
+    this.currentEstimateIsLocal,
+    this.lastRequestInputTokens,
+    this.requestInputIsComplete = false,
+    this.lastRequestAt,
+    this.cacheCoveredRounds,
+    this.lastCacheHitRatio,
+    this.lastCacheSampleInvalid = false,
     super.key,
   });
 
@@ -263,6 +272,41 @@ class ContextUsageDetailSheet extends StatefulWidget {
   final int? lastCacheReadTokens;
   final double? averageCacheHit;
   final int sessionRounds;
+
+  /// 当前预计上下文（hero/进度条主数字）。null = 沿用 [lastPromptTokens]
+  ///（向后兼容旧调用点/测试），调用方应尽量显式传入。
+  final int? currentEstimateTokens;
+
+  /// 主数字是否为本地估算（压缩/删除后调整值，UI 显示 ≈）
+  final bool? currentEstimateIsLocal;
+
+  /// 最近一次主请求的完整输入 token（命中率分母/「最近请求」区）
+  ///
+  /// null = 旧调用方未拆分口径，回退 [lastPromptTokens]（旧公式保持）。
+  final int? lastRequestInputTokens;
+
+  /// [lastRequestInputTokens] 是否为协议无关的完整输入面（新调用点）。
+  ///
+  /// true 时 null 表示「本次请求完整输入未知」——显示「—」，不得回退
+  /// 协议原生 prompt（Anthropic 的 prompt 不含 cache read/creation，
+  /// 会把命中率算成几百个百分点）。
+  final bool requestInputIsComplete;
+
+  /// 最近请求的发生时刻（口径脚注展示；未知为 null）
+  final DateTime? lastRequestAt;
+
+  /// 命中率累计覆盖的轮数（只统计可比样本；null = 不展示覆盖行）
+  final int? cacheCoveredRounds;
+
+  /// 已校验的最近请求命中率（异常/不可比时为 null）。
+  ///
+  /// 由调用方用 `LlmUsage.hitRateOf` 等统一校验后传入；面板不再自行
+  /// 用原始分项直接相除，避免越界/冲突样本被展示成 120% 等精确假象。
+  final double? lastCacheHitRatio;
+
+  /// 最近请求分项是否因冲突/越界等异常不可比较（true → 命中率显示「—」
+  /// 并附计量异常说明）。
+  final bool lastCacheSampleInvalid;
   final bool isManualCompacting;
   final String manualCompactionDelta;
   final String? manualCompactionError;
@@ -338,14 +382,38 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
   /// 的误读（内测反馈：全「—」以为模型不支持）。
   bool get _showUsageNote =>
       widget.isEstimated ||
+      _estimateIsLocal ||
       widget.lastCompletionTokens == null ||
       widget.lastCacheReadTokens == null;
+
+  /// 主数字：当前预计上下文
+  ///
+  /// 显式传了 [ContextUsageDetailSheet.currentEstimateIsLocal]（新调用点）
+  /// 时按原值展示，null 即无数据；旧调用点未拆分口径才回退 lastPromptTokens。
+  int? get _estimateTokens {
+    if (widget.currentEstimateIsLocal != null) {
+      return widget.currentEstimateTokens;
+    }
+    return widget.currentEstimateTokens ?? widget.lastPromptTokens;
+  }
+
+  /// 主数字是否为本地估算
+  bool get _estimateIsLocal =>
+      widget.currentEstimateIsLocal ?? widget.isEstimated;
+
+  /// 最近请求实际输入（命中率分母）
+  ///
+  /// 新调用点（requestInputIsComplete）只认 lastRequestInputTokens，
+  /// 缺失即 null；旧调用点保留 prompt 回退。
+  int? get _lastRequestInput => widget.requestInputIsComplete
+      ? widget.lastRequestInputTokens
+      : widget.lastRequestInputTokens ?? widget.lastPromptTokens;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
-    final hasUsage = widget.lastPromptTokens != null &&
+    final hasUsage = _estimateTokens != null &&
         widget.contextWindowTokens != null &&
         widget.contextWindowTokens! > 0;
 
@@ -403,6 +471,14 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
                   ],
                 ),
                 const SizedBox(height: IntermediateSpacing.sLg),
+                if (widget.currentEstimateTokens != null) ...[
+                  Text(
+                    t.common.contextRing.currentEstimateLabel,
+                    style: IntermediateTextStyles.caption
+                        .copyWith(color: colors.muted),
+                  ),
+                  const SizedBox(height: IntermediateSpacing.s2xs),
+                ],
                 _buildUsageHero(colors, t, hasUsage: hasUsage),
                 const SizedBox(height: IntermediateSpacing.sSm),
                 _buildUsageBar(colors),
@@ -492,10 +568,10 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
       children: [
         Expanded(
           child: Text(
-            '${widget.isEstimated ? '≈ ' : ''}'
+            '${_estimateIsLocal ? '≈ ' : ''}'
             '${t.common.contextRing.usageFraction(
               used: ContextUsageDetailSheet.formatTokenCount(
-                widget.lastPromptTokens!,
+                _estimateTokens!,
               ),
               total: ContextUsageDetailSheet.formatTokenCount(
                 widget.contextWindowTokens!,
@@ -511,8 +587,8 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
         ),
         const SizedBox(width: IntermediateSpacing.sMd),
         Text(
-          '${widget.isEstimated ? '≈' : ''}'
-          '${(widget.lastPromptTokens! / widget.contextWindowTokens! * 100).toStringAsFixed(1)}%',
+          '${_estimateIsLocal ? '≈' : ''}'
+          '${(_estimateTokens! / widget.contextWindowTokens! * 100).toStringAsFixed(1)}%',
           style: _valueStyle().copyWith(
             fontSize: IntermediateTextStyles.title.fontSize,
             fontWeight: IntermediateTextStyles.title.fontWeight,
@@ -524,7 +600,7 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
 
   Widget _buildUsageBar(LmPalette colors) {
     final window = widget.contextWindowTokens ?? 0;
-    final used = widget.lastPromptTokens;
+    final used = _estimateTokens;
     if (window <= 0 || used == null) return const SizedBox.shrink();
     final fillFraction = (used / window).clamp(0.0, 1.0);
     final trigger = widget.compactionTriggerTokens;
@@ -681,9 +757,36 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
 
   Widget _buildCacheSection(LmPalette colors, Translations t) {
     final lastPrompt = widget.lastPromptTokens;
-    final hasLastHit = widget.lastCacheReadTokens != null &&
-        lastPrompt != null &&
-        lastPrompt > 0;
+    final input = widget.requestInputIsComplete
+        ? widget.lastRequestInputTokens
+        : widget.lastRequestInputTokens ?? widget.lastPromptTokens;
+    final legacyDenominator =
+        !widget.requestInputIsComplete && widget.lastRequestInputTokens == null;
+    // 命中率只消费已校验结果：异常样本（冲突/越界）显示未知；新调用点
+    // 优先用调用方传入的校验值，旧调用点保留 C/(C+P) 兼容。
+    final double? lastHitRatio;
+    if (widget.lastCacheSampleInvalid) {
+      lastHitRatio = null;
+    } else if (legacyDenominator) {
+      final cacheRead = widget.lastCacheReadTokens;
+      final denominator =
+          cacheRead == null || lastPrompt == null ? 0 : cacheRead + lastPrompt;
+      lastHitRatio =
+          cacheRead != null && denominator > 0 ? cacheRead / denominator : null;
+    } else {
+      lastHitRatio = widget.lastCacheHitRatio ??
+          LlmUsage.hitRateOf(
+            cacheReadTokens: widget.lastCacheReadTokens,
+            inputTokens: input,
+          );
+    }
+    // 未显式标注异常时，按原始分项是否被校验公式拒绝推导：
+    // 有缓存读取、有分母、却算不出合法比例 → 不可比较。
+    final sampleInvalid = widget.lastCacheSampleInvalid ||
+        (!legacyDenominator &&
+            widget.lastCacheReadTokens != null &&
+            input != null &&
+            lastHitRatio == null);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -691,15 +794,7 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
         const SizedBox(height: IntermediateSpacing.sXs),
         _kvRow(
           t.common.contextRing.cacheHitLast,
-          // 与「会话平均」同分母 C/(C+P)：最近一轮此前用 C/P，
-          // 同屏两行两种口径（Anthropic promptTokens 不含 cache-read，
-          // C/P 会把命中率系统性高估）。
-          hasLastHit
-              ? _formatRatio(
-                  widget.lastCacheReadTokens! /
-                      (widget.lastCacheReadTokens! + lastPrompt),
-                )
-              : t.common.contextRing.noData,
+          _formatRatio(lastHitRatio),
           colors,
         ),
         _kvRow(
@@ -707,6 +802,24 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
           _formatRatio(widget.averageCacheHit),
           colors,
         ),
+        if (widget.cacheCoveredRounds != null)
+          _kvRow(
+            t.common.contextRing.cacheCoverageLabel,
+            t.common.contextRing.cacheCoverageValue(
+              count: '${widget.cacheCoveredRounds}',
+            ),
+            colors,
+          ),
+        if (sampleInvalid)
+          Padding(
+            padding: const EdgeInsets.only(top: IntermediateSpacing.sXs),
+            child: Text(
+              t.common.contextRing.cacheSampleInvalid,
+              style: IntermediateTextStyles.caption.copyWith(
+                color: colors.faint,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -721,7 +834,7 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
           t.common.contextRing.inputLabel,
           // 估算兜底时输入/输出行同加「≈」前缀；缓存读取本地不可估算
           _tokenLabel(
-            widget.lastPromptTokens,
+            _lastRequestInput,
             t,
             estimated: widget.isEstimated,
           ),
@@ -741,6 +854,14 @@ class _ContextUsageDetailSheetState extends State<ContextUsageDetailSheet> {
           _tokenLabel(widget.lastCacheReadTokens, t),
           colors,
         ),
+        if (widget.lastRequestAt != null)
+          _kvRow(
+            t.common.contextRing.updatedAtLabel,
+            MaterialLocalizations.of(context).formatTimeOfDay(
+              TimeOfDay.fromDateTime(widget.lastRequestAt!.toLocal()),
+            ),
+            colors,
+          ),
       ],
     );
   }

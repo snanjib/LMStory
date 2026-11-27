@@ -37,6 +37,7 @@ class RoundContext {
     required this.connectTimeout,
     required this.readTimeout,
     this.currentNarrativeTime,
+    this.engineeringContextEnabled = false,
   });
 
   final String userInput;
@@ -109,6 +110,12 @@ class RoundContext {
   /// 的叙事时间。summarizing 阶段注入到提示词的【最近叙事时间线】中，
   /// 供 LLM 判断本轮时间是否推进。null 表示首轮或尚未建立叙事时间。
   final String? currentNarrativeTime;
+
+  /// 工程上下文模式开关（导演实验；false = 关闭态，与基线行为一致）
+  ///
+  /// 由控制器从三态解析结果注入（正常开启态为 true；需要修复态下轮次
+  /// 不会启动）。轮内运行时按它选择装配策略与日志保留行为。
+  final bool engineeringContextEnabled;
 
   // 阶段产出（随阶段推进填充）
 

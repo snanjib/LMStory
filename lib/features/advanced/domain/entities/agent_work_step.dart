@@ -1,5 +1,11 @@
 import 'dart:convert';
 
+import 'package:lmstory/core/llm/llm_usage.dart';
+import 'package:lmstory/features/memory/domain/entities/event_summary.dart';
+import 'package:lmstory/features/memory/domain/entities/facts_projection_note.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_attribute.dart';
+import 'package:lmstory/features/memory/domain/entities/factual_entity.dart';
+
 /// 导演模式单个工具执行步骤状态（opencode 式工具卡三态 + 可恢复失败态）
 enum AgentStepStatus {
   /// 正在执行（标题微光扫过，不可展开）
@@ -184,9 +190,13 @@ class AgentWorkSummary {
     required this.durationMs,
     this.deliveryChannel = 'tool_args',
     this.lastPromptTokens,
+    this.lastInputTokens,
     this.lastCompletionTokens,
     this.lastCacheReadTokens,
+    this.usageWarnings = const [],
     this.styleLintHits,
+    this.maintenanceNudgeIssued = false,
+    this.majorReviewCompleted = false,
   });
 
   /// 从 agent_summary 列 JSON 解析（旧数据缺列时不会被调用）
@@ -199,11 +209,18 @@ class AgentWorkSummary {
       deliveryChannel: json['deliveryChannel'] as String? ?? 'text_fallback',
       // 上下文用量指示：旧 JSON 无字段 → null
       lastPromptTokens: (json['lastPromptTokens'] as num?)?.toInt(),
+      // 完整输入面（Anthropic 含缓存读写）；旧 JSON 无字段 → null
+      lastInputTokens: (json['lastInputTokens'] as num?)?.toInt(),
       lastCompletionTokens: (json['lastCompletionTokens'] as num?)?.toInt(),
       lastCacheReadTokens: (json['lastCacheReadTokens'] as num?)?.toInt(),
+      usageWarnings:
+          (json['usageWarnings'] as List?)?.map((e) => e.toString()).toList() ??
+              const [],
       // 风格漂移监测（长会话退化治理）：旧 JSON 无字段 → null，
       // 不参与漂移统计
       styleLintHits: (json['styleLintHits'] as num?)?.toInt(),
+      maintenanceNudgeIssued: json['maintenanceNudgeIssued'] as bool? ?? false,
+      majorReviewCompleted: json['majorReviewCompleted'] as bool? ?? false,
     );
   }
 
@@ -218,25 +235,59 @@ class AgentWorkSummary {
   /// 该轮最后一次请求的真实 prompt/completion/缓存读 token
   /// （上下文用量指示 §3.1）。null = 旧轮次（实施前），UI 显示空环。
   final int? lastPromptTokens;
+
+  /// 该轮最后一次请求的完整输入 token（命中率分母/上下文占用）
+  ///
+  /// Anthropic = input + cache read + cache creation；OpenAI/Gemini 的
+  /// prompt 已含缓存。null = 旧轮次（实施前），命中率样本降级为不参与。
+  final int? lastInputTokens;
   final int? lastCompletionTokens;
   final int? lastCacheReadTokens;
+
+  /// 该轮最后一次主请求自身的计量异常说明（字段冲突/非法样本等）。
+  ///
+  /// 只记录末次请求，不含整轮早先步骤或子代理的异常（后者随 turn/end
+  /// 诊断留档）。异常样本的原值仍保留在 [lastCacheReadTokens] 供诊断，
+  /// 但不得参与无标识的精确命中率计算。
+  final List<String> usageWarnings;
+
+  /// 单轮缓存命中率（缺完整输入面/缓存分项/存在计量异常 → null）
+  double? get lastCacheHitRatio => usageWarnings.isNotEmpty
+      ? null
+      : LlmUsage.hitRateOf(
+          cacheReadTokens: lastCacheReadTokens,
+          inputTokens: lastInputTokens,
+        );
 
   /// 该轮完稿 lint 的最终违规数（长会话退化治理  风格漂移监测的
   /// 留痕口径；含定向重写后的终值）。null = 旧轮次（实施前），不参与
   /// 漂移统计；0 = 干净轮。
   final int? styleLintHits;
 
+  /// 本轮是否实际注入了轻量维护缺口提示（供后续计算提醒冷却轮数）
+  final bool maintenanceNudgeIssued;
+
+  /// 本轮是否实际完成了周期全面审查与维护阶段
+  final bool majorReviewCompleted;
+
   /// 旧会话回填用（仅内存补 lastPromptTokens，不回写 DB）
-  AgentWorkSummary copyWith({int? lastPromptTokens}) {
+  AgentWorkSummary copyWith({
+    int? lastPromptTokens,
+    int? lastInputTokens,
+  }) {
     return AgentWorkSummary(
       steps: steps,
       totalTokens: totalTokens,
       durationMs: durationMs,
       deliveryChannel: deliveryChannel,
       lastPromptTokens: lastPromptTokens ?? this.lastPromptTokens,
+      lastInputTokens: lastInputTokens ?? this.lastInputTokens,
       lastCompletionTokens: lastCompletionTokens,
       lastCacheReadTokens: lastCacheReadTokens,
+      usageWarnings: usageWarnings,
       styleLintHits: styleLintHits,
+      maintenanceNudgeIssued: maintenanceNudgeIssued,
+      majorReviewCompleted: majorReviewCompleted,
     );
   }
 
@@ -249,13 +300,17 @@ class AgentWorkSummary {
     };
     // 缺省字段不写入：旧数据保持旧形态，零兼容成本
     if (lastPromptTokens != null) json['lastPromptTokens'] = lastPromptTokens;
+    if (lastInputTokens != null) json['lastInputTokens'] = lastInputTokens;
     if (lastCompletionTokens != null) {
       json['lastCompletionTokens'] = lastCompletionTokens;
     }
     if (lastCacheReadTokens != null) {
       json['lastCacheReadTokens'] = lastCacheReadTokens;
     }
+    if (usageWarnings.isNotEmpty) json['usageWarnings'] = usageWarnings;
     if (styleLintHits != null) json['styleLintHits'] = styleLintHits;
+    if (maintenanceNudgeIssued) json['maintenanceNudgeIssued'] = true;
+    if (majorReviewCompleted) json['majorReviewCompleted'] = true;
     return json;
   }
 }
@@ -263,7 +318,8 @@ class AgentWorkSummary {
 /// 累计器分项落 [AgentWorkSummary] 前的口径闸：非正值（端点未回 usage
 /// 时累计器留 0）映射为 null——null 才走「—」/空环展示并放行旧会话
 /// 回填探针；0 会伪装成「真实为 0」污染面板（内测反馈「全是 —」排查）。
-int? positiveOrNullOrNull(int value) => value > 0 ? value : null;
+int? positiveOrNullOrNull(int? value) =>
+    value != null && value > 0 ? value : null;
 
 /// 待回答的导演问题（ask_user 横幅展示态，体验重构）
 class AgentAskPrompt {
@@ -282,6 +338,7 @@ class AgentApprovalPrompt {
     required this.summary,
     this.changes = const [],
     this.pendingPriorChanges = 0,
+    this.summaryData,
   });
 
   /// 工具名（审计标识，横幅主体用人话摘要）
@@ -290,6 +347,8 @@ class AgentApprovalPrompt {
   /// 人话摘要（如「修订设定集 · 2 处」）
   final String summary;
 
+  final ApprovalSummaryData? summaryData;
+
   /// 结构化变更明细（2026-10-15 批 B：干跑投影合成；空列表 = 无明细可
   /// 展示或组装降级，横幅退化为现状纯摘要）
   final List<AgentApprovalChange> changes;
@@ -297,6 +356,23 @@ class AgentApprovalPrompt {
   /// 本轮此前已批准暂存的变更条数（脚注提示「收笔时统一提交」用）
   final int pendingPriorChanges;
 }
+
+/// Data used to format the tool summary in the current interface language.
+class ApprovalSummaryData {
+  const ApprovalSummaryData({
+    this.factCount = 1,
+    this.anchorFields = const [],
+    this.source,
+    this.target,
+  });
+
+  final int factCount;
+  final List<ApprovalAnchorField> anchorFields;
+  final String? source;
+  final String? target;
+}
+
+enum ApprovalAnchorField { arc, mainline, time, foreshadow }
 
 /// 审批变更的种类徽标（纯展示模型；不触碰 facts 层 FactAction 枚举）
 enum ApprovalChangeKind {
@@ -316,15 +392,17 @@ enum ApprovalChangeKind {
 /// 单条审批变更的展示单元（2026-10-15 批 B）
 ///
 /// 由审批投影器（干跑）合成：before 为库侧现查旧值、after 为模型意图
-/// 新值；转写/跳过说明进 [note]（已映射人话）。纯展示模型，不进 facts 层。
+/// 新值；转写/跳过说明进 [note]。这是审批横幅的临时展示模型。
 class AgentApprovalChange {
   const AgentApprovalChange({
     required this.entityName,
     required this.kind,
+    this.entityType,
     this.attrKey,
     this.before,
     this.after,
     this.note,
+    this.details,
     this.reason,
     this.confidence,
     this.effective = true,
@@ -332,6 +410,9 @@ class AgentApprovalChange {
 
   /// 人话定位（实体主名；merge 类为「源 → 目标」；锚线/事件类可为空串）
   final String entityName;
+
+  /// 用于定位内置属性标签的实体类型。
+  final FactualEntityType? entityType;
 
   /// 属性名（update/append/remove 类必有；事件/锚线类可为 null）
   final String? attrKey;
@@ -347,6 +428,8 @@ class AgentApprovalChange {
   /// 转写/跳过说明（如「值相同，不会产生变化」「重名，将转为新增别名」）
   final String? note;
 
+  final ApprovalChangeDetails? details;
+
   /// 模型给出的修改理由（deltas 自带，判断「一时表演 vs 真性格」的证据链）
   final String? reason;
 
@@ -356,4 +439,45 @@ class AgentApprovalChange {
   /// 是否实际生效（false = 被防护跳过/值相同不会落库，UI 灰显带说明；
   /// true 含转写后生效——note 携带转写说明）
   final bool effective;
+}
+
+/// Structured values and decision notes used by the approval surface.
+sealed class ApprovalChangeDetails {
+  const ApprovalChangeDetails();
+}
+
+final class ApprovalFactNotes extends ApprovalChangeDetails {
+  const ApprovalFactNotes(this.notes);
+
+  final List<FactsProjectionNote> notes;
+}
+
+final class ApprovalAnchorDetails extends ApprovalChangeDetails {
+  const ApprovalAnchorDetails(this.field, {this.added = 0, this.removed = 0});
+
+  final ApprovalAnchorField field;
+  final int added;
+  final int removed;
+}
+
+final class ApprovalEventDetails extends ApprovalChangeDetails {
+  const ApprovalEventDetails({this.previous, this.who, this.when, this.where});
+
+  final EventSummary? previous;
+  final String? who;
+  final String? when;
+  final String? where;
+}
+
+final class ApprovalMergeDetails extends ApprovalChangeDetails {
+  const ApprovalMergeDetails({required this.source, required this.target});
+
+  final String source;
+  final String target;
+}
+
+final class ApprovalSnapshotDetails extends ApprovalChangeDetails {
+  const ApprovalSnapshotDetails(this.attribute);
+
+  final FactualAttribute attribute;
 }

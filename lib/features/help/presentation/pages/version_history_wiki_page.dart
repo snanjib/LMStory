@@ -146,8 +146,6 @@ class _MilestoneItem extends StatelessWidget {
                 fontSize: 11,
                 height: 1.5,
               ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],

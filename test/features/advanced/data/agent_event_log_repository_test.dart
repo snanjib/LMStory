@@ -2,8 +2,10 @@ import 'dart:convert';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/features/advanced/data/repositories/agent_event_log_repository.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/features/advanced/domain/services/engineering_context_mode.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 
 /// AgentEventLogRepository 测试（内存 drift）
@@ -133,6 +135,74 @@ void main() {
       );
     });
 
+    // HAR-01：surface/replace（溢出整面快照，唯一生产者=溢出自愈
+    // agent_runner，每轮至多一次，replaceStart=0 含全量消息）与 system/%
+    // 同等豁免——长会话 trim 后失败续跑/恢复的投影（deriveAgentSurface）
+    // 不丢失压缩摘要。
+    test('HAR-01：旧轮 surface/replace 行豁免 trim；保留量随溢出次数线性', () async {
+      final events = <AgentDurableEvent>[
+        event(
+          AgentEventTypes.systemFrozen,
+          data: {'turn': 1, 'content': 'FROZEN'},
+        ),
+        // 30 轮 × 每轮 2 行（assistant/message + step/end）
+        for (var turn = 1; turn <= 30; turn++) ...[
+          event('assistant/message', data: {'turn': turn}),
+          event('step/end', data: {'turn': turn}),
+        ],
+        // 两次溢出整面替换快照（stamp 发生轮 5 与 12，均已在窗外）
+        event(
+          AgentEventTypes.surfaceReplace,
+          data: {
+            'turn': 5,
+            'messages': [
+              {'as': 'system', 'content': 'FROZEN'},
+              {'as': 'user', 'content': '【前情压缩摘要】'},
+            ],
+          },
+          op: AgentSurfaceOpKind.replace,
+        ),
+        event(
+          AgentEventTypes.surfaceReplace,
+          data: {
+            'turn': 12,
+            'messages': [
+              {'as': 'system', 'content': 'FROZEN'},
+              {'as': 'user', 'content': '【前情压缩摘要 2】'},
+            ],
+          },
+          op: AgentSurfaceOpKind.replace,
+        ),
+      ];
+      await repo.appendAll('s1', events);
+
+      final deleted = await repo.trimToRecentTurns('s1', 10);
+
+      // 旧轮非 system 非 replace 全删（60 行 - 窗内 20 行 = 40 行）
+      expect(deleted, 40);
+      final remaining = await repo.readEvents('s1');
+      // 窗外非 system 行恰剩两条溢出快照——「低频 KB 级」保留负担
+      // 随溢出次数线性（两次溢出 → 两条）
+      final oldNonSystem = remaining
+          .where(
+            (e) =>
+                !e.type.startsWith('system/') &&
+                (e.data['turn'] as int? ?? 0) < 21,
+          )
+          .toList();
+      expect(oldNonSystem, hasLength(2));
+      expect(
+        oldNonSystem.every((e) => e.type == AgentEventTypes.surfaceReplace),
+        isTrue,
+        reason: '旧轮仅溢出快照豁免保留',
+      );
+      // system 行不回归：frozen 仍在
+      expect(
+        remaining.where((e) => e.type == AgentEventTypes.systemFrozen),
+        hasLength(1),
+      );
+    });
+
     test('同 turn 重生成二次追加后，窗口按 distinct turn 判定', () async {
       await repo.appendAll('s1', [
         event('assistant/message', data: {'turn': 1}),
@@ -199,6 +269,80 @@ void main() {
     }
     final tail = await repo.readEvents('s1', fromSeq: 3);
     expect(tail.map((e) => e.type).toList(), ['e3', 'e4']);
+  });
+
+  // HAR-02：损坏 data（jsonDecode 失败）不再以 {} 空对象进投影
+  // 产出空 assistant——跳过该行（不进返回列表）且不抛异常。
+  group('HAR-02 损坏 data 行跳过', () {
+    Future<void> insertCorruptRow(
+      String sessionId,
+      int seq,
+      String type,
+      String data, {
+      String? surfaceOp,
+    }) =>
+        db.customStatement(
+          'INSERT INTO agent_events (session_id, seq, type, time, data, '
+          'surface_op) VALUES (?, ?, ?, ?, ?, ?)',
+          [sessionId, seq, type, 0, data, surfaceOp],
+        );
+
+    test('损坏行被跳过且不抛异常；正常行不受影响', () async {
+      await repo.appendAll('s1', [
+        event('user/message', data: {'turn': 1, 'content': '输入'}),
+      ]);
+      await insertCorruptRow('s1', 1, 'assistant/message', 'not-json{');
+      await repo.appendAll('s1', [
+        event('assistant/message', data: {'turn': 1, 'text': '正常回复'}),
+      ]);
+
+      final events = await repo.readEvents('s1');
+
+      expect(events, hasLength(2), reason: '损坏行跳过，不进返回列表');
+      expect(events.map((e) => e.data['content'] ?? e.data['text']), [
+        '输入',
+        '正常回复',
+      ]);
+    });
+
+    test('投影不再产出空 assistant（损坏行缺失被容忍）', () async {
+      await repo.appendAll('s1', [
+        event(
+          'user/message',
+          data: {'turn': 1, 'content': '输入'},
+          op: AgentSurfaceOpKind.append,
+        ),
+      ]);
+      await insertCorruptRow(
+        's1',
+        1,
+        'assistant/message',
+        '{"text": "半截', // 损坏的 JSON 截断形态
+        surfaceOp: 'append', // 真实形态：surface 事件的 data 被截断
+      );
+      await repo.appendAll('s1', [
+        event(
+          'assistant/message',
+          data: {'turn': 1, 'text': '正常回复'},
+          op: AgentSurfaceOpKind.append,
+        ),
+      ]);
+
+      final events = await repo.readEvents('s1');
+      final projection = deriveAgentSurface(events);
+
+      expect(projection.messages, hasLength(2), reason: '损坏行不产出空 assistant');
+      expect(
+        projection.messages.where(
+          (m) =>
+              m.role == 'assistant' &&
+              (m.content == null || m.content!.isEmpty) &&
+              !m.hasToolCalls,
+        ),
+        isEmpty,
+        reason: '跳过的行不得以 {} 空对象进投影',
+      );
+    });
   });
 
   test('replace 事件字段（replaceStart/End + sourceEventSeqs）往返', () async {
@@ -361,6 +505,77 @@ void main() {
 
       expect(await repo.readEvents('s1'), isEmpty);
       expect(deletedFrozen, isTrue);
+    });
+
+    test('旧轮事件已裁剪时，仍按开启轮号重建捕获', () async {
+      await db.into(db.chatSessionsTable).insert(
+            ChatSessionsTableCompanion.insert(sessionId: 's1', title: '导演'),
+          );
+      await repo.applyEngineeringContextEnter(
+        sessionId: 's1',
+        epochId: 'old-epoch',
+        fromTurn: 3,
+        captureEvents: buildEngineeringCaptureEvents(
+          visibleSurface: [AgentMessage.assistant(text: '第二轮旧稿')],
+          epochId: 'old-epoch',
+        ),
+      );
+
+      await repo.deleteTurnEvents(
+        's1',
+        2,
+        captureHistory: (epochId) async => EngineeringEnterCapture(
+          fromTurn: 2,
+          captureEvents: buildEngineeringCaptureEvents(
+            visibleSurface: [AgentMessage.assistant(text: '第一轮正文')],
+            epochId: epochId,
+          ),
+        ),
+      );
+
+      final events = await repo.readEvents('s1');
+      expect(
+        resolveEngineeringMode(enabled: true, events: events).mode,
+        EngineeringRuntimeMode.normalOpen,
+      );
+      expect(
+        events
+            .where((event) => event.type == AgentEventTypes.modeCapture)
+            .single
+            .data['content'],
+        '第一轮正文',
+      );
+      expect(events.first.data['fromTurn'], 2);
+    });
+
+    test('回退曾在开启态生成的轮次，保留会话的退出状态', () async {
+      await db.into(db.chatSessionsTable).insert(
+            ChatSessionsTableCompanion.insert(sessionId: 's1', title: '导演'),
+          );
+      await repo.applyEngineeringContextEnter(
+        sessionId: 's1',
+        epochId: 'closed-epoch',
+        fromTurn: 2,
+        captureEvents: const [],
+      );
+      await repo.append(
+        's1',
+        event(AgentEventTypes.turnBegin, data: {'turn': 2}),
+      );
+      await repo.applyEngineeringContextExit(
+        sessionId: 's1',
+        epochId: 'closed-epoch',
+      );
+
+      await repo.deleteTurnEvents('s1', 2);
+
+      final events = await repo.readEvents('s1');
+      expect(
+        resolveEngineeringMode(enabled: false, events: events).mode,
+        EngineeringRuntimeMode.normalClosed,
+      );
+      expect(events.where((event) => event.data['turn'] == 2), isEmpty);
+      expect(events.last.data['phase'], kModeEpochPhaseExit);
     });
   });
 }

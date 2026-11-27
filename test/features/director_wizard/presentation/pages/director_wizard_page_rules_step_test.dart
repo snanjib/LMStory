@@ -127,6 +127,32 @@ void main() {
     );
   });
 
+  testWidgets('English template selection displays the localized rules',
+      (tester) async {
+    final fake = FakeWizardSettingsNotifier(
+      initialPresets: [keyedPreset()],
+      keyedPresetIds: const {'preset-1'},
+      templates: [
+        tpl().copyWith(
+          nameEn: 'Isekai narrator system prompt',
+          contentEn: 'Write this scene in English.',
+        ),
+      ],
+    );
+    await pumpToRulesStep(tester, fake: fake);
+    await tester.runAsync(() => LocaleSettings.setLocale(AppLocale.enUs));
+    addTearDown(() => LocaleSettings.setLocaleSync(AppLocale.zhCn));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Use a ready template'));
+    await tester.pumpAndSettle();
+    final english = find.text('Isekai narrator system prompt');
+    expect(english, findsOneWidget);
+    await tester.tap(english);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Write this scene in English.'), findsOneWidget);
+  });
+
   testWidgets('路 B 拼装：答题→预览含身份句与所选块→存模板弹框预填题材', (tester) async {
     final fake = FakeWizardSettingsNotifier(
       initialPresets: [keyedPreset()],

@@ -112,13 +112,18 @@ const _advancedConfig = AppConfig(
   ),
 );
 
-ConfigurationResolver _resolver({AppConfig? config}) => ConfigurationResolver(
+ConfigurationResolver _resolver({
+  AppConfig? config,
+  List<ApiPreset>? presets,
+  Map<String, String>? apiKeys,
+}) =>
+    ConfigurationResolver(
       presetRepository: _FakeApiPresetRepository(
-        presets: [_preset('adv-preset'), _preset('emb-adv')],
+        presets: presets ?? [_preset('adv-preset'), _preset('emb-adv')],
       ),
       settingsRepository: _FakeSettingsRepository(
         config: config ?? _advancedConfig,
-        apiKeys: {'adv-preset': 'key-adv', 'emb-adv': 'key-emb'},
+        apiKeys: apiKeys ?? {'adv-preset': 'key-adv', 'emb-adv': 'key-emb'},
       ),
       logger: _logger,
     );
@@ -204,6 +209,17 @@ void main() {
       expect(naming!.modelId, 'session-gm');
     });
 
+    test('选中的导演供应商缺少密钥时保留配置错误', () async {
+      final resolver = _resolver(
+        presets: [_preset('adv-preset'), _preset('other')],
+        apiKeys: {'other': 'fixture-key'},
+      );
+      expect(
+        await resolver.resolveAdvancedGeneratingNamingConfig(_session()),
+        isNull,
+      );
+    });
+
     test('intermediate.phase_models 不影响导演解析（解耦）', () async {
       final resolver = _resolver(
         config: const AppConfig(
@@ -259,6 +275,28 @@ void main() {
         ),
       );
       expect(await resolver.resolveAdvancedEmbeddingConfig(), isNull);
+    });
+
+    test('免密钥：preset/model 已选而 apiKey 缺失 → 仍返回配置（匿名尝试）', () async {
+      final resolver = ConfigurationResolver(
+        presetRepository: _FakeApiPresetRepository(
+          presets: [_preset('emb-adv')],
+        ),
+        settingsRepository: _FakeSettingsRepository(
+          config: _advancedConfig,
+          apiKeys: {'adv-preset': 'key-adv'}, // 无 emb-adv 的 key
+        ),
+        logger: _logger,
+      );
+
+      // 与故事模式 resolveEmbeddingConfig 同构：免密钥不判「未配置」，
+      // 正常构造配置尝试匿名请求
+      final result = await resolver.resolveAdvancedEmbeddingConfig();
+
+      expect(result, isNotNull);
+      expect(result!.model, 'emb-model');
+      expect(result.baseUrl, 'https://api.adv.com/v1');
+      expect(result.apiKey, isNull);
     });
   });
 

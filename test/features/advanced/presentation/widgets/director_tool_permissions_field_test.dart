@@ -30,7 +30,8 @@ void main() {
           )
           .toList();
 
-  testWidgets('finish_round 行只渲染 allow 段（无 ask/deny 可选）', (tester) async {
+  testWidgets('finish_round 与 finish_maintenance 行只渲染 allow 段（无 ask/deny 可选）',
+      (tester) async {
     await tester.pumpWidget(
       wrap(
         DirectorToolPermissionsField(
@@ -41,46 +42,67 @@ void main() {
       ),
     );
 
-    // 12 个工具行各一个 SegmentedButton
+    // 全部工具行各一个 SegmentedButton
     final buttons = allButtons(tester);
     expect(buttons, hasLength(ToolPermissions.allTools.length));
 
-    // 恰好 1 行只有单段（finish_round），且该段为 allow
-    final single = buttons.where((b) => b.segments.length == 1).toList();
-    expect(single, hasLength(1), reason: '仅 finish_round 行是单段');
-    expect(single.single.segments.single.value, ToolPermissionState.allow);
-    expect(single.single.selected, {ToolPermissionState.allow});
+    // list_facts 与 finish_maintenance 均已渲染
+    expect(find.text('list_facts'), findsOneWidget);
+    expect(find.text('finish_maintenance'), findsOneWidget);
 
-    // 其余 11 行仍提供 deny 段（三态保持现状）
+    // 恰好 2 行只有单段（finish_round 与 finish_maintenance），且均为 allow
+    final single = buttons.where((b) => b.segments.length == 1).toList();
+    expect(
+      single,
+      hasLength(ToolPermissions.lockedAllowTools.length),
+      reason: '仅控制收尾工具行是单段',
+    );
+    for (final button in single) {
+      expect(button.segments.single.value, ToolPermissionState.allow);
+      expect(button.selected, {ToolPermissionState.allow});
+    }
+
+    // 其余工具行仍提供 deny 段（三态保持现状）
     final denySegments = [
       for (final b in buttons)
         ...b.segments.where(
           (s) => s.value == ToolPermissionState.deny,
         ),
     ];
-    expect(denySegments, hasLength(ToolPermissions.allTools.length - 1));
+    expect(
+      denySegments,
+      hasLength(
+        ToolPermissions.allTools.length -
+            ToolPermissions.lockedAllowTools.length,
+      ),
+    );
   });
 
-  testWidgets('历史会话存 finish_round=deny：展示 allow 且物化为 allow', (tester) async {
+  testWidgets('历史会话存锁定工具=deny：展示 allow 且物化为 allow', (tester) async {
     Map<String, String>? changed;
     await tester.pumpWidget(
       wrap(
         DirectorToolPermissionsField(
-          sessionPermissions: const {'finish_round': 'deny'},
+          sessionPermissions: const {
+            'finish_round': 'deny',
+            'finish_maintenance': 'deny',
+          },
           globalPermissions: const {},
           onChanged: (v) => changed = v,
         ),
       ),
     );
 
-    // 展示侧：finish_round 行（唯一单段行）选中 allow（读取侧兜底），而非 deny
+    // 展示侧：锁定工具行（单段行）均选中 allow（读取侧兜底），而非 deny
     final buttons = allButtons(tester);
-    final finishRoundButton =
-        buttons.singleWhere((b) => b.segments.length == 1);
-    expect(finishRoundButton.selected, {ToolPermissionState.allow});
+    final lockedButtons = buttons.where((b) => b.segments.length == 1).toList();
+    expect(lockedButtons, hasLength(ToolPermissions.lockedAllowTools.length));
+    for (final button in lockedButtons) {
+      expect(button.selected, {ToolPermissionState.allow});
+    }
 
     // 物化侧：改动任一其他工具（点第一行的 deny 段，触发选择变化）时，
-    // 完整 map 里 finish_round 固定写 allow（不允许把 deny 持久化下去）
+    // 完整 map 里锁定工具固定写 allow（不允许把 deny 持久化下去）
     await tester.tap(
       find
           .descendant(
@@ -94,5 +116,6 @@ void main() {
     expect(changed, isNotNull);
     expect(changed, hasLength(ToolPermissions.allTools.length));
     expect(changed!['finish_round'], 'allow');
+    expect(changed!['finish_maintenance'], 'allow');
   });
 }

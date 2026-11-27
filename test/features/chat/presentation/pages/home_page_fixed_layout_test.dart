@@ -14,6 +14,8 @@ import 'package:lmstory/features/settings/domain/repositories/settings_repositor
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../../helpers/home_sessions_fixture.dart';
+
 /// 首页固定一屏布局：
 /// - 内容不可上下滑动（滚动范围恒为 0，Logo 不可能被顶出屏幕）
 /// - 会话行按剩余高度整行裁切，设置入口恒在屏内
@@ -344,7 +346,8 @@ void main() {
         ],
         child: TranslationProvider(
           child: MaterialApp(
-            theme: ThemeCatalog.assemble(const LmAppearance(), Brightness.light),
+            theme:
+                ThemeCatalog.assemble(const LmAppearance(), Brightness.light),
             home: HomePage(
               onNewChat: () {},
               onNewStory: () {},
@@ -382,9 +385,9 @@ class _HomeChatRepository implements ChatRepository {
   int loadCount = 0;
 
   @override
-  Future<List<ChatSession>> getAllSessions() async {
+  Future<HomeSessions> getHomeSessions() async {
     loadCount++;
-    return sessions;
+    return homeSessionsFixture(sessions);
   }
 
   @override

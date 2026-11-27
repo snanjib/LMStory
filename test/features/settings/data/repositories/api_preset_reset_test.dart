@@ -2,6 +2,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/network/dio_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
+import 'package:lmstory/core/network/llm_adapters/sampling_params.dart';
 import 'package:lmstory/core/storage/secure_storage.dart';
 import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/settings/data/datasources/api_key_datasource.dart';
@@ -32,6 +33,29 @@ void main() {
 
   tearDown(() async {
     await db.close();
+  });
+
+  test('新建自定义供应商和模板供应商均持久化开启不发送采样参数', () async {
+    final custom = await repo.createPreset(name: 'Custom provider');
+    final templated = await repo.createFromTemplate(
+      templateId: 'tpl-anthropic',
+      name: 'Claude provider',
+    );
+
+    for (final preset in [custom, templated]) {
+      expect(preset.providerOptions?[kOmitSamplingParamsOption], isTrue);
+      final loaded = await repo.getPreset(preset.presetId);
+      expect(loaded.providerOptions?[kOmitSamplingParamsOption], isTrue);
+    }
+  });
+
+  test('旧版备份恢复可保留采样开关缺省状态', () async {
+    final restored = await repo.createPreset(
+      name: 'Restored provider',
+      omitSamplingParams: false,
+    );
+    expect(restored.providerOptions, isNull);
+    expect((await repo.getPreset(restored.presetId)).providerOptions, isNull);
   });
 
   test('S-1：resetPreset 把 provider_options 列一并清空（模板快照=null）', () async {

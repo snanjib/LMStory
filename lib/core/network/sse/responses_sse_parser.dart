@@ -263,12 +263,19 @@ class ResponsesSseParser {
     final usage = response['usage'];
     if (usage is! Map<String, dynamic>) return null;
     final inputDetails = usage['input_tokens_details'];
+    final outputDetails = usage['output_tokens_details'];
+    final input = usage['input_tokens'] as int?;
     return LlmUsage(
-      promptTokens: usage['input_tokens'] as int?,
+      promptTokens: input,
       completionTokens: usage['output_tokens'] as int?,
       totalTokens: usage['total_tokens'] as int?,
+      // input_tokens 已含缓存命中部分（完整输入）
+      totalInputTokens: input,
       cacheReadTokens: inputDetails is Map<String, dynamic>
           ? inputDetails['cached_tokens'] as int?
+          : null,
+      reasoningTokens: outputDetails is Map<String, dynamic>
+          ? outputDetails['reasoning_tokens'] as int?
           : null,
     );
   }

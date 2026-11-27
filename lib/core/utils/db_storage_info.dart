@@ -6,6 +6,7 @@ library;
 
 import 'dart:io';
 
+import 'package:lmstory/core/storage/native_database_paths.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// 获取数据库文件大小（字节）
@@ -16,7 +17,7 @@ import 'package:path_provider/path_provider.dart';
 Future<int> getDatabaseFileSize() async {
   try {
     final dbFolder = await getApplicationDocumentsDirectory();
-    final dbFile = File('${dbFolder.path}/lmstory.db');
+    final (dbFile, _) = await activeNativeDatabase(dbFolder);
     if (!dbFile.existsSync()) return 0;
     var total = dbFile.lengthSync();
     for (final suffix in const ['-wal', '-shm']) {

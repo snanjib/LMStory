@@ -685,7 +685,7 @@ void main() {
       );
     });
 
-    test('语义相似度去重：编辑距离<=2 跳过', () async {
+    test('编辑距离相近的不同值不再判重：御剑数 与 御剑术 均保留', () async {
       repo
         ..entitiesById = {'ent_001': characterEntity()}
         ..attributesByKey = {
@@ -695,14 +695,76 @@ void main() {
         action: FactAction.appendList,
         entityId: 'ent_001',
         attrKey: 'skills',
-        value: '御剑数', // 编辑距离 1
+        value: '御剑数', // 编辑距离 1，但含义不同，应保存
         confidence: 5,
       );
-      expect(
-        (await applier.applyDeltas('s1', [delta], 3, const FactualConfig()))
-            .length,
-        0,
+      final result =
+          await applier.applyDeltas('s1', [delta], 3, const FactualConfig());
+      expect(result.length, 1);
+      final updated = repo.updatedAttributes['attr_003']!;
+      expect((jsonDecode(updated) as List).cast<String>(), ['御剑术', '御剑数']);
+    });
+
+    test('不同短值不判重：火球术 与 冰球术 均保存', () async {
+      repo
+        ..entitiesById = {'ent_001': characterEntity()}
+        ..attributesByKey = {
+          ('ent_001', 'skills'): [
+            listAttr(value: '["火球术"]'),
+          ],
+        };
+      const delta = FactsDelta(
+        action: FactAction.appendList,
+        entityId: 'ent_001',
+        attrKey: 'skills',
+        value: '冰球术',
+        confidence: 5,
       );
+      final result =
+          await applier.applyDeltas('s1', [delta], 3, const FactualConfig());
+      expect(result.length, 1);
+      expect(repo.updatedAttributes['attr_003'], '["火球术","冰球术"]');
+    });
+
+    test('长值包含旧值不判重：御剑飞行 vs 含额外能力的长描述', () async {
+      repo
+        ..entitiesById = {'ent_001': characterEntity()}
+        ..attributesByKey = {
+          ('ent_001', 'skills'): [
+            listAttr(value: '["御剑飞行"]'),
+          ],
+        };
+      const delta = FactsDelta(
+        action: FactAction.appendList,
+        entityId: 'ent_001',
+        attrKey: 'skills',
+        value: '御剑飞行（可携带一名同伴）',
+        confidence: 5,
+      );
+      final result =
+          await applier.applyDeltas('s1', [delta], 3, const FactualConfig());
+      expect(result.length, 1, reason: '包含关系不是重复，额外信息优先保留');
+    });
+
+    test('首尾空白变体去重：仅空格差异判为重复', () async {
+      repo
+        ..entitiesById = {'ent_001': characterEntity()}
+        ..attributesByKey = {
+          ('ent_001', 'skills'): [
+            listAttr(value: '["火球术"]'),
+          ],
+        };
+      const delta = FactsDelta(
+        action: FactAction.appendList,
+        entityId: 'ent_001',
+        attrKey: 'skills',
+        value: ' 火球术 ',
+        confidence: 5,
+      );
+      final result =
+          await applier.applyDeltas('s1', [delta], 3, const FactualConfig());
+      expect(result, isEmpty);
+      expect(repo.updatedAttributes, isEmpty);
     });
 
     test('single 类型收到 append_list → 转为 update_attr', () async {
@@ -1699,6 +1761,167 @@ void main() {
         const FactualConfig(),
       );
       expect(evolutionary, isEmpty);
+    });
+  });
+
+  group('set_importance 与 skipFrequencyGuard', () {
+    test('FactsDelta JSON 往返兼容 set_importance 与 skipFrequencyGuard', () {
+      const delta = FactsDelta(
+        action: FactAction.setImportance,
+        entityId: 'ent_001',
+        importance: 5,
+        reason: '成为关键队友',
+        confidence: 4,
+        skipFrequencyGuard: true,
+      );
+      final encoded = delta.toJson();
+      expect(encoded['action'], 'set_importance');
+      expect(encoded['skipFrequencyGuard'], isTrue);
+
+      final decoded = FactsDelta.fromJson(encoded);
+      expect(decoded.action, FactAction.setImportance);
+      expect(decoded.importance, 5);
+      expect(decoded.skipFrequencyGuard, isTrue);
+
+      final defaultDelta = FactsDelta.fromJson(const {
+        'action': 'update_attr',
+        'confidence': 4,
+      });
+      expect(defaultDelta.skipFrequencyGuard, isFalse);
+      expect(defaultDelta.toJson().containsKey('skipFrequencyGuard'), isFalse);
+    });
+
+    test('set_importance 同时放行 auto 与 worldbook/card 导入实体并写审计', () async {
+      final cardEntity = FactualEntity(
+        entityId: 'ent_card',
+        sessionId: 's1',
+        type: FactualEntityType.character,
+        primaryName: '苏婉',
+        aliases: const [],
+        importance: 2,
+        createdTurn: 0,
+        createdAt: t,
+        source: FactualSource.card,
+      );
+      repo.entitiesById = {
+        'ent_001': characterEntity(),
+        'ent_card': cardEntity,
+      };
+
+      final result = await applier.applyDeltasWithResult(
+        's1',
+        const [
+          FactsDelta(
+            action: FactAction.setImportance,
+            entityId: 'ent_001',
+            importance: 3,
+            reason: '阶段退场',
+            confidence: 4,
+          ),
+          FactsDelta(
+            action: FactAction.setImportance,
+            entityId: 'ent_card',
+            importance: 5,
+            reason: '晋升核心同伴',
+            confidence: 5,
+          ),
+        ],
+        8,
+        const FactualConfig(),
+      );
+
+      expect(result.factWriteFailureCount, 0);
+      expect(result.factsChanges, hasLength(2));
+      expect(result.factsChanges[0].action, FactAction.setImportance);
+      expect(result.factsChanges[0].oldValue, '5');
+      expect(result.factsChanges[0].newValue, '3');
+      expect(result.factsChanges[1].entityId, 'ent_card');
+      expect(result.factsChanges[1].oldValue, '2');
+      expect(result.factsChanges[1].newValue, '5');
+
+      expect(repo.entitiesById['ent_001']!.importance, 3);
+      expect(repo.entitiesById['ent_001']!.updatedTurn, 8);
+      expect(repo.entitiesById['ent_card']!.importance, 5);
+      expect(repo.entitiesById['ent_card']!.primaryName, '苏婉');
+      expect(repo.histories, hasLength(2));
+      expect(repo.histories[1].action, FactAction.setImportance);
+      expect(repo.histories[1].oldValue, '2');
+      expect(repo.histories[1].newValue, '5');
+    });
+
+    test('set_importance 同值或越界被跳过', () async {
+      repo.entitiesById = {'ent_001': characterEntity(importance: 3)};
+      final result = await applier.applyDeltasWithResult(
+        's1',
+        const [
+          FactsDelta(
+            action: FactAction.setImportance,
+            entityId: 'ent_001',
+            importance: 3,
+            confidence: 5,
+          ),
+          FactsDelta(
+            action: FactAction.setImportance,
+            entityId: 'ent_001',
+            importance: 7,
+            confidence: 5,
+          ),
+        ],
+        4,
+        const FactualConfig(),
+      );
+      expect(result.factsChanges, isEmpty);
+      expect(repo.histories, isEmpty);
+      expect(repo.entitiesById['ent_001']!.importance, 3);
+    });
+
+    test('skipFrequencyGuard 绕过 3 轮频控但不绕过非角色/设定实体的白名单', () async {
+      final location = FactualEntity(
+        entityId: 'ent_loc',
+        sessionId: 's1',
+        type: FactualEntityType.location,
+        primaryName: '边境庄园',
+        aliases: const [],
+        importance: 3,
+        createdTurn: 1,
+        createdAt: t,
+      );
+      repo
+        ..entitiesById = {
+          'ent_001': characterEntity(),
+          'ent_loc': location,
+        }
+        ..seedAttribute(singleAttr())
+        ..recentUpdateCounts['ent_001'] = 4
+        ..recentUpdateCounts['ent_loc'] = 4;
+
+      final result = await applier.applyDeltasWithResult(
+        's1',
+        const [
+          FactsDelta(
+            action: FactAction.updateAttr,
+            entityId: 'ent_001',
+            attrKey: 'personality',
+            value: '沉稳老练',
+            confidence: 5,
+            skipFrequencyGuard: true,
+          ),
+          FactsDelta(
+            action: FactAction.updateAttr,
+            entityId: 'ent_loc',
+            attrKey: 'personality',
+            value: '非白名单键',
+            confidence: 5,
+            skipFrequencyGuard: true,
+          ),
+        ],
+        10,
+        const FactualConfig(),
+      );
+
+      expect(result.factsChanges, hasLength(1));
+      expect(result.factsChanges.single.entityId, 'ent_001');
+      expect(result.factsChanges.single.newValue, '沉稳老练');
     });
   });
 }

@@ -1,3 +1,4 @@
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
@@ -6,7 +7,10 @@ import 'package:lmstory/core/network/http_client.dart';
 import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
+import 'package:lmstory/core/vector/vector_engine.dart';
+import 'package:lmstory/features/chat/data/database/app_database.dart';
 import 'package:lmstory/features/chat/data/datasources/llm_remote_datasource.dart';
+import 'package:lmstory/features/chat/data/repositories/chat_repository_impl.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_mode.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
@@ -15,11 +19,13 @@ import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/domain/services/configuration_resolver.dart';
 import 'package:lmstory/features/intermediate/domain/entities/intermediate_chat_state.dart';
 import 'package:lmstory/features/intermediate/presentation/controllers/intermediate_chat_controller.dart';
+import 'package:lmstory/features/memory/data/repositories/experience_repository_impl.dart';
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/repositories/experience_repository.dart';
 import 'package:lmstory/features/memory/domain/services/embedding_service.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/story_runtime/data/persistence_service_impl.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/message_variant_record.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/services/persistence_service.dart';
@@ -62,6 +68,7 @@ class _FakeChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = ChatMode.chat,
     String? modelId,
     String? presetId,
@@ -70,7 +77,7 @@ class _FakeChatRepository implements ChatRepository {
       (title: title, mode: mode, modelId: modelId, presetId: presetId),
     );
     return ChatSession(
-      sessionId: 'real-${createSessionCalls.length}',
+      sessionId: sessionId ?? 'real-${createSessionCalls.length}',
       title: title,
       mode: mode,
       modelId: modelId,
@@ -155,23 +162,6 @@ class _StubExperienceRepository implements ExperienceRepository {
       throw UnimplementedError('Not implemented: ${invocation.memberName}');
 }
 
-/// 返回受控记忆列表的 stub。
-///
-/// 模拟 getAllExperiences 仅按 turnNumber 排序的真实行为：同轮号并列时
-/// 后插入的 macro（无 narrativeTime）排在同轮 micro 之后（rowid 序）。
-class _ScriptedExperienceRepository extends _StubExperienceRepository {
-  _ScriptedExperienceRepository(this.experiences);
-
-  final List<ExperientialMemory> experiences;
-
-  @override
-  Future<List<ExperientialMemory>> getAllExperiences(
-    String sessionId, {
-    bool includeArchived = true,
-  }) async =>
-      experiences;
-}
-
 class _StubEmbeddingService implements EmbeddingService {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
@@ -187,6 +177,29 @@ class _StubPersistenceService implements StoryPersistenceService {
   /// 记录 deleteRoundAndDownstream 调用参数
   final List<({String sessionId, int fromTurnNumber, List<String> messageIds})>
       deleteCalls = [];
+
+  @override
+  Future<RoundRollbackResult> rollbackRoundAndDownstream({
+    required String sessionId,
+    required int fromTurnNumber,
+    required List<String> messageIdsToDelete,
+    bool keepVariantsAtFromTurn = false,
+    RoundVariantSnapshot? variantSnapshot,
+    Future<bool> Function(String sessionId, int fromTurnNumber)? truncateEvents,
+  }) async {
+    final anchor = await deleteRoundAndDownstream(
+      sessionId: sessionId,
+      fromTurnNumber: fromTurnNumber,
+      messageIdsToDelete: messageIdsToDelete,
+      keepVariantsAtFromTurn: keepVariantsAtFromTurn || variantSnapshot != null,
+    );
+    return (
+      storyAnchor: anchor,
+      narrativeTime: null,
+      messageCount: 0,
+      deletedFrozenPrefix: false,
+    );
+  }
 
   @override
   Future<StoryAnchor?> deleteRoundAndDownstream({
@@ -843,9 +856,11 @@ void main() {
         session: _realSession(),
         chatRepo: chatRepo,
       );
+      await controller.loadHistory();
+      chatRepo.updateSessionCalls.clear();
       expect(controller.state.session.modelId, isNull);
 
-      final updated = _realSession().copyWith(
+      final updated = controller.state.session.copyWith(
         modelId: 'real-model',
         presetId: 'real-preset',
         temperature: 0.5,
@@ -878,76 +893,77 @@ void main() {
     });
   });
 
-  // ── 删除/回滚后叙事时间不被无时间的 macro 冲掉 ──
-  group('IntermediateChatController - _rollbackNarrativeTime', () {
-    ExperientialMemory memory({
-      required String id,
-      required int turn,
-      String? narrativeTime,
-      MemoryLevel level = MemoryLevel.micro,
-    }) {
-      return ExperientialMemory(
-        memoryId: id,
-        sessionId: 'real-session-1',
-        summary: '记忆$id',
-        importance: 3,
-        tags: const [],
-        turnNumber: turn,
-        createdAt: DateTime(2026, 1, turn),
-        narrativeTime: narrativeTime,
-        memoryLevel: level,
+  group('删轮同时回退叙事时间', () {
+    for (final retainedTime in ['第三天夜里', null]) {
+      test(
+        retainedTime == null ? '存活经历无时间时清空叙事时间' : '回读同轮末尾宏摘要前的叙事时间',
+        () async {
+          final db = AppDatabase.forTesting(NativeDatabase.memory());
+          addTearDown(db.close);
+          final chat = ChatRepositoryImpl(database: db);
+          final experiences = ExperienceRepositoryImpl(
+            database: db,
+            vectorEngine: const VectorEngine(),
+          );
+          final session = await chat.createSession(
+            title: 'Narrative-time fixture',
+            mode: ChatMode.intermediate,
+          );
+          final messages = buildRoundsMessages(3, session.sessionId);
+          for (final message in messages) {
+            await chat.addMessage(message);
+          }
+          await chat.updateSession(
+            session.copyWith(
+              messageCount: messages.length,
+              nextTurn: 4,
+              currentNarrativeTime: '待删除轮的时间',
+            ),
+          );
+          for (final (id, turn, level, time) in [
+            ('kept-micro', 2, 'micro', retainedTime),
+            ('kept-macro', 2, 'macro', null),
+            ('deleted-micro', 3, 'micro', '待删除轮的时间'),
+          ]) {
+            await db.customStatement(
+              'INSERT INTO experiential_memories '
+              '(memory_id, session_id, summary, turn_number, memory_level, narrative_time) '
+              'VALUES (?, ?, ?, ?, ?, ?)',
+              [id, session.sessionId, id, turn, level, time],
+            );
+          }
+          final controller = _buildController(
+            session: await chat.getSession(session.sessionId),
+            chatRepo: chat,
+            experienceRepository: experiences,
+            persistenceService: StoryPersistenceServiceImpl(
+              database: db,
+              chatRepository: chat,
+              experienceRepository: experiences,
+            ),
+          );
+          addTearDown(controller.dispose);
+          await controller.loadHistory();
+          await controller.deleteRound(messages[4]);
+
+          final stored = await chat.getSession(session.sessionId);
+          expect(stored.currentNarrativeTime, retainedTime);
+          expect(stored.messageCount, 4);
+          expect(stored.nextTurn, 3);
+          expect(controller.state.session.currentNarrativeTime, retainedTime);
+          expect(controller.state.session.nextTurn, 3);
+          expect(
+            (await chat.getMessages(session.sessionId)).map((m) => m.content),
+            messages.take(4).map((m) => m.content),
+          );
+          expect(
+            (await experiences.getAllExperiences(session.sessionId))
+                .map((memory) => memory.memoryId),
+            ['kept-micro', 'kept-macro'],
+          );
+        },
       );
     }
-
-    test('20. 同轮 macro（无 narrativeTime）排在末位：叙事时间取最后一条有时间的记忆', () async {
-      // 场景：手动压缩在最后一轮 micro 之后插入同轮号 macro（无叙事时间）；
-      // 用户删除压缩点之后的更新轮次 → macro 幸存并排在 getAllExperiences
-      // 末位。修复前 .last 命中 macro → currentNarrativeTime 被清空。
-      final messages = buildRoundsMessages(6, 'real-session-1');
-      final chatRepo = _FakeChatRepository(messages: messages);
-      final experienceRepo = _ScriptedExperienceRepository([
-        memory(id: 'micro-9', turn: 9, narrativeTime: '第二天黄昏'),
-        memory(id: 'micro-10', turn: 10, narrativeTime: '第三天夜里'),
-        // 手动压缩 macro：同轮号、后插入、无 narrativeTime
-        memory(id: 'macro-10', turn: 10, level: MemoryLevel.macro),
-      ]);
-      final controller = _buildController(
-        session: sessionWithRounds(6),
-        chatRepo: chatRepo,
-        experienceRepository: experienceRepo,
-      );
-      await controller.loadHistory();
-
-      // 删除第 6 轮（压缩点之后）→ 触发 _rollbackNarrativeTime
-      await controller.deleteRound(messages[10]);
-
-      expect(controller.state.session.currentNarrativeTime, '第三天夜里');
-      expect(chatRepo.updateSessionCalls, isNotEmpty);
-      expect(
-        chatRepo.updateSessionCalls.last.currentNarrativeTime,
-        '第三天夜里',
-        reason: '回写库的叙事时间也不得被 macro 清空',
-      );
-    });
-
-    test('21. 全部记忆无 narrativeTime：重置 null（既有语义保留）', () async {
-      final messages = buildRoundsMessages(2, 'real-session-1');
-      final chatRepo = _FakeChatRepository(messages: messages);
-      final experienceRepo = _ScriptedExperienceRepository([
-        memory(id: 'micro-1', turn: 1),
-        memory(id: 'micro-2', turn: 2),
-      ]);
-      final controller = _buildController(
-        session: sessionWithRounds(2),
-        chatRepo: chatRepo,
-        experienceRepository: experienceRepo,
-      );
-      await controller.loadHistory();
-
-      await controller.deleteRound(messages[2]);
-
-      expect(controller.state.session.currentNarrativeTime, isNull);
-    });
   });
 
   group('IntermediateChatController - 上下文用量估算兜底（端点未回 usage）', () {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lmstory/core/config/advanced_config.dart';
 import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
@@ -9,6 +10,8 @@ import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
 import 'package:lmstory/core/theme/system/structures/classic/narrative/intermediate_message_bubble.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
+import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
+import 'package:lmstory/features/advanced/presentation/pages/advanced_chat_page.dart';
 import 'package:lmstory/features/chat/data/datasources/llm_remote_datasource.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
@@ -158,6 +161,9 @@ class _StubApiPresetRepository implements ApiPresetRepository {
 }
 
 class _StubSettingsRepository implements SettingsRepository {
+  @override
+  Future<Map<String, dynamic>> getUserOverrides() async => const {};
+
   @override
   Future<AppConfig> getResolvedConfig() async => const AppConfig(
         version: '0.1',
@@ -345,6 +351,153 @@ void main() {
     // slang 初始化为中文（保证 Translations.of(context) 返回中文文案）
     LocaleSettings.setLocale(AppLocale.zhCn);
   });
+
+  for (final director in [false, true]) {
+    testWidgets(
+      'fact warning stays with its session in ${director ? 'director' : 'story'}',
+      (tester) async {
+        final first = _draftSession().copyWith(
+          mode: director ? 'advanced' : 'intermediate',
+        );
+        final second = first.copyWith(
+          sessionId: '${first.sessionId}-two',
+          title: '第二个故事',
+        );
+        final selected = ValueNotifier(first);
+        addTearDown(selected.dispose);
+        final messenger = GlobalKey<ScaffoldMessengerState>();
+        final warnings = <ChatSession, void Function(int)>{};
+        final repo = _FakeChatRepository();
+        final settings = _StubSettingsRepository();
+        final experience = _StubExperienceRepository();
+        final presets = _StubApiPresetRepository();
+        final config = ConfigurationResolver(
+          presetRepository: presets,
+          settingsRepository: settings,
+          logger: const Logger('test'),
+        );
+        final llm = LlmRemoteDataSource(
+          httpClient: _StubHttpClient(),
+          adapterFactory: LlmAdapterFactory(),
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              chatRepositoryProvider.overrideWithValue(repo),
+              settingsRepositoryProvider.overrideWithValue(settings),
+              experienceRepositoryProvider.overrideWithValue(experience),
+              apiPresetRepositoryProvider.overrideWithValue(presets),
+              templateRepositoryProvider
+                  .overrideWithValue(_StubTemplateRepository()),
+              advancedConfigProvider
+                  .overrideWith((_) async => const AdvancedConfig()),
+              intermediateConfigProvider
+                  .overrideWith((_) async => const IntermediateConfig()),
+              for (final session in [first, second])
+                if (director) ...[
+                  directorGmReadyProvider(session)
+                      .overrideWith((_) async => true),
+                  advancedChatControllerProvider(session).overrideWith((_) {
+                    final controller = AdvancedChatController(
+                      chatRepository: repo,
+                      configurationResolver: config,
+                      llmService: llm,
+                      experienceRepository: experience,
+                      embeddingService: _StubEmbeddingService(),
+                      persistenceService: _StubPersistenceService(),
+                      failureLogRepository: const StubFailureLogRepository(),
+                      tokenCounter: TokenCounter(),
+                      getConfig: () async => const AdvancedConfig(),
+                      logger: const Logger('test'),
+                      session: session,
+                    );
+                    warnings[session] = (count) =>
+                        controller.state = controller.state.copyWith(
+                          factWriteWarning:
+                              count == 0 ? null : (turnNumber: 1, count: count),
+                        );
+                    return controller;
+                  }),
+                ] else
+                  intermediateChatControllerProvider(session).overrideWith((_) {
+                    final controller = IntermediateChatController(
+                      chatRepository: repo,
+                      configurationResolver: config,
+                      llmService: llm,
+                      experienceRepository: experience,
+                      embeddingService: _StubEmbeddingService(),
+                      persistenceService: _StubPersistenceService(),
+                      failureLogRepository: const StubFailureLogRepository(),
+                      tokenCounter: TokenCounter(),
+                      getConfig: () async => const IntermediateConfig(),
+                      logger: const Logger('test'),
+                      session: session,
+                    );
+                    warnings[session] = (count) =>
+                        controller.state = controller.state.copyWith(
+                          factWriteWarning:
+                              count == 0 ? null : (turnNumber: 1, count: count),
+                        );
+                    return controller;
+                  }),
+            ],
+            child: TranslationProvider(
+              child: MaterialApp(
+                scaffoldMessengerKey: messenger,
+                home: ValueListenableBuilder(
+                  valueListenable: selected,
+                  builder: (_, session, __) => director
+                      ? AdvancedChatPage(session: session)
+                      : IntermediateChatPage(session: session),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        const warningA = '本轮有 1 条事实变更未保存。';
+        const warningB = '本轮有 2 条事实变更未保存。';
+
+        warnings[first]?.call(1);
+        await tester.pumpAndSettle();
+        expect(find.text(warningA), findsOneWidget);
+        warnings[first]?.call(0);
+        await tester.pump();
+        selected.value = second;
+        await tester.pumpAndSettle();
+        expect(find.text(warningA), findsNothing);
+        warnings[first]?.call(1); // Completion while its page is inactive.
+        await tester.pump();
+        expect(find.text(warningA), findsNothing);
+
+        final feedback =
+            (messenger.currentState ?? fail('No scaffold messenger'))
+              ..showSnackBar(
+                const SnackBar(
+                  behavior: SnackBarBehavior.floating,
+                  content: Text('Other feedback'),
+                ),
+              );
+        await tester.pumpAndSettle();
+        warnings[second]?.call(2); // Queue behind other feedback.
+        selected.value = first;
+        await tester.pumpAndSettle();
+        expect(find.text('Other feedback'), findsOneWidget);
+        feedback.removeCurrentSnackBar();
+        await tester.pumpAndSettle();
+        expect(find.text(warningA), findsNothing);
+        expect(find.text(warningB), findsNothing);
+
+        warnings[first]?.call(0);
+        warnings[first]?.call(1);
+        await tester.pumpAndSettle();
+        expect(find.text(warningA), findsOneWidget);
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pumpAndSettle();
+        expect(find.text(warningA), findsNothing);
+      },
+    );
+  }
 
   group('IntermediateChatPage', () {
     testWidgets('1. 页面骨架：Scaffold + AppBar + IntermediateChatInput 挂载',

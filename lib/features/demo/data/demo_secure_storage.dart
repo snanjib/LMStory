@@ -27,6 +27,21 @@ class DemoSecureStorage extends SecureStorage {
   }
 
   @override
+  Future<String?> readStrict(String key) {
+    return read(key);
+  }
+
+  @override
+  Future<void> writeStrict(String key, String value) {
+    return write(key, value);
+  }
+
+  @override
+  Future<void> deleteStrict(String key) {
+    return delete(key);
+  }
+
+  @override
   Future<bool> containsKey(String key) async => _store.containsKey(key);
 
   @override

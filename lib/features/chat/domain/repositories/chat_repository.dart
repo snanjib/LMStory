@@ -6,15 +6,19 @@ import 'package:lmstory/features/chat/domain/entities/fork_anchor.dart';
 import 'package:lmstory/features/chat/domain/entities/search_result.dart';
 import 'package:lmstory/features/settings/domain/entities/data_management_models.dart';
 
+typedef HomeSessions = ({List<ChatSession> recent, ChatSession? latestStory});
+typedef DirectorInputs = ({String? pending, String? queued});
+
 /// 聊天数据仓库接口
 ///
 /// 定义会话和消息的数据访问操作。
 abstract class ChatRepository {
   // ==================== 会话操作 ====================
 
-  /// 创建新会话
+  /// 创建新会话。传入 [sessionId] 时使用调用方预先分配的 ID。
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = ChatMode.chat,
     String? modelId,
     String? presetId,
@@ -22,6 +26,9 @@ abstract class ChatRepository {
 
   /// 获取所有会话列表（按最后活跃时间降序）
   Future<List<ChatSession>> getAllSessions();
+
+  /// 同一快照中的最近五个会话及最近的故事或导演会话，附末条消息预览。
+  Future<HomeSessions> getHomeSessions();
 
   /// 获取单个会话
   Future<ChatSession> getSession(String sessionId);
@@ -35,12 +42,23 @@ abstract class ChatRepository {
   /// 等并发写会被全列回写倒灌旧值。窄列写入不参与竞态列，天然无窗口。
   Future<void> setSessionStarred(String sessionId, {required bool starred});
 
-  /// 未发送输入草稿的窄列读写（schemaVersion 52）。
+  /// 可恢复的编辑框草稿。
   ///
-  /// setSessionDraft 的 draft 传 null 即清空（发送后调用）。草稿会话
-  ///（未物化）无行，写入自然 no-op。
+  /// setSessionDraft 的 draft 传 null 即清空。未物化的会话无行可写。
   Future<String?> getSessionDraft(String sessionId);
   Future<void> setSessionDraft(String sessionId, String? draft);
+
+  /// 发送完成后，只清除仍与提交时文本一致的持久化草稿。
+  Future<void> clearSessionDraftIfMatches(String sessionId, String draft);
+
+  /// 已接收的导演输入独立于编辑框草稿和已收稿消息。
+  Future<DirectorInputs> getDirectorInputs(String sessionId);
+  Future<void> setDirectorPendingInput(String sessionId, String? input);
+  Future<void> setDirectorQueuedInput(String sessionId, String? input);
+  Future<void> clearDirectorPendingInputIfMatches(
+    String sessionId,
+    String input,
+  );
 
   /// 删除会话（级联删除相关消息和压缩点）
   Future<void> deleteSession(String sessionId);

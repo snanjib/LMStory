@@ -771,6 +771,7 @@ class _SeededChatRepository implements ChatRepository {
   @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = 'chat',
     String? modelId,
     String? presetId,

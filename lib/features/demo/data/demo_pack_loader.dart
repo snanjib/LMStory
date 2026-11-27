@@ -112,7 +112,13 @@ class DemoPackLoader {
   /// 目录缺失/损坏时回退隐式旧单候选（`<locale>.json`，无字节锚）——
   /// 该路径仅保证既有单包体验不因目录事故回归，多模型能力以目录为准。
   /// 全部不可用返回空表（体验入口隐藏）。
-  Future<List<DemoCandidate>> availableCandidates(String localeTag) async {
+  Future<List<DemoCandidate>> availableCandidates(String localeTag) =>
+      _verifiedCandidates(localeTag, firstOnly: false);
+
+  Future<List<DemoCandidate>> _verifiedCandidates(
+    String localeTag, {
+    required bool firstOnly,
+  }) async {
     List<DemoCandidate> catalogCandidates;
     try {
       catalogCandidates = await loadCatalog();
@@ -127,6 +133,7 @@ class DemoPackLoader {
       try {
         await loadCandidate(c);
         available.add(c);
+        if (firstOnly) break;
       } on DemoPackUnavailableException {
         // 候选局部不可用：剔除，其余合法选项继续可用
       }
@@ -239,7 +246,7 @@ class DemoPackLoader {
   /// 不因目录事故回归）。
   Future<bool> isAvailable(String localeTag) async {
     try {
-      return (await availableCandidates(localeTag)).isNotEmpty;
+      return (await _verifiedCandidates(localeTag, firstOnly: true)).isNotEmpty;
     } catch (_) {
       return false;
     }

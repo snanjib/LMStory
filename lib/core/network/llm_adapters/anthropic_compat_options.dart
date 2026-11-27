@@ -53,6 +53,7 @@ class AnthropicCompatOptions {
     required this.providerThinking,
     required this.effort,
     required this.allowToolChoiceNone,
+    required this.allowStableSystemCache,
     required this.maxTokens,
     required this.maxTokensSource,
   });
@@ -97,6 +98,11 @@ class AnthropicCompatOptions {
       endpointKind: endpointKind,
     );
 
+    final allowStableSystemCache = _resolveStableSystemCache(
+      options: options,
+      endpointKind: endpointKind,
+    );
+
     final (maxTokens, maxTokensSource) = _resolveMaxTokens(
       requested: requestedMaxTokens,
       modelMaxOutput: modelMaxOutputTokens,
@@ -110,6 +116,7 @@ class AnthropicCompatOptions {
       providerThinking: providerThinking,
       effort: effort,
       allowToolChoiceNone: allowToolChoiceNone,
+      allowStableSystemCache: allowStableSystemCache,
       maxTokens: maxTokens,
       maxTokensSource: maxTokensSource,
     );
@@ -131,10 +138,39 @@ class AnthropicCompatOptions {
   final String? effort;
 
   final bool allowToolChoiceNone;
+
+  /// 是否允许按请求的稳定 system 前缀拆分文本块并打缓存标记。
+  ///
+  /// 缺省官方端点开启、第三方关闭；`anthropic_capabilities` 中的
+  /// `stable_system_cache` 布尔值可显式覆盖。
+  final bool allowStableSystemCache;
+
   final int maxTokens;
   final AnthropicMaxTokensSource maxTokensSource;
 
   bool get isOfficial => endpointKind == AnthropicEndpointKind.official;
+
+  /// 思考开启所需的最小 max_tokens（与适配器 _minThinkingMaxTokens 同值
+  /// ——极小输出预算下发 thinking 会被协议拒绝）。
+  static const int minThinkingMaxTokens = 1024;
+
+  /// 最终协议请求是否携带「思考开启」的 thinking 配置。
+  ///
+  /// 与适配器 `_buildThinkingConfig` 同源（omit 不发 thinking；disabled
+  /// 显式发送 `{"type":"disabled"}`；极小 max_tokens 不发 thinking；
+  /// providerJson 显式 `type:disabled` 同样视为关闭；其余视为开启）。
+  /// 历史思考表示的回传判定（工程上下文模式投影层）必须用本判定，
+  /// 不得另维护一份忽略 providerOptions 的推断。
+  bool requestThinkingEnabled({required int effectiveMaxTokens}) {
+    if (thinking == AnthropicThinkingDirective.omit) return false;
+    if (thinking == AnthropicThinkingDirective.disabled) return false;
+    if (effectiveMaxTokens <= minThinkingMaxTokens) return false;
+    if (thinking == AnthropicThinkingDirective.providerJson) {
+      final type = providerThinking?['type'];
+      return !(type is String && type.trim().toLowerCase() == 'disabled');
+    }
+    return true;
+  }
 
   static AnthropicEndpointKind _endpointKindOf(String baseUrl) {
     var raw = baseUrl.trim();
@@ -233,6 +269,18 @@ class AnthropicCompatOptions {
     final capabilities = options[kAnthropicCapabilitiesOption];
     if (capabilities is Map<String, dynamic>) {
       final declared = capabilities['tool_choice_none'];
+      if (declared is bool) return declared;
+    }
+    return endpointKind == AnthropicEndpointKind.official;
+  }
+
+  static bool _resolveStableSystemCache({
+    required Map<String, dynamic> options,
+    required AnthropicEndpointKind endpointKind,
+  }) {
+    final capabilities = options[kAnthropicCapabilitiesOption];
+    if (capabilities is Map<String, dynamic>) {
+      final declared = capabilities['stable_system_cache'];
       if (declared is bool) return declared;
     }
     return endpointKind == AnthropicEndpointKind.official;

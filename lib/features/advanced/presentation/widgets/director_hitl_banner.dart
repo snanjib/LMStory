@@ -12,6 +12,7 @@ import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_narrative_text_styles.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_work_step.dart';
+import 'package:lmstory/features/advanced/presentation/utils/agent_approval_labels.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_tool_card.dart'
     show stageVerbOf;
 import 'package:lmstory/i18n/strings.g.dart';
@@ -575,6 +576,7 @@ class _DirectorApprovalBannerState extends State<DirectorApprovalBanner> {
     AgentApprovalChange change,
     int index,
   ) {
+    final display = formatApprovalChange(change, t);
     final s = t.advanced.approval;
     final dimmed = colors.muted.withValues(alpha: 0.7);
     final titleColor = change.effective ? colors.ink : dimmed;
@@ -591,9 +593,14 @@ class _DirectorApprovalBannerState extends State<DirectorApprovalBanner> {
       ApprovalChangeKind.anchor => s.kindAnchor,
       ApprovalChangeKind.eventMemory => s.kindEvent,
     };
-    final title = change.attrKey == null || change.attrKey!.isEmpty
-        ? change.entityName
-        : '${change.entityName} · ${change.attrKey}';
+    final label = display.attributeLabel;
+    final title = label == null || label.isEmpty
+        ? display.entityName
+        : '${display.entityName} · $label';
+    final before = display.before;
+    final after = display.after;
+    final note = display.note;
+    final reason = change.reason;
 
     return Container(
       margin: const EdgeInsets.only(bottom: IntermediateSpacing.s2xs),
@@ -640,34 +647,34 @@ class _DirectorApprovalBannerState extends State<DirectorApprovalBanner> {
               ),
             ],
           ),
-          if (change.before != null || change.after != null) ...[
+          if (before != null || after != null) ...[
             const SizedBox(height: IntermediateSpacing.s2xs),
-            if (change.before != null)
+            if (before != null)
               Text(
-                '${s.beforeLabel}：${change.before}',
+                s.valueLine(label: s.beforeLabel, value: before),
                 style:
                     IntermediateTextStyles.caption.copyWith(color: titleColor),
               ),
-            if (change.after != null)
+            if (after != null)
               Text(
-                '${s.afterLabel}：${change.after}',
+                s.valueLine(label: s.afterLabel, value: after),
                 style:
                     IntermediateTextStyles.caption.copyWith(color: titleColor),
               ),
           ],
-          if (change.reason != null && change.reason!.isNotEmpty) ...[
+          if (reason != null && reason.isNotEmpty) ...[
             const SizedBox(height: IntermediateSpacing.s2xs),
             Text(
-              '${s.reasonLabel}：${change.reason}',
+              s.valueLine(label: s.reasonLabel, value: reason),
               style: IntermediateTextStyles.caption.copyWith(
                 color: colors.muted,
               ),
             ),
           ],
-          if (change.note != null && change.note!.isNotEmpty) ...[
+          if (note != null && note.isNotEmpty) ...[
             const SizedBox(height: IntermediateSpacing.s2xs),
             Text(
-              change.note!,
+              note,
               style: IntermediateTextStyles.captionSm.copyWith(
                 color: dimmed,
               ),
@@ -758,6 +765,7 @@ class _DirectorApprovalBannerState extends State<DirectorApprovalBanner> {
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
+    final summaryData = widget.prompt.summaryData;
     // P4：merge_entities 永不进会话放行集——不显示「本会话总是允许」
     final isMerge = widget.prompt.toolName == 'merge_entities';
 
@@ -789,7 +797,9 @@ class _DirectorApprovalBannerState extends State<DirectorApprovalBanner> {
         ],
         const SizedBox(height: IntermediateSpacing.sXs),
         Text(
-          widget.prompt.summary,
+          summaryData != null
+              ? formatApprovalSummary(t, widget.prompt.toolName, summaryData)
+              : widget.prompt.summary,
           style: IntermediateTextStyles.bodyUi.copyWith(color: colors.ink),
         ),
         const SizedBox(height: IntermediateSpacing.sXs),

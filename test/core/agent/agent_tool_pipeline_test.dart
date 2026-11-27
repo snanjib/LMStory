@@ -261,6 +261,54 @@ void main() {
       expect(outcome.result.output, isNot(contains('导演批注')));
     });
 
+    test('批准批注：部分成功写入（isError=true 且 accepted > 0）保留批注下发', () async {
+      final tool = _RecordingTool(
+        (inv, args) async => AgentToolResult.failure(
+          title: '1 条已暂存，1 条失败待修正',
+          output: '部分失败详情',
+          metadata: const {'accepted': 1, 'rejected': 1},
+        ),
+      );
+
+      final outcome = await _run(
+        tool: tool,
+        approvalRequired: true,
+        approvalSeam: const _StaticSeam(
+          AgentApprovalGranted(feedback: '把称呼改得更克制'),
+        ),
+      );
+
+      expect(outcome.result.isError, isTrue);
+      expect(outcome.result.metadata?['accepted'], 1);
+      expect(outcome.result.metadata?['approvalFeedback'], isTrue);
+      expect(
+        outcome.result.output,
+        contains('\n——\n导演批注（随本次批准下发）：把称呼改得更克制'),
+      );
+    });
+
+    test('批准批注：accepted=0 的失败回执不追加批注', () async {
+      final tool = _RecordingTool(
+        (inv, args) async => AgentToolResult.failure(
+          title: '变更全部无效',
+          output: '全部失败详情',
+          metadata: const {'accepted': 0, 'rejected': 2},
+        ),
+      );
+
+      final outcome = await _run(
+        tool: tool,
+        approvalRequired: true,
+        approvalSeam: const _StaticSeam(
+          AgentApprovalGranted(feedback: '下次注意'),
+        ),
+      );
+
+      expect(outcome.result.isError, isTrue);
+      expect(outcome.result.metadata?['approvalFeedback'], isNull);
+      expect(outcome.result.output, isNot(contains('导演批注')));
+    });
+
     test('工具体抛异常：捕获为可操作失败信封，不中断', () async {
       final tool = _RecordingTool((inv, args) async {
         throw StateError('db locked');

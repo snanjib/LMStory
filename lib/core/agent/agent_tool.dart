@@ -57,6 +57,8 @@ class AgentToolResult {
     this.isError = false,
     this.terminal = false,
     this.outputSchema,
+    this.extraMaxStepsDelta = 0,
+    this.phaseSoftLandingNotice,
   });
 
   factory AgentToolResult.success({
@@ -64,12 +66,16 @@ class AgentToolResult {
     required String output,
     Map<String, dynamic>? metadata,
     Map<String, String>? outputSchema,
+    int extraMaxStepsDelta = 0,
+    String? phaseSoftLandingNotice,
   }) =>
       AgentToolResult(
         title: title,
         output: output,
         metadata: metadata,
         outputSchema: outputSchema,
+        extraMaxStepsDelta: extraMaxStepsDelta,
+        phaseSoftLandingNotice: phaseSoftLandingNotice,
       );
 
   factory AgentToolResult.failure({
@@ -84,7 +90,7 @@ class AgentToolResult {
         isError: true,
       );
 
-  /// 终结轮次（finish_round：事务提交成功后由 runner 停轮）
+  /// 终结轮次（finish_round / finish_maintenance：事务提交成功后由 runner 停轮）
   factory AgentToolResult.terminal({
     required String title,
     required String output,
@@ -120,8 +126,14 @@ class AgentToolResult {
 
   final bool isError;
 
-  /// 控制类工具终结轮次的标记（finish_round）
+  /// 控制类工具终结轮次的标记（finish_round / finish_maintenance）
   final bool terminal;
+
+  /// 非终结工具触发阶段切换时追加的步数预算增量（0 = 不追加）。
+  final int extraMaxStepsDelta;
+
+  /// 非终结工具触发阶段切换时替换的预算软着陆提示词（null = 不覆盖）。
+  final String? phaseSoftLandingNotice;
 }
 
 /// Agent 工具抽象（Domain）
@@ -346,5 +358,7 @@ AgentToolResult applyToolOutputBudget(AgentToolResult result, int limit) {
     // 截断重建回执时保留 schema 声明（校验在截断前，字段随信封
     // 完整传递供诊断）
     outputSchema: result.outputSchema,
+    extraMaxStepsDelta: result.extraMaxStepsDelta,
+    phaseSoftLandingNotice: result.phaseSoftLandingNotice,
   );
 }

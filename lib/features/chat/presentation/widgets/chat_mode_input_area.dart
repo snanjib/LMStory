@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -59,22 +60,19 @@ class ChatModeInputArea extends ConsumerStatefulWidget {
     this.newlineKey = NewlineKey.shiftEnter,
     this.inputHistory = const [],
     this.contextSlot,
-    this.onBeforeSend,
+    this.draftSessionId = '',
     super.key,
   });
 
-  /// Callback when user sends a message with optional attachments.
-  final void Function(String text, List<MessageAttachment> attachments) onSend;
+  /// Returns whether the chat accepted this message and its attachments.
+  final FutureOr<bool> Function(
+    String text,
+    List<MessageAttachment> attachments,
+  ) onSend;
   final VoidCallback onCancel;
   final bool isSending;
   final bool isStreaming;
-
-  /// 发送前预检钩子：返回 false 时
-  /// 不清空输入、不发送（草稿会话无预设/模型/Key 等配置错误场景）——
-  /// 此前先清空再由控制器拒绝，已打文本与附件原地蒸发不可恢复。
-  /// 错误提示由预检方（控制器）自行落错误横幅。
-  final Future<bool> Function(String text, List<MessageAttachment> attachments)?
-      onBeforeSend;
+  final String draftSessionId;
 
   /// 是否正在压缩上下文（：压缩窗口内禁用发送——此前发送按钮
   /// 不感知压缩态，先清空输入再被控制器静默吞掉，已打字内容丢失）
@@ -139,7 +137,9 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
   String _savedText = '';
 
   /// Current attachments pending to be sent with the next message.
-  final List<MessageAttachment> _attachments = [];
+  final _attachmentDrafts = <String, List<MessageAttachment>>{};
+  List<MessageAttachment> get _attachments =>
+      _attachmentDrafts.putIfAbsent(widget.draftSessionId, () => []);
 
   @override
   void initState() {
@@ -183,43 +183,37 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
     super.dispose();
   }
 
-  /// 预检在途标志：预检是异步的（读配置/Key），窗口内去抖防双发。
-  bool _precheckInFlight = false;
+  final _submittingSessions = <String>{};
 
   Future<void> _handleSend() async {
-    final text = _controller.text.trim();
+    final sessionId = widget.draftSessionId;
+    final attachmentDraft = _attachments;
+    final originalText = _controller.text;
+    final text = originalText.trim();
     final hasText = text.isNotEmpty;
-    final hasAttachments = _attachments.isNotEmpty;
+    final hasAttachments = attachmentDraft.isNotEmpty;
     if ((!hasText && !hasAttachments) ||
         widget.isSending ||
         widget.isStreaming ||
         widget.isCompressing ||
-        _precheckInFlight) {
+        _submittingSessions.contains(sessionId)) {
       return;
     }
-    // 预检先行——失败时输入与附件原地保留（不清空、不发送），
-    // 错误横幅由预检方落。此前先清空再被控制器拒绝，长文输入蒸发。
-    final precheck = widget.onBeforeSend;
-    if (precheck != null) {
-      _precheckInFlight = true;
-      bool passed;
-      try {
-        passed = await precheck(text, List.from(_attachments));
-      } finally {
-        _precheckInFlight = false;
+    final attachments = List<MessageAttachment>.of(attachmentDraft);
+    _submittingSessions.add(sessionId);
+    try {
+      final accepted = await widget.onSend(text, attachments);
+      if (!accepted || !mounted) return;
+      if (widget.draftSessionId == sessionId &&
+          (_controller.text == originalText || _controller.text.isEmpty)) {
+        _controller.clear();
+        _historyIndex = -1;
+        _savedText = '';
       }
-      if (!passed || !mounted) return;
-      // 预检等待期间忙态可能翻转（如恰好进入压缩），重查一次
-      if (widget.isSending || widget.isStreaming || widget.isCompressing) {
-        return;
-      }
+      setState(() => attachmentDraft.removeWhere(attachments.contains));
+    } finally {
+      _submittingSessions.remove(sessionId);
     }
-    _controller.clear();
-    _historyIndex = -1;
-    _savedText = '';
-    final attachments = List<MessageAttachment>.from(_attachments);
-    _attachments.clear();
-    widget.onSend(text, attachments);
   }
 
   /// 在光标位置插入换行符（Ctrl+Enter / Alt+Enter 换行时调用）。
@@ -433,7 +427,8 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
 
   /// Pick image from gallery using image_picker.
   Future<void> _pickImage() async {
-    final imageCount = _attachments.where((a) => a.isImage).length;
+    final draft = _attachments;
+    final imageCount = draft.where((a) => a.isImage).length;
     // 达上限不再静默 no-op——点选
     // 毫无反馈与 / 已修的静默族同病。
     if (imageCount >= _maxImageAttachments) {
@@ -466,16 +461,20 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
       return;
     }
 
-    if (xFile == null) return;
-    await _addImageAttachmentFromPath(xFile.path, xFile.name);
+    if (xFile == null || !mounted) return;
+    await _addImageAttachmentFromPath(xFile.path, xFile.name, draft);
   }
 
   /// 从本地文件路径构造图像附件（相册选取与 macOS 拖放共用）。
   ///
   /// 相册路径经 image_picker 压缩（1920/85）；拖放路径为用户磁盘
   /// 原文件（多为已压缩格式，base64 膨胀与文件附件路径一致）。
-  Future<void> _addImageAttachmentFromPath(String path, String name) async {
-    final imageCount = _attachments.where((a) => a.isImage).length;
+  Future<void> _addImageAttachmentFromPath(
+    String path,
+    String name,
+    List<MessageAttachment> draft,
+  ) async {
+    final imageCount = draft.where((a) => a.isImage).length;
     if (imageCount >= _maxImageAttachments) {
       _showAttachmentLimitSnackBar(
         Translations.of(context).chat.attachmentLimit.image(
@@ -510,7 +509,7 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
     };
 
     setState(() {
-      _attachments.add(
+      draft.add(
         MessageAttachment(
           type: 'image',
           name: name,
@@ -524,7 +523,8 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
 
   /// Pick file using file_picker.
   Future<void> _pickFile() async {
-    final fileCount = _attachments.where((a) => a.isFile).length;
+    final draft = _attachments;
+    final fileCount = draft.where((a) => a.isFile).length;
     // 同图片路径——上限反馈
     if (fileCount >= _maxFileAttachments) {
       _showAttachmentLimitSnackBar(
@@ -547,16 +547,20 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
     if (!kIsWeb) {
       final filePath = platformFile.path;
       if (filePath == null) return;
-      await _addFileAttachmentFromPath(filePath, fileName);
+      await _addFileAttachmentFromPath(filePath, fileName, draft);
       return;
     }
     // Web 平台无路径，直接用面板给的 bytes
     final webBytes = platformFile.bytes ?? Uint8List(0);
-    await _addFileAttachmentFromBytes(webBytes, fileName);
+    await _addFileAttachmentFromBytes(webBytes, fileName, draft);
   }
 
   /// 从本地文件路径构造文件附件（选择面板与 macOS 拖放共用）。
-  Future<void> _addFileAttachmentFromPath(String path, String fileName) async {
+  Future<void> _addFileAttachmentFromPath(
+    String path,
+    String fileName,
+    List<MessageAttachment> draft,
+  ) async {
     final Uint8List bytes;
     try {
       bytes = await readFileBytesNative(path);
@@ -568,15 +572,17 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
       );
       return;
     }
-    await _addFileAttachmentFromBytes(bytes, fileName);
+    await _addFileAttachmentFromBytes(bytes, fileName, draft);
   }
 
   /// 字节→文件附件的公共构造（含文本白名单提示与上限检查）。
   Future<void> _addFileAttachmentFromBytes(
     Uint8List bytes,
     String fileName,
+    List<MessageAttachment> draft,
   ) async {
-    final fileCount = _attachments.where((a) => a.isFile).length;
+    if (!mounted) return;
+    final fileCount = draft.where((a) => a.isFile).length;
     if (fileCount >= _maxFileAttachments) {
       _showAttachmentLimitSnackBar(
         Translations.of(context).chat.attachmentLimit.file(
@@ -586,7 +592,6 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
       return;
     }
     if (bytes.isEmpty) return;
-    if (!mounted) return;
     final ext = fileName.split('.').last.toLowerCase();
 
     // Text file extensions that can be read as content
@@ -638,7 +643,7 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
     final mimeType = _mimeTypeFromExtension(ext);
 
     setState(() {
-      _attachments.add(
+      draft.add(
         MessageAttachment(
           type: 'file',
           name: fileName,
@@ -653,18 +658,19 @@ class _ChatModeInputAreaState extends ConsumerState<ChatModeInputArea> {
   /// macOS 拖入文件落进会话：图片扩展名走图像附件，其余走文件附件；
   /// 上限与失败反馈复用选择面板同链路，完成后统一提示成功数。
   Future<void> _addDroppedFiles(List<IncomingFile> files) async {
+    final draft = _attachments;
     var added = 0;
     for (final f in files) {
       if (!mounted) return;
-      final before = _attachments.length;
+      final before = draft.length;
       if (FileDropRouting.isImageFile(f.fileName)) {
-        await _addImageAttachmentFromPath(f.path, f.fileName);
+        await _addImageAttachmentFromPath(f.path, f.fileName, draft);
       } else {
-        await _addFileAttachmentFromPath(f.path, f.fileName);
+        await _addFileAttachmentFromPath(f.path, f.fileName, draft);
       }
-      if (_attachments.length > before) added++;
+      if (draft.length > before) added++;
     }
-    if (!mounted || added == 0) return;
+    if (!mounted || added == 0 || !identical(_attachments, draft)) return;
     _showAttachmentLimitSnackBar(
       Translations.of(context).chat.attachment.dropAttached(count: added),
     );

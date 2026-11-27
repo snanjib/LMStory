@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lmstory/core/config/intermediate_config.dart';
 import 'package:lmstory/core/di/providers.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/shared/components/memory_timeline_entry.dart';
@@ -29,11 +30,22 @@ class ExperienceMemoryTab extends ConsumerStatefulWidget {
   const ExperienceMemoryTab({
     required this.sessionId,
     this.readOnly = false,
+    this.importanceStorageThreshold,
     super.key,
   });
 
   final String sessionId;
   final bool readOnly;
+
+  /// MEM-20：关键词索引存储门槛——importance 低于此值的记忆按策略不建
+  /// memories_fts 行（行内标「未入索引」）。null = 调用方未提供
+  ///（配置未就绪/读取失败），回落 [RetrievalConfig] 默认值（=3）。
+  final int? importanceStorageThreshold;
+
+  /// 生效门槛（配置值或 RetrievalConfig 默认）
+  int get effectiveImportanceStorageThreshold =>
+      importanceStorageThreshold ??
+      const RetrievalConfig().importanceStorageThreshold;
 
   @override
   ConsumerState<ExperienceMemoryTab> createState() =>
@@ -795,6 +807,9 @@ class _ExperienceMemoryTabState extends ConsumerState<ExperienceMemoryTab> {
             onEdit: () => _onEditMemory(memory),
             onDelete: () => _onDeleteMemory(memory),
             onArchive: () => _onArchiveMemory(memory),
+            // MEM-20：低重要度（< 存储门槛）记忆行内标「未入索引」
+            notIndexed:
+                memory.importance < widget.effectiveImportanceStorageThreshold,
           );
           final wrappedCard = (index == 0 && widget.readOnly)
               ? SpotlightTarget(
@@ -918,6 +933,7 @@ class _MemoryCard extends StatefulWidget {
     required this.onDelete,
     this.onArchive,
     this.readOnly = false,
+    this.notIndexed = false,
   });
 
   final ExperientialMemory memory;
@@ -929,6 +945,10 @@ class _MemoryCard extends StatefulWidget {
   /// 归档/恢复（null=不显示按钮）。
   final VoidCallback? onArchive;
   final bool readOnly;
+
+  /// MEM-20：低重要度（importance < 存储门槛）——按策略不建
+  /// memories_fts 行，行内标「未入索引」（主表子串通道兜底仍可达）。
+  final bool notIndexed;
 
   @override
   State<_MemoryCard> createState() => _MemoryCardState();
@@ -1063,6 +1083,30 @@ class _MemoryCardState extends State<_MemoryCard> {
             ),
             child: Text(
               widget.t.intermediate.memoryBrowser.archivedBadge,
+              style: LmNarrativeTextStyles.caption
+                  .copyWith(color: widget.colors.muted),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: LmSpacing.sXs),
+        ],
+        // MEM-20：未入索引标识——低重要度记忆按策略不建
+        // memories_fts 行（FTS 通道搜不到，主表子串兜底可达），
+        // 与归档标识同款样式，防"看得见却搜不到"的误解
+        if (widget.notIndexed) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: LmSpacing.sXs,
+              vertical: 2,
+            ),
+            decoration: BoxDecoration(
+              color: widget.colors.surfaceVariant,
+              borderRadius: BorderRadius.circular(LmRadius.rXs),
+              border: Border.all(color: widget.colors.divider),
+            ),
+            child: Text(
+              widget.t.intermediate.memoryBrowser.notIndexed,
               style: LmNarrativeTextStyles.caption
                   .copyWith(color: widget.colors.muted),
               maxLines: 1,

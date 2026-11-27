@@ -11,6 +11,7 @@ import 'package:lmstory/core/utils/file_share.dart'
 import 'package:lmstory/core/widgets/file_saved_dialog.dart';
 import 'package:lmstory/features/advanced/domain/entities/advanced_chat_state.dart';
 import 'package:lmstory/features/advanced/presentation/widgets/director_manuscript_exporter.dart';
+import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/services/round_history_utils.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -18,15 +19,23 @@ import 'package:lmstory/i18n/strings.g.dart';
 ///
 /// 范围（全部/当前幕）× 内容（纯稿件/含幕后过程）四选后产出 Markdown：
 /// 桌面端弹系统保存对话框（同源 [shareTextAsFile]）、
-/// 移动端调分享面板、Web 直接下载。数据取页面 state（messages +
-/// artifactsByTurnNumber 已由 loadHistory 装配），构建为纯内存字符串。
+/// 移动端调分享面板、Web 直接下载。确认导出后读取完整的幕后与幕间回顾。
 class DirectorExportSheet extends StatefulWidget {
-  const DirectorExportSheet({required this.state, super.key});
+  const DirectorExportSheet({
+    required this.state,
+    this.loadArtifacts,
+    super.key,
+  });
 
   final AdvancedChatState state;
+  final Future<Map<int, StoryRoundArtifacts>> Function()? loadArtifacts;
 
   /// 弹出导出选项 sheet 并完成导出流程；取消返回 false。
-  static Future<bool> show(BuildContext context, AdvancedChatState state) {
+  static Future<bool> show(
+    BuildContext context,
+    AdvancedChatState state, {
+    Future<Map<int, StoryRoundArtifacts>> Function()? loadArtifacts,
+  }) {
     return showLmSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -37,7 +46,8 @@ class DirectorExportSheet extends StatefulWidget {
           top: Radius.circular(LmRadius.rXl),
         ),
       ),
-      builder: (_) => DirectorExportSheet(state: state),
+      builder: (_) =>
+          DirectorExportSheet(state: state, loadArtifacts: loadArtifacts),
     ).then((v) => v ?? false);
   }
 
@@ -48,6 +58,7 @@ class DirectorExportSheet extends StatefulWidget {
 class _DirectorExportSheetState extends State<DirectorExportSheet> {
   DirectorExportScope _scope = DirectorExportScope.all;
   bool _includeBackstage = false;
+  bool _exporting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -133,7 +144,7 @@ class _DirectorExportSheetState extends State<DirectorExportSheet> {
             SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: _export,
+                onPressed: _exporting ? null : _export,
                 child: Text(t.advanced.export.confirm),
               ),
             ),
@@ -155,23 +166,30 @@ class _DirectorExportSheetState extends State<DirectorExportSheet> {
   Future<void> _export() async {
     final state = widget.state;
     final t = Translations.of(context);
-    final content = DirectorManuscriptExporter.toMarkdown(
-      session: state.session,
-      messages: state.messages,
-      artifactsByTurnNumber: state.artifactsByTurnNumber,
-      compactedTurnBase: state.compactedTurnBase,
-      scope: _scope,
-      includeBackstage: _includeBackstage,
-    );
-
-    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final safeTitle =
-        state.session.title.replaceAll(RegExp(r'[\/:*?"<>|]'), '').trim();
-    final fileName = safeTitle.isEmpty
-        ? 'manuscript_$timestamp.md'
-        : '${safeTitle}_$timestamp.md';
-
+    if (_exporting) return;
+    final scope = _scope;
+    final backstage = _includeBackstage;
+    setState(() => _exporting = true);
     try {
+      final artifacts =
+          await widget.loadArtifacts?.call() ?? state.artifactsByTurnNumber;
+      if (!mounted) return;
+      final content = DirectorManuscriptExporter.toMarkdown(
+        session: state.session,
+        messages: state.messages,
+        artifactsByTurnNumber: artifacts,
+        compactedTurnBase: state.compactedTurnBase,
+        scope: scope,
+        includeBackstage: backstage,
+      );
+
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+      final safeTitle =
+          state.session.title.replaceAll(RegExp(r'[\/:*?"<>|]'), '').trim();
+      final fileName = safeTitle.isEmpty
+          ? 'manuscript_$timestamp.md'
+          : '${safeTitle}_$timestamp.md';
+
       final savedPath = await shareTextAsFile(
         content: content,
         fileName: fileName,
@@ -201,6 +219,8 @@ class _DirectorExportSheetState extends State<DirectorExportSheet> {
           ),
         ),
       );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
   }
 
@@ -220,20 +240,18 @@ class _DirectorExportSheetState extends State<DirectorExportSheet> {
   /// 最后一幕的幕号（无已完成幕返回 null；轮号走共享公式）
   static int? _lastCompletedAct(AdvancedChatState state) {
     final messages = state.messages;
-    int? lastTurn;
-    for (var i = 1; i < messages.length; i++) {
+    for (var i = messages.length - 1; i > 0; i--) {
       final assistant = messages[i];
       if (assistant.role != 'assistant' || assistant.isSummary) continue;
       final user = messages[i - 1];
       if (user.role != 'user' || user.isSummary) continue;
-      lastTurn = turnNumberForMessage(
-            message: assistant,
-            messages: messages,
-            compactedTurnBase: state.compactedTurnBase,
-          ) ??
-          lastTurn;
+      return turnNumberForMessage(
+        message: assistant,
+        messages: messages,
+        compactedTurnBase: state.compactedTurnBase,
+      );
     }
-    return lastTurn;
+    return null;
   }
 }
 

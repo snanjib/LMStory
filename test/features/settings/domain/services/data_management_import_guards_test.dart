@@ -47,7 +47,7 @@ void main() {
 
     test('非空 presets 数组覆盖导入 → 正常删除+导入（既有语义保持）', () async {
       await service.importBackup(
-        '{"version": 2, "presets": [{"presetId": "p1"}]}',
+        '{"version": 2, "presets": [{"preset_id": "p1", "name": "p1"}]}',
         ImportMode.overwrite,
       );
 
@@ -124,6 +124,15 @@ void main() {
 
 class _RecordingBackupRepository implements BackupRepository {
   final List<String> calls = [];
+
+  @override
+  Future<T> runInTransaction<T>(Future<T> Function() action) => action();
+
+  @override
+  Future<BackupOverwriteState> readOverwriteState(
+    Set<BackupDataDomain> domains,
+  ) async =>
+      (hasData: false, fingerprint: '');
 
   @override
   Future<void> deleteAllSessionData() async =>

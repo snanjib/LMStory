@@ -288,10 +288,14 @@ class _EmbeddingModelTile extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: IntermediateSpacing.s2xs),
+          // MEM-06 ③：嵌入通道解析状态（已配置=模型名 / 未配置明示）。
+          // 与 resolveAdvancedEmbeddingConfig 同源——该 resolver 读
+          // advanced.embedding_preset_id/model_id（advancedConfigProvider
+          // 即 getResolvedConfig 的同两键），非空判定一致，无新增解析逻辑。
           Text(
             configured
                 ? modelId
-                : t.settings.director.memory.embeddingModelDesc,
+                : t.settings.director.memory.embeddingNotConfiguredStatus,
             style: IntermediateTextStyles.bodyUi.copyWith(
               color: configured ? colors.ink : colors.faint,
               fontWeight: FontWeight.w600,

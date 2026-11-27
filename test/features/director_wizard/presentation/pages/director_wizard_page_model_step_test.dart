@@ -106,7 +106,7 @@ void main() {
     );
   });
 
-  testWidgets('未配置分支：拉取失败 → 手填模型 ID 兜底就绪', (tester) async {
+  testWidgets('手填主模型 ID 可返回修正再保存', (tester) async {
     final fake = FakeWizardSettingsNotifier(fetchModelsFail: true);
     await tester.pumpWidget(pumpWizard(fake));
     await tester.pumpAndSettle();
@@ -119,13 +119,24 @@ void main() {
 
     expect(find.text('手填模型 ID'), findsOneWidget);
     // 手填框 = 第三个 TextField（名字/Key 两框禁用态仍在树中）
-    await tester.enterText(find.byType(TextField).at(2), 'my-model');
+    final id = find.byType(TextField).at(2);
+    await tester.enterText(id, 'my－model');
+    await tester.ensureVisible(find.text('用这个 ID'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('用这个 ID'));
+    await tester.pumpAndSettle();
+    expect(find.text('核对模型 ID'), findsOneWidget);
+    expect(fake.updatedModels, isEmpty);
+    await tester.tap(find.text('返回修改'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(id, 'custom/my-model:v2');
     await tester.ensureVisible(find.text('用这个 ID'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('用这个 ID'));
     await tester.pumpAndSettle();
 
-    expect(fake.updatedModels.length, 1, reason: '手填 ID 回写模型列表');
+    expect(fake.updatedModels.single.$2.single.modelId, 'custom/my-model:v2');
     expect(
       tester
           .widget<ElevatedButton>(find.widgetWithText(ElevatedButton, '下一步'))

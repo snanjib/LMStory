@@ -1,7 +1,51 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/utils/secret_redactor.dart';
 
 void main() {
+  test('diagnostics redact SDK socket addresses and keep the error fields', () {
+    final connection = SocketException(
+      'Connection refused',
+      osError: const OSError('Connection refused', 61),
+      address: InternetAddress('203.0.113.21'),
+      port: 8443,
+    );
+    final noMessage = SocketException(
+      '',
+      address: InternetAddress('2001:db8::a'),
+    );
+    final output = redactDiagnosticText(
+      'HTTP retry elapsed=40ms | $connection | second=$noMessage\n'
+      'Ordinary text: address = meeting room',
+    );
+    expect(
+      output,
+      'HTTP retry elapsed=40ms | SocketException: Connection refused '
+      '(OS Error: Connection refused, errno = 61), address = <host>, '
+      'port = 8443 | second=SocketException, address = <host>\n'
+      'Ordinary text: address = meeting room',
+    );
+    expect(redactDiagnosticText(output), output);
+  });
+
+  test('diagnostic redaction preserves protocol, timing and ordinary text', () {
+    const endpoint = 'raw:https://lab-user:lab-pass@gateway.invalid/private/v1';
+    const input = 'HTTP 429 POST $endpoint?project=fixture, elapsed=90ms\n'
+        'SocketException: Failed host lookup: "other-gateway.invalid"\n'
+        r'{"endpoint":"https:\/\/escaped.invalid\/stream?tenant=synthetic",'
+        '"X-Goog-API-Key":"quoted key with spaces","stage":"retry"}'
+        '\n{Authorization: [Bearer old-list-secret], X-API-Key: plain-token}'
+        '\n他推开院门，雨还在下。';
+    const expected = 'HTTP 429 POST https://<endpoint>, elapsed=90ms\n'
+        'SocketException: Failed host lookup: <host>\n'
+        '{"endpoint":"https://<endpoint>","X-Goog-API-Key":"***","stage":"retry"}'
+        '\n{Authorization: ***, X-API-Key: ***}'
+        '\n他推开院门，雨还在下。';
+    expect(redactDiagnosticText(input), expected);
+    expect(redactDiagnosticText(expected), expected);
+  });
+
   group('redactSecrets', () {
     test('URL 内嵌凭据被脱敏', () {
       expect(

@@ -40,6 +40,27 @@ class ResponsesAdapter implements LlmProtocolAdapter {
   ResponsesAdapter({ResponsesSseParser Function()? sseParserFactory})
       : _sseParserFactory = sseParserFactory ?? ResponsesSseParser.new;
 
+  /// 最终 wire 输出上限（单源）：基础钳制（clampToModel；0/null=不设置
+  /// 应用层上限）+ providerOptions.extra_body 末位覆盖——extra_body 在
+  /// [buildRequestBody] 里于基础字段之后展开，能覆盖 max_output_tokens，
+  /// 预算面必须看到同一结果。返回 null=本次请求不携带输出上限
+  ///（API 未指定）。
+  static int? effectiveOutputTokens({
+    required int? configured,
+    required int? modelMaxOutputTokens,
+    Map<String, dynamic>? providerOptions,
+  }) {
+    final base =
+        OutputTokenPolicy.clampToModel(configured, modelMaxOutputTokens);
+    final effective = base != null && base > 0 ? base : null;
+    final extra = providerOptions?['extra_body'];
+    if (extra is Map<String, dynamic>) {
+      final override = extra['max_output_tokens'];
+      if (override is int && override > 0) return override;
+    }
+    return effective;
+  }
+
   final ResponsesSseParser Function() _sseParserFactory;
 
   @override
@@ -75,9 +96,12 @@ class ResponsesAdapter implements LlmProtocolAdapter {
   }) {
     final format = request.responseFormat;
     final modelId = request.modelId;
-    final maxTokens = OutputTokenPolicy.clampToModel(
-      request.maxTokens,
-      request.modelMaxOutputTokens,
+    // 输出上限单源解析（基础钳制 + extra_body 末位覆盖，与下方展开
+    // 顺序一致）；effectiveOutputTokens 与预算面共用
+    final maxTokens = effectiveOutputTokens(
+      configured: request.maxTokens,
+      modelMaxOutputTokens: request.modelMaxOutputTokens,
+      providerOptions: request.providerOptions,
     );
 
     // 推理档位启用（low/medium/high 均非 none）时不发采样参数（官方规则）；
@@ -283,6 +307,10 @@ class ResponsesAdapter implements LlmProtocolAdapter {
 
         case 'assistant':
           // 正文 → assistant message item
+          // 已知边界（HAR-02）：空正文 assistant（无 content 无 tool_calls）
+          // 在此整条消失——不虚构 item。若后续 function_call_output 引用
+          // 消失轮的 call_id 会孤儿化；Responses 的 input 数组允许 assistant
+          // item 缺失，OpenAI 网关对此宽容（实测不因孤儿 output 拒绝请求）。
           if (content is String && content.isNotEmpty) {
             input.add({'role': 'assistant', 'content': content});
           }
@@ -336,12 +364,19 @@ class ResponsesAdapter implements LlmProtocolAdapter {
   static LlmUsage? _parseUsage(Object? raw) {
     if (raw is! Map<String, dynamic>) return null;
     final inputDetails = raw['input_tokens_details'];
+    final outputDetails = raw['output_tokens_details'];
+    final input = raw['input_tokens'] as int?;
     return LlmUsage(
-      promptTokens: raw['input_tokens'] as int?,
+      promptTokens: input,
       completionTokens: raw['output_tokens'] as int?,
       totalTokens: raw['total_tokens'] as int?,
+      // Responses 的 input_tokens 已含缓存命中部分，即完整输入
+      totalInputTokens: input,
       cacheReadTokens: inputDetails is Map<String, dynamic>
           ? inputDetails['cached_tokens'] as int?
+          : null,
+      reasoningTokens: outputDetails is Map<String, dynamic>
+          ? outputDetails['reasoning_tokens'] as int?
           : null,
     );
   }

@@ -22,6 +22,7 @@ extension _ChatModePageScroll on _ChatModePageState {
     int attempts = 8,
     void Function()? onSettled,
   }) {
+    _roundNavigation.clearTail();
     _followExecutor.stop(); // 宿主自驱滚动：避免与桌面 ticker 抢帧
     _targetScrollMessageId = messageId;
     final key = _messageKeys.putIfAbsent(messageId, GlobalKey.new);
@@ -112,6 +113,7 @@ extension _ChatModePageScroll on _ChatModePageState {
   /// 校准（稳态下距离 ≤1 直接 no-op；沿用  改造前发送路径的
   /// 单次 settle 语义，流式跟随路径零 settle）。
   void _forceToBottomWithSettle() {
+    _roundNavigation.clearTail();
     _followExecutor.forceToBottom();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -156,35 +158,30 @@ extension _ChatModePageScroll on _ChatModePageState {
     });
   }
 
-  /// 滚动监听：跟随执行器喂入 + atBottom/导航可见性。
-  ///
-  /// - 上划即停：pixels 下降（且非内容收缩钳位）→ 冻结贴底跟随
-  /// - 滚回距底 ≤4px → 自动恢复跟随
   void _onScroll() {
     if (!_scrollController.hasClients) return;
+    if (_roundNavigation.readingSelection || _roundNavigation.tail > 0) {
+      _followExecutor.rebase();
+      return;
+    }
     final position = _scrollController.position;
-    final offset = position.pixels;
-    final atBottom =
-        position.maxScrollExtent - offset < _ChatModePageState._bottomTolerance;
+    _followExecutor.handleScrollMetrics(
+      position.pixels,
+      position.maxScrollExtent,
+    );
+  }
 
-    // 滚动活动状态：滑动时显示导航按钮，停止 2 秒后自动隐藏
-    if (!_isScrollActive) {
-      setState(() => _isScrollActive = true);
-    }
-    _scrollIdleTimer?.cancel();
-    _scrollIdleTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _isScrollActive = false);
-    });
-
-    _followExecutor.handleScrollMetrics(offset, position.maxScrollExtent);
-
-    if (atBottom != _atBottom) {
-      setState(() => _atBottom = atBottom);
-    }
+  void _jumpRound({required bool forward}) {
+    _followExecutor.stop();
+    _followExecutor.state.pauseFollowing();
+    _targetScrollMessageId = null;
+    _roundNavigation.jump(forward: forward);
   }
 
   /// 跳到顶部（普通方向列表：顶部 = 最旧消息 = offset 0）
   void _jumpToTop() {
+    _roundNavigation.clearTail();
+    _followExecutor.state.pauseFollowing();
     if (!_scrollController.hasClients) return;
     _followExecutor.stop(); // 宿主自驱滚动：避免与桌面 ticker 抢帧
     _scrollController.animateTo(
@@ -194,112 +191,31 @@ extension _ChatModePageScroll on _ChatModePageState {
     );
   }
 
-  /// 跳到底部（普通方向列表：底部 = 最新消息 = maxScrollExtent）。
-  /// 用户主动回底 = 强制恢复贴底跟随。
-  void _jumpToBottom() {
-    if (!_scrollController.hasClients) return;
-    _followExecutor.state.forceFollowing();
-    _followExecutor.stop(); // 宿主自驱滚动：避免与桌面 ticker 抢帧
-    _scrollController
-        .animateTo(
-      _scrollController.position.maxScrollExtent,
-      duration: LmMotion.slow,
-      curve: LmMotion.easeEmphasis,
-    )
-        .whenComplete(() {
-      if (mounted) _settleAtBottom(1);
+  void _jumpToBottom() => _forceToBottomWithSettle();
+
+  /// 首字前失败会以错误卡替换末尾占位。跟随最新消息时把原因移入视口。
+  void _revealLatestFailure(String messageId) {
+    _followExecutor.stop();
+    setState(() => _targetScrollMessageId = messageId);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_scrollController.hasClients ||
+          !_followExecutor.state.following ||
+          _targetScrollMessageId != messageId) {
+        return;
+      }
+      final current = ref.read(chatModeControllerProvider(widget.session));
+      final last = current.messages.lastOrNull;
+      if (current.isSending ||
+          last?.messageId != messageId ||
+          last?.error == null) {
+        return;
+      }
+      final bubble =
+          _messageKeys[messageId]?.currentContext?.findRenderObject();
+      if (bubble == null) return;
+      unawaited(_scrollController.position.ensureVisible(bubble));
     });
-  }
-
-  /// 跳到上一条用户消息（对标 ChatBox handleScrollToPrev）
-  void _jumpToPrevUserMessage() {
-    final messages =
-        ref.read(chatModeControllerProvider(widget.session)).messages;
-    final firstVisible = _findFirstVisibleIndex(messages);
-    if (firstVisible == null) return;
-
-    // 从当前可见消息向前查找 user 消息
-    for (var i = firstVisible - 1; i >= 0; i--) {
-      if (messages[i].role == 'user') {
-        _scrollToMessage(messages[i].messageId);
-        return;
-      }
-    }
-    // 没有上一条 → 滚到顶部
-    _jumpToTop();
-  }
-
-  /// 跳到下一条用户消息（对标 ChatBox handleScrollToNext）
-  void _jumpToNextUserMessage() {
-    final messages =
-        ref.read(chatModeControllerProvider(widget.session)).messages;
-    final firstVisible = _findFirstVisibleIndex(messages);
-    if (firstVisible == null) return;
-
-    // 从当前可见消息向后查找 user 消息
-    for (var i = firstVisible + 1; i < messages.length; i++) {
-      if (messages[i].role == 'user') {
-        _scrollToMessage(messages[i].messageId);
-        return;
-      }
-    }
-    // 没有下一条 → 滚到底部
-    _jumpToBottom();
-  }
-
-  /// 查找当前视口中第一个可见消息的索引（方向无关，reverse/非 reverse 都正确）
-  ///
-  /// 返回升序 messages 数组中"最旧的一条可见消息"的索引，供 prev/next
-  /// 导航按钮使用（prev = 索引减 1 向更旧找，next = 索引加 1 向更新找）。
-  int? _findFirstVisibleIndex(List<ChatMessage> messages) {
-    if (!_scrollController.hasClients || messages.isEmpty) return null;
-    final scrollOffset = _scrollController.offset;
-    final viewportExtent = _scrollController.position.viewportDimension;
-    // 优先从已挂载 RenderObject 的动态 Key 快速查找
-    for (var i = 0; i < messages.length; i++) {
-      final key = _messageKeys[messages[i].messageId];
-      if (key == null) continue;
-      final renderObject = key.currentContext?.findRenderObject();
-      if (renderObject == null) continue;
-      final viewport = RenderAbstractViewport.of(renderObject);
-      final revealTop = viewport.getOffsetToReveal(renderObject, 0).offset;
-      final revealBottom = viewport.getOffsetToReveal(renderObject, 1).offset;
-      if (revealBottom >= scrollOffset &&
-          revealTop <= scrollOffset + viewportExtent) {
-        return i;
-      }
-    }
-    // 绝大多数常规气泡走滚动百分比与索引估算，彻底解耦数百个常驻 GlobalKey
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    if (maxScroll > 0) {
-      final ratio = (scrollOffset / maxScroll).clamp(0.0, 1.0);
-      return (ratio * (messages.length - 1))
-          .round()
-          .clamp(0, messages.length - 1);
-    }
-    return 0;
-  }
-
-  /// 滚动到指定消息（顶部对齐）
-  void _scrollToMessage(String messageId) {
-    if (!_scrollController.hasClients) return;
-    _followExecutor.stop(); // 宿主自驱滚动：避免与桌面 ticker 抢帧
-    _targetScrollMessageId = messageId;
-    final key = _messageKeys.putIfAbsent(messageId, GlobalKey.new);
-    final renderObject = key.currentContext?.findRenderObject();
-    if (renderObject == null) {
-      // 懒加载列表未构建的气泡不再静默失效——
-      // 复用同页搜索定位的三段式估算（比例跳转 + postFrame 校准）。
-      _revealMessageWithEstimate(messageId);
-      return;
-    }
-    final viewport = RenderAbstractViewport.of(renderObject);
-    final targetOffset = viewport.getOffsetToReveal(renderObject, 0).offset;
-    _scrollController.animateTo(
-      targetOffset,
-      duration: LmMotion.emphasis,
-      curve: LmMotion.easeStandard,
-    );
   }
 
   /// 清理不再存在或不再处于聚焦状态的动态 GlobalKey，避免内存泄漏
@@ -371,24 +287,40 @@ extension _ChatModePageScroll on _ChatModePageState {
       _forceToBottomWithSettle();
       return;
     }
-    // 轮完成轻提示——streaming/thinking
-    // true→false 边沿且无 error 时弹顶部胶囊（5s 自动消失，点按跳底）。
-    // 取消=入口清 armed；失败=error 非空；压缩紧随=nowSettled 排除；
-    // 后台收工=fromBackground 排除。
     final wasActive =
         (previous?.isStreaming ?? false) || (previous?.isThinking ?? false);
+    final last = next.messages.lastOrNull;
+    final previousLast = previous?.messages.lastOrNull;
+    if (wasActive &&
+        !next.isGeneratingInBackground &&
+        _followExecutor.state.following &&
+        last != null &&
+        last.role == 'assistant' &&
+        last.error != null &&
+        (last.content?.isEmpty ?? true) &&
+        (last.thinkingContent?.isEmpty ?? true) &&
+        (last.messageId != previousLast?.messageId ||
+            last.error != previousLast?.error)) {
+      _roundDoneHintArmed = false;
+      _revealLatestFailure(last.messageId);
+      return;
+    }
+    // 生成收口且已有成功回复时提示完成。失败原因保留在错误卡。
     final nowSettled = !next.isStreaming &&
         !next.isThinking &&
         !next.isCompressing &&
         !next.isGeneratingInBackground;
     final fromBackground = previous?.isGeneratingInBackground ?? false;
     if (wasActive && nowSettled && !fromBackground) {
-      if (next.error == null && _roundDoneHintArmed) {
+      if (_roundDoneHintArmed &&
+          next.error == null &&
+          last?.role == 'assistant' &&
+          last?.error == null) {
         _showRoundDoneHint();
       }
       _roundDoneHintArmed = false;
     }
-    final working = next.isStreaming || next.isThinking || next.isCompressing;
+    final working = _isWorking(next);
     if (!working) return;
     // 流式过程中 state 每次变化都触发滚动（蹦字效果需要），
     // 跟随 gate 全权交给执行器（上划即停/回底 ≤4px 自动恢复；

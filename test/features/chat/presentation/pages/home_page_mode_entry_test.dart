@@ -14,6 +14,8 @@ import 'package:lmstory/features/settings/domain/repositories/settings_repositor
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../../helpers/home_sessions_fixture.dart';
+
 /// 首页模式入口卡布局：故事模式入口默认隐藏、导演升为并排主推卡；
 /// 故事开关打开后回到「对话+故事双卡 + 导演横卡」的既有布局。
 void main() {
@@ -231,14 +233,14 @@ void main() {
   });
 }
 
-/// 首页替身：`getAllSessions` 返回注入列表（缺省空），其余方法显式报错。
+/// 首页替身返回注入的会话，缺省为空。
 class _StubChatRepository implements ChatRepository {
   _StubChatRepository([this.sessions = const []]);
 
   final List<ChatSession> sessions;
 
   @override
-  Future<List<ChatSession>> getAllSessions() async => sessions;
+  Future<HomeSessions> getHomeSessions() async => homeSessionsFixture(sessions);
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>

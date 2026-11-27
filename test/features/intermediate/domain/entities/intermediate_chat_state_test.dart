@@ -203,7 +203,21 @@ void main() {
       expect(cleared.userInput, '我发送的消息');
     });
 
-    test('缓存命中率：分母包含未缓存与缓存读取 token', () {
+    test('缓存命中率：分母为累计完整输入（非 prompt+cache 相加）', () {
+      final state = IntermediateChatState(
+        phase: IntermediatePhase.idle,
+        messages: const [],
+        retryCounts: const {},
+        session: _testSession(),
+        contextPromptTokensTotal: 200,
+        contextCacheReadTokensTotal: 800,
+        contextInputTokensTotal: 1000,
+      );
+
+      expect(state.averageCacheHit, 0.8);
+    });
+
+    test('缓存命中率：旧累计缺完整输入面 → null（不得当 0 命中）', () {
       final state = IntermediateChatState(
         phase: IntermediatePhase.idle,
         messages: const [],
@@ -213,7 +227,7 @@ void main() {
         contextCacheReadTokensTotal: 800,
       );
 
-      expect(state.averageCacheHit, 0.8);
+      expect(state.averageCacheHit, isNull);
     });
   });
 

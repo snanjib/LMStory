@@ -131,6 +131,11 @@ class ExperientialMemoriesTable extends Table {
   /// 对存量行无感；存量手动行不可追溯，按 auto 处理。
   TextColumn get source => text().withDefault(const Constant('auto'))();
 
+  /// 该记忆由对应轮的输入和正文提炼，且内容未被手动修改。
+  /// 旧记录、手动记录和跨轮提炼结果均默认未知。
+  BoolColumn get hasVerifiedSourceTurn =>
+      boolean().withDefault(const Constant(false))();
+
   /// 创建时间
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }

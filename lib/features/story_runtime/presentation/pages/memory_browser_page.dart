@@ -87,6 +87,12 @@ class _MemoryBrowserPageState extends ConsumerState<MemoryBrowserPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
 
+  /// MEM-20：关键词索引的存储门槛（importance < 此值的记忆无 FTS 行，
+  /// 经历列表行内标「未入索引」）。按会话模式从对应配置段取
+  ///（与 _MemoryIndexHealthBanner 的 _retrievalConfig 同源）；
+  /// 未加载完成/读取失败时为 null——Tab 回落 RetrievalConfig 默认值。
+  int? _importanceStorageThreshold;
+
   @override
   void initState() {
     super.initState();
@@ -96,6 +102,26 @@ class _MemoryBrowserPageState extends ConsumerState<MemoryBrowserPage>
       // 外部跳转可指定初始 Tab（预选进事实 Tab）
       initialIndex: widget.initialTab.clamp(0, 1),
     );
+    unawaited(_loadImportanceStorageThreshold());
+  }
+
+  Future<void> _loadImportanceStorageThreshold() async {
+    try {
+      final RetrievalConfig retrieval;
+      if (widget.session.mode == ChatMode.advanced) {
+        retrieval = (await ref.read(advancedConfigProvider.future)).retrieval;
+      } else {
+        retrieval =
+            (await ref.read(intermediateConfigProvider.future)).retrieval;
+      }
+      if (!mounted) return;
+      setState(
+        () =>
+            _importanceStorageThreshold = retrieval.importanceStorageThreshold,
+      );
+    } catch (_) {
+      // 配置读取失败保持 null——Tab 用 RetrievalConfig 默认门槛（=3）
+    }
   }
 
   @override
@@ -178,6 +204,8 @@ class _MemoryBrowserPageState extends ConsumerState<MemoryBrowserPage>
                 ExperienceMemoryTab(
                   sessionId: widget.session.sessionId,
                   readOnly: isDemo,
+                  // MEM-20：null = 配置未就绪/读取失败，Tab 内回落默认门槛
+                  importanceStorageThreshold: _importanceStorageThreshold,
                 ),
                 FactualMemoryTab(
                   sessionId: widget.session.sessionId,

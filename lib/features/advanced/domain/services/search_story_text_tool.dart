@@ -136,7 +136,13 @@ class SearchStoryTextTool implements AgentTool {
         ..add('[第${match.turn}轮]')
         ..addAll(match.snippets);
     }
-    if (matches.isEmpty) lines.add('当前关键词未找到匹配。可缩短查询或移除限制条件后重试；这不代表相关事件没有发生。');
+    // MEM-06 收窄：零命中指引补足——换词重试之外给出
+    // read_story 按轮回读的兜底通道（面向模型文案，不进 slang）
+    if (matches.isEmpty) {
+      lines.add(
+        '当前关键词未找到匹配。可缩短查询或移除限制条件后重试；这不代表相关事件没有发生。可换关键词重试，或用 read_story 按轮回读。',
+      );
+    }
     if (page.isEmpty && matches.isNotEmpty) lines.add('当前分页偏移没有结果，请减小 offset。');
     if (nextOffset != null) {
       lines.add('下一页：保持 query 与 limit，设置 offset=$nextOffset。');

@@ -1,0 +1,88 @@
+{
+  "manifest": {
+    "formatVersion": 2,
+    "sceneId": "first_launch_director",
+    "kind": "sample",
+    "locale": "en-US",
+    "contentVersion": "en-story-sample-1",
+    "templateId": "builtin-isekai-narrator",
+    "templateHash": "346f6de1553d3916",
+    "promptHash": "bc420d39b800fd90",
+    "toolFingerprint": "19edc9832ffbe269",
+    "embeddingDimensions": 8,
+    "embeddingModelLabel": "Local demo embedding",
+    "replayProfile": {
+      "id": "conservativeRelay",
+      "version": 1,
+      "protocol": "openaiCompatible",
+      "capabilitiesHash": "2f54d79457ea729b"
+    },
+    "source": {
+      "textModel": "local-story-sample",
+      "provenance": "authored-sample"
+    },
+    "notes": [
+      "An authored English story with synthetic local replay events."
+    ]
+  },
+  "prompt": "(I follow the lanterns to the guildhall and introduce myself at the counter.) My name is Rowan. Is this where I sign up for my first job?",
+  "responses": {
+    "stream": [],
+    "chat": [
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "",
+          "finishReason": "tool_calls",
+          "toolCalls": [
+            {
+              "toolCallId": "sample-event",
+              "name": "record_event_memory",
+              "arguments": {
+                "what": "Rowan registers at the guildhall and accepts Mara’s first job, delivering a spare lantern to the bridge before the river fog arrives.",
+                "who": "Rowan and Mara",
+                "where": "guildhall counter",
+                "importance": 3
+              }
+            }
+          ]
+        }
+      },
+      {
+        "purpose": "agent_step",
+        "turn": 1,
+        "response": {
+          "content": "",
+          "finishReason": "tool_calls",
+          "toolCalls": [
+            {
+              "toolCallId": "sample-finish",
+              "name": "finish_round",
+              "arguments": {
+                "prose": "The bell over the guildhall door rang once. Rowan stopped on the mat to wring rain from a sleeve. Behind the counter, Mara was trying to pin a torn map flat with a cup of tea and three mismatched coins.\n\n“You can sign up here,” she said. “But tell me what you can do before you tell me what you want to be.”\n\nRowan set a small brass compass on the counter. “I can get home in the dark.”\n\nMara slid the smallest coin across the map. It stopped on a bridge at the edge of town. “Then I have a job for you. The lamplighter on that bridge has a broken lantern. Take this spare lamp to her before the river fog comes in. Bring the old one back and your name goes in the book.”\n\nShe set the lamp beside the compass. It was warm enough to dry Rowan’s hands. Rowan signed the receipt, picked up the lamp, and stepped back into the rain."
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "embeddings": [],
+  "expectations": {
+    "proseContains": [
+      "The bell over the guildhall door rang once.",
+      "The lamplighter on that bridge has a broken lantern.",
+      "stepped back into the rain."
+    ],
+    "entityNames": [],
+    "eventSummaryContains": [
+      "Rowan registers at the guildhall"
+    ],
+    "nextTurn": 2,
+    "messageRoles": [
+      "user",
+      "assistant"
+    ]
+  }
+}

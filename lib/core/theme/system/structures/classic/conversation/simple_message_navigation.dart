@@ -1,159 +1,133 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/system/lm_motion.dart';
-import 'package:lmstory/core/theme/system/lm_spacing.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
-/// Floating navigation buttons for jumping between user messages.
-///
-/// Reference: ChatBox's MessageNavigation.tsx — provides jump-to-top,
-/// previous/next user message, and jump-to-bottom buttons.
-class SimpleMessageNavigation extends StatefulWidget {
+/// Conversation shortcuts that fold into the bottom button at the same position.
+class SimpleMessageNavigation extends StatelessWidget {
   const SimpleMessageNavigation({
     required this.onJumpToTop,
-    required this.onJumpToBottom,
     required this.onPrevUserMessage,
     required this.onNextUserMessage,
+    required this.onJumpToBottom,
     required this.visible,
+    this.compact = false,
+    this.onAccessibilityFocus,
     super.key,
   });
 
-  /// Callback when the user taps "jump to top".
-  final VoidCallback onJumpToTop;
-
-  /// Callback when the user taps "jump to bottom".
-  final VoidCallback onJumpToBottom;
-
-  /// Callback when the user taps "previous user message".
-  final VoidCallback onPrevUserMessage;
-
-  /// Callback when the user taps "next user message".
-  final VoidCallback onNextUserMessage;
-
-  /// Whether the navigation panel is visible.
+  final VoidCallback? onJumpToTop;
+  final VoidCallback? onPrevUserMessage;
+  final VoidCallback? onNextUserMessage;
+  final VoidCallback? onJumpToBottom;
+  final ValueChanged<bool>? onAccessibilityFocus;
   final bool visible;
-
-  @override
-  State<SimpleMessageNavigation> createState() =>
-      _SimpleMessageNavigationState();
-}
-
-class _SimpleMessageNavigationState extends State<SimpleMessageNavigation> {
-  bool _isHovered = false;
-  bool _keepVisible = false;
-
-  /// Whether the navigation should actually be shown.
-  /// On desktop: always visible when the parent's `visible` prop is true.
-  /// On mobile: visible when scrolled up (controlled by the `visible` prop).
-  bool get _shouldShow => widget.visible || _isHovered || _keepVisible;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.lm.palette;
     final t = Translations.of(context);
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) {
-        setState(() => _isHovered = false);
-        if (_keepVisible) {
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && !_isHovered) {
-              setState(() => _keepVisible = false);
-            }
-          });
-        }
-      },
-      child: GestureDetector(
-        onLongPressStart: (_) => setState(() => _keepVisible = true),
-        onLongPressEnd: (_) {
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) setState(() => _keepVisible = false);
-          });
-        },
-        child: AnimatedOpacity(
-          // 降低不透明度到 0.85，避免遮挡阅读
-          opacity: _shouldShow ? 0.85 : 0.0,
-          duration: LmMotion.base,
-          child: AnimatedSlide(
-            offset: _shouldShow ? Offset.zero : const Offset(0.5, 0),
-            duration: LmMotion.base,
-            curve: LmMotion.easeStandard,
-            child: IgnorePointer(
-              ignoring: !_shouldShow,
-              child: Container(
-                // 变窄：减小内边距
-                padding: const EdgeInsets.only(
-                  right: LmSpacing.s2xs,
-                  bottom: LmSpacing.sXs,
-                ),
-                decoration: BoxDecoration(
-                  color: colors.surfaceElevated,
-                  borderRadius:
-                      BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
-                  border: Border.all(
-                    color: colors.divider,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _NavigationButton(
-                      icon: Icons.keyboard_double_arrow_up,
-                      tooltip: t.chat.navigation.jumpToTop,
-                      onTap: widget.onJumpToTop,
-                      colors: colors,
-                    ),
-                    Divider(
-                      height: 1,
-                      thickness: 1,
-                      color: colors.divider,
-                      indent: LmSpacing.s2xs,
-                      endIndent: LmSpacing.s2xs,
-                    ),
-                    _NavigationButton(
-                      icon: Icons.keyboard_arrow_up,
-                      tooltip: t.chat.navigation.prevUserMessage,
-                      onTap: widget.onPrevUserMessage,
-                      colors: colors,
-                    ),
-                    Divider(
-                      height: 1,
-                      thickness: 1,
-                      color: colors.divider,
-                      indent: LmSpacing.s2xs,
-                      endIndent: LmSpacing.s2xs,
-                    ),
-                    _NavigationButton(
-                      icon: Icons.keyboard_arrow_down,
-                      tooltip: t.chat.navigation.nextUserMessage,
-                      onTap: widget.onNextUserMessage,
-                      colors: colors,
-                    ),
-                    Divider(
-                      height: 1,
-                      thickness: 1,
-                      color: colors.divider,
-                      indent: LmSpacing.s2xs,
-                      endIndent: LmSpacing.s2xs,
-                    ),
-                    _NavigationButton(
-                      icon: Icons.keyboard_double_arrow_down,
-                      tooltip: t.chat.navigation.jumpToBottom,
-                      onTap: widget.onJumpToBottom,
-                      colors: colors,
-                    ),
-                  ],
-                ),
-              ),
+    final reduced = MediaQuery.disableAnimationsOf(context);
+    final highContrast = MediaQuery.highContrastOf(context);
+    final show = visible || compact;
+    final actions = [
+      (
+        Icons.keyboard_double_arrow_up,
+        t.chat.navigation.jumpToTop,
+        onJumpToTop
+      ),
+      (
+        Icons.keyboard_arrow_up,
+        t.chat.navigation.prevUserMessage,
+        onPrevUserMessage
+      ),
+      (
+        Icons.keyboard_arrow_down,
+        t.chat.navigation.nextUserMessage,
+        onNextUserMessage
+      ),
+      (
+        Icons.keyboard_double_arrow_down,
+        compact ? t.chat.scrollToLatest : t.chat.navigation.jumpToBottom,
+        onJumpToBottom
+      ),
+    ];
+    const side = kMinInteractiveDimension;
+    const railWidth = 32.0;
+    const railInset = (side - railWidth) / 2;
+    final railDecoration = BoxDecoration(
+      color: highContrast
+          ? colors.surfaceElevated
+          : colors.surfaceElevated.withValues(alpha: .6),
+      borderRadius: BorderRadius.circular(railWidth / 2),
+      border: Border.all(
+        color: highContrast
+            ? colors.dividerStrong
+            : colors.divider.withValues(alpha: .5),
+      ),
+    );
+    return IgnorePointer(
+      ignoring: !show,
+      child: ExcludeSemantics(
+        excluding: !show,
+        child: ExcludeFocus(
+          excluding: !show,
+          child: AnimatedOpacity(
+            opacity: show ? 1 : 0,
+            duration: LmMotion.micro,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // The landscape keyboard can leave less than four targets of height.
+                final horizontal =
+                    constraints.maxHeight < actions.length * side;
+                return TweenAnimationBuilder<double>(
+                  tween: Tween<double>(end: visible ? 1 : 0),
+                  duration: reduced ? LmMotion.micro : LmMotion.base,
+                  builder: (context, openness, _) {
+                    final progress = reduced ? (visible ? 1.0 : 0.0) : openness;
+                    final length =
+                        railWidth + (actions.length - 1) * side * progress;
+                    return SizedBox(
+                      width: horizontal ? 4 * side : side,
+                      height: horizontal ? side : 4 * side,
+                      child: Stack(
+                        alignment: Alignment.bottomRight,
+                        children: [
+                          Positioned(
+                            bottom: railInset,
+                            right: railInset,
+                            child: IgnorePointer(
+                              child: Container(
+                                width: horizontal ? length : railWidth,
+                                height: horizontal ? railWidth : length,
+                                decoration: railDecoration,
+                              ),
+                            ),
+                          ),
+                          for (var i = 0; i < actions.length; i++)
+                            Positioned(
+                              bottom: horizontal ? 0 : (3 - i) * side,
+                              right: horizontal ? (3 - i) * side : 0,
+                              child: _NavigationButton(
+                                action: actions[i],
+                                index: i,
+                                openness: openness,
+                                horizontal: horizontal,
+                                reduced: reduced,
+                                visible: visible,
+                                compact: compact,
+                                onAccessibilityFocus: onAccessibilityFocus,
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
             ),
           ),
         ),
@@ -164,31 +138,74 @@ class _SimpleMessageNavigationState extends State<SimpleMessageNavigation> {
 
 class _NavigationButton extends StatelessWidget {
   const _NavigationButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-    required this.colors,
+    required this.action,
+    required this.index,
+    required this.openness,
+    required this.horizontal,
+    required this.reduced,
+    required this.visible,
+    required this.compact,
+    required this.onAccessibilityFocus,
   });
 
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-  final LmPalette colors;
+  final (IconData, String, VoidCallback?) action;
+  final int index;
+  final double openness;
+  final bool horizontal;
+  final bool reduced;
+  final bool visible;
+  final bool compact;
+  final ValueChanged<bool>? onAccessibilityFocus;
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.xs)),
-        child: Padding(
-          // 变窄：从 sLg(16px) 减小到 sSm(8px)，保持 40x40 触控目标
-          padding: const EdgeInsets.all(LmSpacing.sSm),
-          child: Icon(
-            icon,
-            size: 16,
-            color: colors.muted,
+    final (icon, label, onPressed) = action;
+    final bottom = index == 3;
+    final hidden = !visible && !bottom;
+    final phase =
+        ((openness - (2 - index).clamp(0, 2) * .07) / .86).clamp(0.0, 1.0);
+    // Only the glyph travels. The four 48 dp hit targets never overlap.
+    final shift = reduced
+        ? 0.0
+        : bottom
+            ? 2 * math.sin(openness * math.pi * 2)
+            : kMinInteractiveDimension *
+                (3 - index) *
+                (1 - LmMotion.easeBoth.transform(phase));
+    final colors = context.lm.palette;
+    return IgnorePointer(
+      ignoring: hidden,
+      child: ExcludeSemantics(
+        excluding: hidden,
+        child: ExcludeFocus(
+          excluding: hidden,
+          child: MergeSemantics(
+            child: Semantics(
+              onDidGainAccessibilityFocus: () =>
+                  onAccessibilityFocus?.call(true),
+              onDidLoseAccessibilityFocus: () =>
+                  onAccessibilityFocus?.call(false),
+              child: SizedBox.square(
+                dimension: kMinInteractiveDimension,
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: IconButton(
+                    tooltip: label,
+                    onPressed: onPressed,
+                    padding: EdgeInsets.zero,
+                    color: bottom && compact ? colors.primary : colors.ink,
+                    icon: Transform.translate(
+                      transformHitTests: false,
+                      offset: horizontal ? Offset(shift, 0) : Offset(0, shift),
+                      child: Opacity(
+                        opacity: bottom ? 1 : phase,
+                        child: Icon(icon, size: bottom ? 22 : 20),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),

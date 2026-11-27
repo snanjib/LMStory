@@ -11,6 +11,7 @@ import 'package:lmstory/core/storage/preferences.dart';
 import 'package:lmstory/core/theme/api/lm_component_kit.dart';
 import 'package:lmstory/core/theme/appearance_controller.dart';
 import 'package:lmstory/core/theme/system/lm_layout.dart';
+import 'package:lmstory/core/theme/system/theme_catalog.dart';
 import 'package:lmstory/core/theme/theme_controller.dart';
 import 'package:lmstory/core/tutorial/modal_route_presence.dart';
 import 'package:lmstory/core/tutorial/spotlight_overlay.dart';
@@ -22,7 +23,11 @@ import 'package:lmstory/features/demo/presentation/demo_runtime.dart';
 import 'package:lmstory/features/demo/presentation/demo_scope.dart';
 import 'package:lmstory/features/diagnostics/presentation/controllers/diagnostics_controller.dart';
 import 'package:lmstory/features/intermediate/presentation/intermediate_mode_flag.dart';
+import 'package:lmstory/features/settings/data/database_startup_recovery.dart';
+import 'package:lmstory/features/settings/data/database_startup_recovery_native.dart'
+    if (dart.library.js_interop) 'package:lmstory/features/settings/data/database_startup_recovery_web.dart';
 import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/widgets/database_startup_gate.dart';
 import 'package:lmstory/i18n/i18n.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:path_provider/path_provider.dart';
@@ -52,32 +57,45 @@ void main() async {
       };
 
       final prefs = Preferences();
-      final savedLocaleTag = await prefs.getString(localePrefKey);
-      await initI18n(savedLocaleTag: savedLocaleTag);
-
-      // 主题/导演开关/故事开关/配置显示模式启动预读（对齐 locale 预读范式）
-      // ——保存值≠系统值时首帧不再闪烁（false/system → 保存值）。
-      final savedThemeMode = await ThemeModeNotifier.readInitial(prefs);
-      final savedAppearance = await AppearanceNotifier.readInitial(prefs);
-      final savedAdvancedFlag = await AdvancedModeFlagNotifier.readInitial(
-        prefs,
-      );
-      final savedIntermediateFlag =
-          await IntermediateModeFlagNotifier.readInitial(prefs);
-      final savedConfigLevel = await ConfigLevelNotifier.readInitial(prefs);
 
       // 初始化日志文件落盘（诊断包基础设施）
       await _initFileLogging(prefs);
 
-      // 导演设置分家一次性迁移：intermediate.* overrides 复制为 advanced.*
-      //（设计文档 §8.1）。必须在 runApp 之前完成，早于任何
-      // getResolvedConfig() 读取；失败仅日志不阻塞启动。
+      runApp(await buildStartupApplication(prefs));
+    },
+    (Object error, StackTrace stack) {
+      // 捕获 Dart 异步错误（未 await 的 Future 异常、Isolate 异常等）
+      const Logger(
+        'Zone',
+      ).error('Uncaught async error', detail: '$error\n$stack');
+    },
+  );
+}
+
+Future<Widget> buildStartupApplication(
+  Preferences prefs, {
+  DatabaseStartupRecovery? recovery,
+}) async {
+  final savedLocaleTag = await prefs.getString(localePrefKey);
+  await initI18n(savedLocaleTag: savedLocaleTag);
+  final savedThemeMode = await ThemeModeNotifier.readInitial(prefs);
+  final savedAppearance = await AppearanceNotifier.readInitial(prefs);
+  final savedAdvancedFlag = await AdvancedModeFlagNotifier.readInitial(prefs);
+  final savedIntermediateFlag =
+      await IntermediateModeFlagNotifier.readInitial(prefs);
+  final savedConfigLevel = await ConfigLevelNotifier.readInitial(prefs);
+
+  return DatabaseStartupGate(
+    recovery: recovery ?? createStartupDatabaseRecovery(prefs),
+    lightTheme: ThemeCatalog.assemble(savedAppearance, Brightness.light),
+    darkTheme: ThemeCatalog.assemble(savedAppearance, Brightness.dark),
+    themeMode: savedThemeMode,
+    buildApplication: (opened) async {
+      // Settings migrations run against the selected preferences before any
+      // provider reads configuration. Their own failures keep the old flow.
       try {
-        final migrator = AdvancedOverridesMigrator(prefs);
+        final migrator = AdvancedOverridesMigrator(opened.preferences);
         await migrator.runIfNeeded();
-        // 上下文配置收敛：清除全局 override 存储中的
-        // stale 上下文预算键（组装侧定死后无消费点）；独立标记，
-        // 已迁移过的老安装也补清
         await migrator.cleanupStaleContextBudgetKeys();
       } catch (e) {
         const Logger(
@@ -85,50 +103,43 @@ void main() async {
         ).error('advanced overrides migration failed', detail: '$e');
       }
 
-      runApp(
-        ProviderScope(
-          // 预读值经 override 注入（notifier 首帧即持保存值）
-          overrides: [
-            appearanceProvider.overrideWith(
-              (ref) => AppearanceNotifier(
-                ref.read(preferencesProvider),
-                initialValue: savedAppearance,
-              ),
+      return ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(opened.database),
+          preferencesProvider.overrideWithValue(opened.preferences),
+          appearanceProvider.overrideWith(
+            (ref) => AppearanceNotifier(
+              ref.read(preferencesProvider),
+              initialValue: savedAppearance,
             ),
-            themeModeProvider.overrideWith(
-              (ref) => ThemeModeNotifier(
-                ref.read(preferencesProvider),
-                initialValue: savedThemeMode,
-              ),
+          ),
+          themeModeProvider.overrideWith(
+            (ref) => ThemeModeNotifier(
+              ref.read(preferencesProvider),
+              initialValue: savedThemeMode,
             ),
-            advancedModeFlagProvider.overrideWith(
-              (ref) => AdvancedModeFlagNotifier(
-                ref.watch(preferencesProvider),
-                initialValue: savedAdvancedFlag,
-              ),
+          ),
+          advancedModeFlagProvider.overrideWith(
+            (ref) => AdvancedModeFlagNotifier(
+              ref.watch(preferencesProvider),
+              initialValue: savedAdvancedFlag,
             ),
-            intermediateModeFlagProvider.overrideWith(
-              (ref) => IntermediateModeFlagNotifier(
-                ref.watch(preferencesProvider),
-                initialValue: savedIntermediateFlag,
-              ),
+          ),
+          intermediateModeFlagProvider.overrideWith(
+            (ref) => IntermediateModeFlagNotifier(
+              ref.watch(preferencesProvider),
+              initialValue: savedIntermediateFlag,
             ),
-            configLevelProvider.overrideWith(
-              (ref) => ConfigLevelNotifier(
-                ref.read(preferencesProvider),
-                initialValue: savedConfigLevel,
-              ),
+          ),
+          configLevelProvider.overrideWith(
+            (ref) => ConfigLevelNotifier(
+              ref.read(preferencesProvider),
+              initialValue: savedConfigLevel,
             ),
-          ],
-          child: MyApp(),
-        ),
+          ),
+        ],
+        child: MyApp(),
       );
-    },
-    (Object error, StackTrace stack) {
-      // 捕获 Dart 异步错误（未 await 的 Future 异常、Isolate 异常等）
-      const Logger(
-        'Zone',
-      ).error('Uncaught async error', detail: '$error\n$stack');
     },
   );
 }

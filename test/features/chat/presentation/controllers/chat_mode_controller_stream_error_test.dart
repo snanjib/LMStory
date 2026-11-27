@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lmstory/core/config/config_loader.dart';
 import 'package:lmstory/core/network/http_client_types.dart';
 import 'package:lmstory/core/utils/logger.dart';
-import 'package:lmstory/core/utils/token_counter.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_message.dart';
 import 'package:lmstory/features/chat/domain/entities/chat_session.dart';
 import 'package:lmstory/features/chat/domain/entities/fork_anchor.dart';
@@ -12,12 +11,15 @@ import 'package:lmstory/features/chat/domain/repositories/chat_repository.dart';
 import 'package:lmstory/features/chat/domain/services/compaction_service.dart';
 import 'package:lmstory/features/chat/domain/services/compaction_streamer.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
+import 'package:lmstory/features/chat/domain/services/simple_failure_classifier.dart';
 import 'package:lmstory/features/chat/presentation/controllers/chat_mode_controller.dart';
+import 'package:lmstory/features/diagnostics/domain/entities/failure_log_entry.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
 
 import '../../../../test_helpers/stub_failure_log_repository.dart';
+import '../../../../test_helpers/stub_token_counter.dart';
 
 /// 对话模式流错误可见性回归测试（2026-09-08 用户报告：Gemini 3.8 生成
 /// 消息静默消失、不显示报错，仅网络连不通可见错误）。
@@ -31,12 +33,14 @@ void main() {
   late _RecordingChatRepository repo;
   late _FakeSettingsRepository settingsRepo;
   late _ScriptedLlmService llmService;
+  late _RecordingFailureLogRepository failureLogs;
   late StreamController<LlmStreamEvent> events;
 
   setUp(() {
     repo = _RecordingChatRepository();
     settingsRepo = _FakeSettingsRepository();
     llmService = _ScriptedLlmService();
+    failureLogs = _RecordingFailureLogRepository();
     events = StreamController<LlmStreamEvent>();
     llmService.stream = events.stream;
   });
@@ -46,9 +50,10 @@ void main() {
   });
 
   ChatModeController build() {
+    final tokenCounter = StubTokenCounter();
     final compaction = CompactionService(
       chatRepository: repo,
-      tokenCounter: TokenCounter(),
+      tokenCounter: tokenCounter,
       settingsRepository: settingsRepo,
       presetRepository: _NoopPresetRepository(),
       streamer: CompactionStreamer(llmService: llmService),
@@ -61,7 +66,8 @@ void main() {
       compactionService: compaction,
       llmService: llmService,
       logger: const Logger('test'),
-      failureLogRepository: const StubFailureLogRepository(),
+      failureLogRepository: failureLogs,
+      tokenCounter: tokenCounter,
       session: _session(),
       streamDeltaCoalesceInterval: Duration.zero,
     );
@@ -73,6 +79,89 @@ void main() {
     }
     expect(cond(), isTrue, reason: '等待条件超时');
   }
+
+  test('HTTP 401 persists S003 and redacted details without resending',
+      () async {
+    final controller = build();
+    addTearDown(controller.dispose);
+    await until(() => !controller.state.isLoading);
+
+    await controller.sendMessage('Hello');
+    events.add(
+      const LlmStreamError(
+        'Stream interrupted: AppHttpException: '
+        'SSE request failed with status 401 | Response: '
+        'Invalid credential. Authorization: Bearer fixture-value; '
+        'endpoint https://private.invalid/v1/chat',
+        code: 'AUTH',
+      ),
+    );
+    await events.close();
+    await until(() => !controller.state.isStreaming);
+
+    final errorMessage = repo.addMessageCalls
+        .where((message) => message.role == 'assistant')
+        .single;
+    final storedError = errorMessage.error ?? '';
+    final payload = SimpleErrorPayload.tryDecode(storedError);
+    final log = failureLogs.entries.single;
+
+    expect(payload?.code, 'S003');
+    expect(log.errorCategory, SimpleFailureClassifier.auth);
+    expect(log.httpStatus, 401);
+    for (final detail in [payload?.detail, log.rawError]) {
+      expect(detail, contains('status 401'));
+      expect(detail, contains('Invalid credential'));
+      expect(detail, contains('Authorization: ***'));
+      expect(detail, contains('https://<endpoint>'));
+      expect(detail, isNot(contains('fixture-value')));
+      expect(detail, isNot(contains('private.invalid')));
+    }
+    expect(llmService.streamCalls, 1);
+    expect(controller.state.autoRetryNotice, isNull);
+  });
+
+  test('HTTP 503 resends the same turn and saves the recovered reply',
+      () async {
+    final controller = build();
+    addTearDown(controller.dispose);
+    await until(() => !controller.state.isLoading);
+
+    await controller.sendMessage('Hello');
+    llmService.stream = Stream<LlmStreamEvent>.fromIterable(const [
+      LlmTextDelta('Service recovered'),
+      LlmStreamDone(),
+    ]);
+    final completed = Completer<void>();
+    addTearDown(
+      controller.addListener(
+        (state) {
+          if (!state.isStreaming && !completed.isCompleted) {
+            completed.complete();
+          }
+        },
+        fireImmediately: false,
+      ),
+    );
+    events.add(
+      const LlmStreamError(
+        'Stream interrupted: AppHttpException: SSE request failed with status 503',
+        code: 'SERVER',
+      ),
+    );
+    await events.close();
+    await completed.future.timeout(const Duration(seconds: 5));
+
+    expect(llmService.streamCalls, 2);
+    expect(failureLogs.entries.single.httpStatus, 503);
+    final userMessages =
+        repo.addMessageCalls.where((message) => message.role == 'user');
+    expect(userMessages.single.content, 'Hello');
+    final assistantMessages =
+        repo.addMessageCalls.where((message) => message.role == 'assistant');
+    expect(assistantMessages.single.content, 'Service recovered');
+    expect(assistantMessages.single.error, isNull);
+  });
 
   test('A. 首 delta 前流错误（Gemini 400 INVALID_ARGUMENT 形态）→ 落库带 error 的助手消息卡',
       () async {
@@ -231,6 +320,12 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expectFinalized(controller, 'LlmStreamError');
+      expect(llmService.streamCalls, 1);
+      final assistant = repo.addMessageCalls
+          .where((message) => message.role == 'assistant')
+          .single;
+      expect(assistant.thinkingContent, '思考被打断');
+      expect(SimpleErrorPayload.tryDecode(assistant.error ?? '')?.code, 'S005');
     });
 
     test('5. 取消（CancelledException 分支）→ 全部清零+error 清空', () async {
@@ -321,6 +416,7 @@ class _RecordingChatRepository implements ChatRepository {
 
 class _ScriptedLlmService implements LlmService {
   Stream<LlmStreamEvent>? stream;
+  int streamCalls = 0;
 
   ///  测试：throwOnStream 非空时 streamChat 同步抛出
   /// （覆盖 _sendToApi catch 落库分支）。
@@ -328,6 +424,7 @@ class _ScriptedLlmService implements LlmService {
 
   @override
   Stream<LlmStreamEvent> streamChat(LlmRequest request) {
+    streamCalls++;
     if (throwOnStream != null) throw throwOnStream!;
     return stream!;
   }
@@ -335,6 +432,37 @@ class _ScriptedLlmService implements LlmService {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('Not implemented: ${invocation.memberName}');
+}
+
+class _RecordingFailureLogRepository extends StubFailureLogRepository {
+  final List<FailureLogEntry> entries = [];
+
+  @override
+  Future<FailureLogEntry> insertLog({
+    required String sessionId,
+    required String mode,
+    required String errorCategory,
+    String? errorCode,
+    String? failedPhase,
+    int? httpStatus,
+    String? errorMessage,
+    String? rawError,
+    String? outcome,
+  }) async {
+    final entry = await super.insertLog(
+      sessionId: sessionId,
+      mode: mode,
+      errorCategory: errorCategory,
+      errorCode: errorCode,
+      failedPhase: failedPhase,
+      httpStatus: httpStatus,
+      errorMessage: errorMessage,
+      rawError: rawError,
+      outcome: outcome,
+    );
+    entries.add(entry);
+    return entry;
+  }
 }
 
 class _FakeSettingsRepository implements SettingsRepository {

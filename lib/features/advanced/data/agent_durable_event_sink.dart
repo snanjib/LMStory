@@ -5,7 +5,10 @@ import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/agent/agent_runner.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/features/advanced/domain/entities/agent_event_source.dart';
 import 'package:lmstory/features/advanced/domain/services/agent_log_recovery.dart';
+import 'package:lmstory/features/advanced/domain/services/retrieval_evidence.dart'
+    show kRetrievalEvidenceKey;
 
 /// 持久事件出口：live 事件 → durable 事件（缓冲 → flush 落库）
 ///
@@ -27,6 +30,8 @@ class DurableAgentEventSink implements AgentEventSink {
     required AgentEventLogStore repository,
     required this.sessionId,
     this.turnNumber,
+    this.attemptId,
+    this.source,
     this.chunkThreshold = 200,
     this.fullChunkEvents = false,
     Logger? logger,
@@ -38,6 +43,16 @@ class DurableAgentEventSink implements AgentEventSink {
 
   /// 本轮序号（用于事件日志按轮分组，供载入时反推工作过程；null = 未关联轮次）
   final int? turnNumber;
+
+  /// 本次生成尝试的不可变轨迹身份（att_<turn>_<timestamp>；随事件入账
+  /// 一次写定——变体切换的身份核对与绑定留痕消费）。null = 未提供
+  /// （身份缺失按保守处理）。
+  final String? attemptId;
+
+  /// 本次请求的模型来源三元组（协议/模型/端点指纹）——assistant
+  /// 事件随账本持久化，跨脑重发时投影层据此清除思考/签名表示。
+  /// null = 未提供（读取侧按来源未知降级）。
+  final AgentEventSourceMeta? source;
 
   /// 分片聚合阈值（字符）：缓冲累计 ≥ 此值落一条 assistant/chunk。
   /// ≤0 = 关闭阈值聚合档；全量档由 [fullChunkEvents] 独立控制（两开关
@@ -76,8 +91,18 @@ class DurableAgentEventSink implements AgentEventSink {
     final durable = _map(event);
     if (durable != null) {
       if (turnNumber != null) durable.data['turn'] = turnNumber;
+      if (attemptId != null) durable.data['attemptId'] = attemptId;
+      _stampSource(durable);
       _buffer.add(durable);
     }
+  }
+
+  /// assistant 事件盖来源三元组：正文/工具表示的「思考签名只在
+  /// 原模型/协议下合法」判定依据；其余事件无表示问题不盖。
+  void _stampSource(AgentDurableEvent durable) {
+    if (source == null) return;
+    if (durable.type != AgentEventTypes.assistantMessage) return;
+    durable.data['source'] = source!.toJson();
   }
 
   bool get _chunkEventsEnabled => fullChunkEvents || chunkThreshold > 0;
@@ -120,6 +145,7 @@ class DurableAgentEventSink implements AgentEventSink {
 
   void _appendBuffered(AgentDurableEvent durable) {
     if (turnNumber != null) durable.data['turn'] = turnNumber;
+    if (attemptId != null) durable.data['attemptId'] = attemptId;
     _buffer.add(durable);
   }
 
@@ -129,13 +155,22 @@ class DurableAgentEventSink implements AgentEventSink {
   /// surfaceOp 进主会话日志会污染投影（与主轮实际 outgoing 不符），
   /// 统一剥离 surface 语义落 log-only：步数/usage/工具产出在日志与
   /// 轨迹页可查，投影不动。
-  void relaySubagentEvent(AgentRunEvent event) {
+  ///
+  /// [subagentCallId]（HAR-09）：发起本次 spawn 的 toolCallId——同轮
+  /// 多次 spawn 的中继事件按它区分归属；null/空（旧接线）不落键。
+  /// 既有消费方按 `data['subagent']` 过滤的口径不变。
+  void relaySubagentEvent(AgentRunEvent event, {String? subagentCallId}) {
     final durable = _map(event);
     if (durable != null) {
       _appendBuffered(
         AgentDurableEvent(
           type: durable.type,
-          data: {...durable.data, 'subagent': true},
+          data: {
+            ...durable.data,
+            'subagent': true,
+            if (subagentCallId != null && subagentCallId.isNotEmpty)
+              'subagentCallId': subagentCallId,
+          },
         ),
       );
     }
@@ -212,9 +247,28 @@ class DurableAgentEventSink implements AgentEventSink {
             'promptTokens': usage.promptTokens,
             'completionTokens': usage.completionTokens,
             'totalTokens': usage.totalTokens,
-            // cache 分项进 durable（旧日志缺键读取侧按 0 处理）
-            'cacheReadTokens': usage.cacheReadTokens,
-            'cacheCreationTokens': usage.cacheCreationTokens,
+            // 本轮完整输入累计（上下文成本口径；不是命中率分母）
+            if (usage.totalInputTokens > 0)
+              'totalInputTokens': usage.totalInputTokens,
+            // 命中率只用「完整输入 + 命中分项都有效」的可比样本：
+            // 部分请求未上报缓存时不得把未知当零命中。
+            if (usage.hasComparableCache) ...{
+              'cacheComparableReadTokens': usage.cacheComparableReadTokens,
+              'cacheComparableInputTokens': usage.cacheComparableInputTokens,
+            },
+            // 样本覆盖率：false = 该轮有请求缺缓存分项或计量异常。
+            // 无可比分母时读取侧据此拒绝用全量输入回退算命中率。
+            'cacheSampleComplete':
+                usage.cacheComparableSteps == usage.stepsWithUsage,
+            // cacheReadTokens 保留全部上报原值（诊断口径）；读取侧优先
+            // 用 cacheComparable* 计算命中率，缺键时按旧日志回退。
+            if (usage.hasCacheReadTokens)
+              'cacheReadTokens': usage.cacheReadTokens,
+            if (usage.hasCacheCreationTokens)
+              'cacheCreationTokens': usage.cacheCreationTokens,
+            // 计量异常随轮持久化，便于事后诊断
+            if (usage.usageWarnings.isNotEmpty)
+              'usageWarnings': usage.usageWarnings,
             if (errorMessage != null) 'error': errorMessage,
           },
         ),
@@ -232,8 +286,10 @@ class DurableAgentEventSink implements AgentEventSink {
         :final promptTokens,
         :final completionTokens,
         :final totalTokens,
+        :final totalInputTokens,
         :final cacheReadTokens,
         :final cacheCreationTokens,
+        :final usageWarnings,
       ) =>
         AgentDurableEvent(
           type: AgentEventTypes.stepEnd,
@@ -243,11 +299,15 @@ class DurableAgentEventSink implements AgentEventSink {
             'promptTokens': promptTokens,
             'completionTokens': completionTokens,
             'totalTokens': totalTokens,
+            // 完整输入面（命中率分母；旧日志缺键读取侧降级）
+            if (totalInputTokens != null) 'totalInputTokens': totalInputTokens,
             // cache 分项进 durable（null 端点不上报时不落键，读取侧
             // 兼容旧日志与无缓存端点两种缺键形态）
             if (cacheReadTokens != null) 'cacheReadTokens': cacheReadTokens,
             if (cacheCreationTokens != null)
               'cacheCreationTokens': cacheCreationTokens,
+            // 计量异常持久化；读取侧对该样本不展示精确命中率
+            if (usageWarnings.isNotEmpty) 'usageWarnings': usageWarnings,
           },
         ),
       AgentAssistantMessageEvent(:final stepIndex, :final message) =>
@@ -263,6 +323,7 @@ class DurableAgentEventSink implements AgentEventSink {
         :final isError,
         :final title,
         :final duration,
+        :final metadata,
       ) =>
         AgentDurableEvent(
           type: AgentEventTypes.toolResult,
@@ -275,7 +336,8 @@ class DurableAgentEventSink implements AgentEventSink {
             title: title,
             // 工具耗时进 durable 层（轮轨迹步时间线；此前仅内存 live 事件有）
             durationMs: duration.inMilliseconds,
-          ).toJson(),
+          ).toJson()
+            ..addAll(_evidencePayloadOf(metadata)),
         ),
       //  补账：轮内 harness 注入（最后通牒/续跑提示/执笔重述）落为
       // user/message（source=注入来源），日志从此可重建每步消息序列
@@ -310,6 +372,11 @@ class DurableAgentEventSink implements AgentEventSink {
             ],
           },
         ),
+      // 表面守卫留痕（log-only）：装配一致性疑点（投影漂移等）
+      AgentSurfaceGuardTripped(:final kind, :final detail) => AgentDurableEvent(
+          type: AgentEventTypes.surfaceGuard,
+          data: {'kind': kind, if (detail != null) 'detail': detail},
+        ),
       AgentTextDeltaEvent() ||
       AgentThinkingDeltaEvent() ||
       AgentToolCallReceived() ||
@@ -318,6 +385,13 @@ class DurableAgentEventSink implements AgentEventSink {
       AgentRetryScheduled() =>
         null,
     };
+  }
+
+  /// 检索证据负载透传（仅 retrievalEvidence 键——其余元数据不落账）
+  Map<String, dynamic> _evidencePayloadOf(Map<String, dynamic>? metadata) {
+    final evidence = metadata?[kRetrievalEvidenceKey];
+    if (evidence is! Map) return const {};
+    return {kRetrievalEvidenceKey: evidence};
   }
 
   Map<String, dynamic> _assistantData(AgentMessage message, int stepIndex) {

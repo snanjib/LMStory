@@ -507,7 +507,8 @@ void main() {
   });
 
   test('send：budget 取 state.maxSteps（调整后下一轮生效）', () async {
-    // maxSteps=1：首个工具步耗尽预算 → 软着陆，第二个请求不再带工具
+    // maxSteps=1：首个工具步耗尽预算 → 软着陆。软着陆步保留完整工具
+    // 声明（防前缀缓存 miss）并以 toolChoice=none 停用工具执行。
     final gw = _ScriptedGateway([
       _tool('update_draft', {
         'action': 'set_card_field',
@@ -523,7 +524,12 @@ void main() {
 
     expect(gw.requests, hasLength(2));
     expect(gw.requests.first.tools, isNotEmpty);
-    expect(gw.requests.last.tools, isEmpty, reason: 'maxSteps=1 软着陆停用工具');
+    expect(
+      gw.requests.last.tools,
+      isNotEmpty,
+      reason: '软着陆步保留工具声明（HAR-05 保形）',
+    );
+    expect(gw.requests.last.toolChoice?.toRequestBody(), 'none');
     expect(controller.state.phase, ResourceAiPhase.ready);
   });
 

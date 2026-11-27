@@ -10,6 +10,7 @@ import 'package:lmstory/core/theme/system/lm_layout.dart';
 import 'package:lmstory/core/theme/system/lm_tokens.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/entities/model_capability.dart';
+import 'package:lmstory/features/settings/presentation/widgets/manual_model_id_confirmation.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
 /// 模型编辑弹窗
@@ -35,6 +36,7 @@ class ModelEditDialog extends ConsumerStatefulWidget {
 }
 
 class _ModelEditDialogState extends ConsumerState<ModelEditDialog> {
+  final _idFocus = FocusNode();
   late final TextEditingController _idController;
   late final TextEditingController _nameController;
   late final TextEditingController _contextController;
@@ -66,6 +68,7 @@ class _ModelEditDialogState extends ConsumerState<ModelEditDialog> {
 
   @override
   void dispose() {
+    _idFocus.dispose();
     _idController.dispose();
     _nameController.dispose();
     _contextController.dispose();
@@ -104,6 +107,9 @@ class _ModelEditDialogState extends ConsumerState<ModelEditDialog> {
                       label: t.settings.provider.modelId,
                       child: TextField(
                         controller: _idController,
+                        focusNode: _idFocus,
+                        autocorrect: false,
+                        enableSuggestions: false,
                         enabled: !_isEditing,
                         decoration: _inputDecoration(
                           colors,
@@ -542,9 +548,19 @@ class _ModelEditDialogState extends ConsumerState<ModelEditDialog> {
         ),
       );
 
-  void _save() {
-    final id = _idController.text.trim();
+  Future<void> _save() async {
+    final id = widget.existingModel?.modelId ?? _idController.text.trim();
     if (id.isEmpty) return;
+
+    if (!_isEditing) {
+      final confirmed = await confirmManualModelId(context, id);
+      if (!mounted) return;
+      if (!confirmed) {
+        _idFocus.requestFocus();
+        return;
+      }
+      if (_idController.text.trim() != id) return;
+    }
 
     final contextWindow = int.tryParse(_contextController.text.trim());
     final maxOutput = int.tryParse(_maxOutputController.text.trim());

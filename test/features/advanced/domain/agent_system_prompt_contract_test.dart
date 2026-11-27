@@ -42,13 +42,23 @@ void main() {
       expect(
         prefix,
         contains(
-          '正文一次性完整写入 finish_round 的 prose 参数（保留原始换行与标点）；回复文本只作一两句过场播报——读者在正文卡阅读正文，回复文本里再写一遍，读者会看到两遍。任务完成即 finish_round 提交，不做多余检查。',
+          '正文一次性完整写入 finish_round 的 prose 参数（保留原始换行与标点）；回复文本只作一两句过场播报——读者在正文卡阅读正文，回复文本里再写一遍，读者会看到两遍。正文与必要的记忆同步确认妥当后，通过 finish_round 提交本轮。',
         ),
       );
+      expect(prefix, isNot(contains('不需要就径直执笔')));
+      expect(prefix, isNot(contains('不做多余检查')));
     });
 
     test('旧措辞已退役：一次性输出/分段挤牙膏不再出现', () {
       expect(kAgentWorkRules, isNot(contains('分段挤牙膏')));
+    });
+
+    test('质量观含工具报错修正重试规则，不跳过未完成写入', () {
+      expect(
+        kAgentWorkRules,
+        contains('任意工具返回错误时，先核对失败原因并修正参数后重试'),
+      );
+      expect(kAgentWorkRules, contains('不要跳过未完成的写入直接收尾交稿'));
     });
 
     test('T8 资料边界声明：置于【项目规则】之后、【编辑部工作法】之前', () {
@@ -132,6 +142,7 @@ void main() {
         workbenchContractText(const {
           'search_story',
           'read_story',
+          'list_facts',
           'query_facts',
           'read_compact_summary',
           'update_facts',
@@ -140,10 +151,21 @@ void main() {
           'update_story_anchor',
           'read_skill',
           'finish_round',
+          'finish_maintenance',
         }),
         '【工作契约】记忆/事实/锚点/技能工具本轮随时可用。'
         '提交前自问：该查的查了吗？该记的记了吗？',
       );
+      expect(
+        workbenchContractText(const {'list_facts'}),
+        contains('记忆工具本轮随时可用'),
+      );
+      final majorText = workbenchContractText(
+        const {'list_facts', 'finish_round', 'finish_maintenance'},
+        isMajorReviewRound: true,
+      );
+      expect(majorText, contains('finish_round'));
+      expect(majorText, contains('finish_maintenance'));
     });
 
     test('B8-1 deny 感知：部分 deny 只点名注册类别', () {

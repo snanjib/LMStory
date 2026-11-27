@@ -31,6 +31,7 @@ import 'package:lmstory/features/story_runtime/domain/services/memory_consolidat
 import 'package:lmstory/features/story_runtime/domain/services/round_history_utils.dart';
 import 'package:lmstory/features/story_runtime/domain/services/session_title_generator.dart';
 import 'package:lmstory/features/story_runtime/presentation/widgets/context_usage_ring.dart';
+import 'package:lmstory/features/story_runtime/presentation/widgets/fact_write_feedback.dart';
 import 'package:lmstory/features/story_runtime/presentation/widgets/failure_bar.dart';
 import 'package:lmstory/features/story_runtime/presentation/widgets/intermediate_chat_input.dart';
 import 'package:lmstory/i18n/strings.g.dart';
@@ -86,6 +87,7 @@ class IntermediateChatPage extends ConsumerStatefulWidget {
 }
 
 class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
+  final _factWriteFeedback = FactWriteFeedback();
   // 2026-07-21：用户主动关闭「未配置嵌入模型」Banner 后，本会话内不再显示
   // 重启 App 或切换会话后重新检测（若仍未配置则再次显示）
   bool _embeddingBannerDismissed = false;
@@ -117,11 +119,18 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
     // 同步+异步双兜底：持久化失败静默降级（草稿非关键路径，不炸页面）
     unawaited(
       () async {
+        final release =
+            ref.read(dataStoreOperationGuardProvider).tryBeginWrite();
+        if (release == null) return;
         try {
           await ref
               .read<ChatRepository>(chatRepositoryProvider)
               .setSessionDraft(sessionId, text.isEmpty ? null : text);
-        } catch (_) {}
+        } catch (_) {
+          // 草稿写入失败时仍保留编辑框。
+        } finally {
+          release();
+        }
       }(),
     );
   }
@@ -190,6 +199,7 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
     super.didUpdateWidget(oldWidget);
     // 切会话时检查新会话是否需要回写草稿
     if (oldWidget.session.sessionId != widget.session.sessionId) {
+      _factWriteFeedback.dismissOnSessionExit();
       // 搜索态随会话切换全量复位——搜索条带着 A
       // 查询与命中数残留在 B 上方（口径）
       _resetSearchState();
@@ -240,6 +250,7 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
 
   @override
   void dispose() {
+    _factWriteFeedback.dismissOnSessionExit();
     _draftDebounce?.cancel();
     _searchDebounce?.cancel();
     super.dispose();
@@ -404,12 +415,33 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
     ref.listen<IntermediateChatState>(
       intermediateChatControllerProvider(widget.session),
       (previous, next) {
+        final warning = next.factWriteWarning;
+        if (warning != null && warning != previous?.factWriteWarning) {
+          _factWriteFeedback.show(context, warning.count);
+        }
         if (previous?.pendingUserMessage != null &&
             next.pendingUserMessage == null &&
             next.userInput != null &&
             next.userInput!.isNotEmpty &&
             next.phase == IntermediatePhase.idle) {
           _tryRestoreDraft();
+        }
+        // 变体切换被拒（后续轮/压缩区无法安全交换记忆层）
+        if (next.variantSwitchBlockedTick >
+            (previous?.variantSwitchBlockedTick ?? 0)) {
+          final t = Translations.of(context);
+          final reason = switch (next.variantSwitchBlockedReason) {
+            'compacted' => t.advanced.variant.switchBlockedCompacted,
+            'restore' => t.advanced.variant.switchBlockedRestore,
+            _ => t.advanced.variant.switchBlockedDownstream,
+          };
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              content: Text(reason),
+              duration: const Duration(seconds: 3),
+            ),
+          );
         }
       },
     );
@@ -726,7 +758,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                                 // 上下文圆环 chip 挂工具栏行末（满刻度=
                                 // 压缩触发线；与导演同位同款）
                                 trailing: ContextUsageChip(
-                                  numerator: state.lastPromptTokens,
+                                  // 主数字=当前预计上下文（压缩后即时调整）
+                                  numerator: _currentEstimateTokens(state),
                                   denominator: state.compactionTriggerTokens,
                                   onTap: _showContextCapacitySheet,
                                 ),
@@ -738,6 +771,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                                 // 手动压缩中禁用发送（控制器静默
                                 // no-op，UI 必须同口径禁用）
                                 isManualCompacting: state.isManualCompacting,
+                                isPreparingRegenerate:
+                                    state.isPreparingRegenerate,
                                 onSend: _handleSend,
                                 onTextChanged: _onDraftTextChanged,
                                 onCancel: controller.cancel,
@@ -836,7 +871,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                                   canSuggest: state.messages.isNotEmpty,
                                   // 上下文圆环 chip（失败态分支同款）
                                   trailing: ContextUsageChip(
-                                    numerator: state.lastPromptTokens,
+                                    // 主数字=当前预计上下文（压缩后即时调整）
+                                    numerator: _currentEstimateTokens(state),
                                     denominator: state.compactionTriggerTokens,
                                     onTap: _showContextCapacitySheet,
                                   ),
@@ -847,6 +883,8 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
                                   isStopping: state.isStopping,
                                   // 手动压缩中禁用发送（失败态分支同款）
                                   isManualCompacting: state.isManualCompacting,
+                                  isPreparingRegenerate:
+                                      state.isPreparingRegenerate,
                                   onSend: _handleSend,
                                   onTextChanged: _onDraftTextChanged,
                                   onCancel: controller.cancel,
@@ -987,6 +1025,16 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
 
   // ── 上下文用量指示（上下文用量指示 §4.1/§4.3）────────────────
 
+  /// 主数字：当前预计上下文（压缩后为本地调整值；null = 无数据）
+  ///
+  /// 不回退历史实报：重进会话/压缩后没有有效估算时保持「—」，
+  /// 不把压缩前的旧请求输入复活成当前值。
+  int? _currentEstimateTokens(IntermediateChatState state) =>
+      state.contextEstimate?.tokens;
+
+  bool _currentEstimateIsLocal(IntermediateChatState state) =>
+      state.contextEstimate?.isEstimated ?? false;
+
   /// 上下文用量详情面板（sheet 内 Consumer watch，流式打字自动刷新）
   void _showContextCapacitySheet() {
     unawaited(
@@ -1004,11 +1052,20 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
               contextWindowTokens: state.contextWindowTokens,
               compactionTriggerTokens: state.compactionTriggerTokens,
               lastPromptTokens: state.lastPromptTokens,
+              // 主数字与最近请求实报分开（压缩后主数字为调整值）
+              currentEstimateTokens: _currentEstimateTokens(state),
+              currentEstimateIsLocal: _currentEstimateIsLocal(state),
+              lastRequestInputTokens: state.lastInputTokens,
+              requestInputIsComplete: true,
               lastCompletionTokens: state.lastCompletionTokens,
               lastCacheReadTokens: state.lastCacheReadTokens,
+              lastCacheHitRatio: state.lastCacheHitRatio,
+              lastCacheSampleInvalid: state.lastCacheSampleInvalid,
               // 端点未回 usage 的轮次为本地估算值，面板加「≈」+ 脚注
               isEstimated: state.lastUsageIsEstimated,
               averageCacheHit: state.averageCacheHit,
+              // 故事侧只累计可加总 token，未逐请求记录可比样本数
+              // → 不传 cacheCoveredRounds（不展示覆盖行）
               sessionRounds: completedTurnCount(
                 compactedTurnBase: state.compactedTurnBase,
                 messages: state.messages,
@@ -1143,8 +1200,9 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
   /// P3 修订（DOC-09A-2 §6.5）：失败/取消后 pendingUserMessage 保留在 UI。
   /// 若用户未处理旧消息就发新消息，弹确认框询问是否覆盖，避免静默丢失。
   Future<void> _handleSend(String userInput) async {
+    final session = widget.session;
     final currentState = ref.read(
-      intermediateChatControllerProvider(widget.session),
+      intermediateChatControllerProvider(session),
     );
     if (currentState.pendingUserMessage != null &&
         currentState.phase != IntermediatePhase.failed) {
@@ -1157,11 +1215,26 @@ class _IntermediateChatPageState extends ConsumerState<IntermediateChatPage> {
       );
       if (!confirmed || !mounted) return;
     }
-    await ref
-        .read(intermediateChatControllerProvider(widget.session).notifier)
+    final consumed = await ref
+        .read(intermediateChatControllerProvider(session).notifier)
         .sendMessage(userInput);
-    // 已发送即不再是草稿（清窄列；Map 由切走分支维护）
-    _persistDraftColumn(widget.session.sessionId, '');
+    if (!mounted || widget.session != session) return;
+    if (!consumed) {
+      _inputKey.currentState?.setText(userInput);
+      if (ref.read(dataStoreOperationGuardProvider).isOverwriting) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(t.common.backupOverwriteInProgress),
+          ),
+        );
+      }
+      return;
+    }
+    if (_inputKey.currentState?.currentText.isEmpty ?? true) {
+      _draftDebounce?.cancel();
+      _persistDraftColumn(session.sessionId, '');
+    }
   }
 
   /// 复制消息内容到剪贴板，并显示 SnackBar 反馈
@@ -1354,6 +1427,7 @@ final intermediateChatControllerProvider = StateNotifierProvider.family<
     IntermediateChatController, IntermediateChatState, ChatSession>(
   (ref, session) {
     return IntermediateChatController(
+      operationGuard: ref.read(dataStoreOperationGuardProvider),
       chatRepository: ref.read(chatRepositoryProvider),
       configurationResolver: ConfigurationResolver(
         presetRepository: ref.read(apiPresetRepositoryProvider),

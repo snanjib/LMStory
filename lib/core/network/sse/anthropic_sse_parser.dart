@@ -562,12 +562,13 @@ class AnthropicSseParser {
     if (_inputTokens == null && _outputTokens == null) return null;
     final input = _inputTokens ?? 0;
     final output = _outputTokens ?? 0;
+    final fullInput =
+        input + (_cacheReadTokens ?? 0) + (_cacheCreationTokens ?? 0);
     return LlmUsage(
       promptTokens: input,
       completionTokens: output,
-      totalTokens: input + output,
-      totalInputTokens:
-          input + (_cacheReadTokens ?? 0) + (_cacheCreationTokens ?? 0),
+      totalTokens: fullInput + output,
+      totalInputTokens: fullInput,
       cacheReadTokens: _cacheReadTokens,
       cacheCreationTokens: _cacheCreationTokens,
     );

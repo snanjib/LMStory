@@ -88,6 +88,17 @@ class FollowScrollExecutor {
   /// ticker 抢帧）。
   void stop() => _scroller.stop();
 
+  /// A newly anchored viewport has a different origin. Its initial offset
+  /// is a baseline, not a user gesture or a change in following intent.
+  void rebase() {
+    if (!_controller.hasClients) return;
+    final position = _controller.position;
+    if (!position.hasContentDimensions) return;
+    _scroller.stop();
+    _lastPixels = position.pixels;
+    _lastMaxExtent = position.maxScrollExtent;
+  }
+
   /// 会话切换：回初始跟随态、停 ticker、清零滚动游标。
   void reset() {
     state.reset();

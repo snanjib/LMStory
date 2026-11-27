@@ -103,11 +103,12 @@ class _StubApiPresetRepository implements ApiPresetRepository {
       throw UnimplementedError('Not implemented: ${invocation.memberName}');
 }
 
-/// 首页空态替身：`getAllSessions` 返回空列表 → 走真实 `_buildEmptyState`。
+/// 首页空态替身返回空列表，走真实空态组件。
 /// 其余方法显式报错，避免「静默成功但页面其实是空的」。
 class _StubChatRepository implements ChatRepository {
   @override
-  Future<List<ChatSession>> getAllSessions() async => const [];
+  Future<HomeSessions> getHomeSessions() async =>
+      (recent: const <ChatSession>[], latestStory: null);
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>

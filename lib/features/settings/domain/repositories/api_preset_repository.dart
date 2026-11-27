@@ -17,10 +17,12 @@ abstract class ApiPresetRepository {
   /// 未提供时存为空字符串，由详情页的 URL 编辑逻辑负责补全。
   /// [protocol] 可选——创建时锁定协议类型，默认 [LlmProtocol.openaiCompatible]。
   /// 协议类型创建后不可修改（DOC-12 §9.3）。
+  /// [omitSamplingParams] 默认开启，旧版备份恢复可保留原来的发送行为。
   Future<ApiPreset> createPreset({
     required String name,
     String baseUrl = '',
     LlmProtocol protocol = LlmProtocol.openaiCompatible,
+    bool omitSamplingParams = true,
   });
 
   /// 基于模板创建自定义 preset（支持多账号）

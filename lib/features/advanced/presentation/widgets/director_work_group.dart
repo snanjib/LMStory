@@ -254,7 +254,7 @@ class _DirectorWorkGroupState extends State<DirectorWorkGroup> {
             child: RepaintBoundary(
               child: Builder(
                 builder: (context) {
-                  final occurrence = <String, int>{};
+                  final occurrence = <Object, int>{};
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -321,7 +321,7 @@ class _DirectorWorkGroupState extends State<DirectorWorkGroup> {
   /// 段不聚合（错误保持逐卡可见）。
   List<Widget> _interleavedChildren(List<AgentTimelineBlock> timeline) {
     final children = <Widget>[];
-    final occurrence = <String, int>{};
+    final occurrence = <Object, int>{};
     var i = 0;
     while (i < timeline.length) {
       final block = timeline[i];
@@ -390,26 +390,30 @@ class _DirectorWorkGroupState extends State<DirectorWorkGroup> {
   /// 聚合行键：首块键 + 出现序（同段重建时状态迁移）。
   /// ②：键不含段长——live 期间同工具第 5 次调用到达
   /// 使段 4→5，旧键随段长变化导致 Element 重建、用户刚展开的态被重置。
-  Key _runKey(List<AgentTimelineBlock> run, Map<String, int> occurrence) {
+  Key _runKey(List<AgentTimelineBlock> run, Map<Object, int> occurrence) {
     final first = run.first;
-    final base = first.action!.callId.isNotEmpty
-        ? 'agg-${first.action!.toolName}-${first.action!.callId}'
-        : 'agg-${first.action!.toolName}-${first.stepIndex}';
-    final nth = occurrence.putIfAbsent(base, () => 0);
-    occurrence[base] = nth + 1;
-    return ValueKey('$base-$nth');
+    final action = first.action!;
+    return _nextChildKey(
+      (
+        toolName: action.toolName,
+        callId: action.callId,
+        stepIndex: first.stepIndex,
+        order: first.order,
+      ),
+      occurrence,
+    );
   }
 
-  /// 交错时间线的稳定键：动作卡用 callId（同轮唯一）；文本/思考块用
-  /// kind + stepIndex + 同键出现序
-  Key _blockKey(AgentTimelineBlock block, Map<String, int> occurrence) {
-    if (block.isAction && block.action!.callId.isNotEmpty) {
-      return ValueKey('tool-${block.action!.callId}');
+  /// 调用 ID 可能跨模型请求复用。步骤和到达顺序区分执行实例，
+  /// 同一步骤的旧记录仍可按出现顺序区分。
+  Key _blockKey(AgentTimelineBlock block, Map<Object, int> occurrence) {
+    if (block.action case final action?) {
+      return _nextChildKey(
+        (callId: action.callId, stepIndex: block.stepIndex, order: block.order),
+        occurrence,
+      );
     }
-    final base = '${block.kind.name}-${block.stepIndex}';
-    final nth = occurrence.putIfAbsent(base, () => 0);
-    occurrence[base] = nth + 1;
-    return ValueKey('$base-$nth');
+    return _nextChildKey((block.kind, block.stepIndex), occurrence);
   }
 
   /// 标题文本色：预算占用 ≥80%（且 live 有预算数据）转警示色，否则 muted
@@ -533,6 +537,12 @@ class _DirectorWorkGroupState extends State<DirectorWorkGroup> {
   }
 }
 
+Key _nextChildKey(Object identity, Map<Object, int> occurrence) {
+  final index = occurrence[identity] ?? 0;
+  occurrence[identity] = index + 1;
+  return ValueKey((identity, index));
+}
+
 /// 同类动作聚合行——连续同工具 >3 折叠为一行「动词 ×N」
 ///
 /// 收起态单行 caption（点击展开逐卡）；展开态渲染原样 [DirectorToolCard]
@@ -554,6 +564,7 @@ class _AggregatedActionsRowState extends State<_AggregatedActionsRow> {
     final colors = context.lm.palette;
     final t = Translations.of(context);
     if (_expanded) {
+      final occurrence = <Object, int>{};
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -584,14 +595,16 @@ class _AggregatedActionsRowState extends State<_AggregatedActionsRow> {
               ),
             ),
           ),
-          for (final (i, step) in widget.steps.indexed)
-            // ③：system 留痕步 callId 默认 ''，同段
-            // >3 个空 callId 展开时构成重复键（Flutter 断言/元素错配）——
-            // 空 callId 回退序号键。
+          for (final step in widget.steps)
             DirectorToolCard(
-              key: step.callId.isNotEmpty
-                  ? ValueKey(step.callId)
-                  : ValueKey('agg-step-${step.stepIndex}-$i'),
+              key: _nextChildKey(
+                (
+                  callId: step.callId,
+                  stepIndex: step.stepIndex,
+                  order: step.order,
+                ),
+                occurrence,
+              ),
               step: step,
             ),
         ],
@@ -796,5 +809,226 @@ class _AgentRetryWaitRowState extends State<AgentRetryWaitRow> {
         ],
       ),
     );
+  }
+}
+
+/// Lightweight progress capsule rendered below the manuscript card during
+///  (periodic memory review and maintenance).
+///
+/// Collapsed by default to a fixed single-line height so reading the settled
+/// prose never suffers layout jumps; tapping expands in-place to inspect
+///  tool cards. In [pureReading] mode, renders a restrained
+/// non-interactive single-line status prompt.
+class DirectorMaintenanceCapsule extends StatefulWidget {
+  const DirectorMaintenanceCapsule({
+    required this.steps,
+    this.progress,
+    this.activity,
+    this.saving = false,
+    this.waitingUser = false,
+    this.pureReading = false,
+    super.key,
+  });
+
+  final List<AgentWorkStep> steps;
+  final AgentRoundProgress? progress;
+  final AgentActivity? activity;
+  final bool saving;
+  final bool waitingUser;
+  final bool pureReading;
+
+  @override
+  State<DirectorMaintenanceCapsule> createState() =>
+      _DirectorMaintenanceCapsuleState();
+}
+
+class _DirectorMaintenanceCapsuleState
+    extends State<DirectorMaintenanceCapsule> {
+  var _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.lm.palette;
+    final t = Translations.of(context);
+
+    if (widget.pureReading) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: IntermediateSpacing.sSm),
+        child: SizedBox(
+          height: 32,
+          child: Row(
+            children: [
+              LmActivityDots(color: colors.faint, dotSize: 2),
+              const SizedBox(width: IntermediateSpacing.sSm),
+              Expanded(
+                child: Text(
+                  t.advanced.maintenance.pureReadingStatus,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: IntermediateTextStyles.caption.copyWith(
+                    color: colors.faint,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final headline = _headline(t);
+    final hasError = widget.steps.any((s) => s.isError);
+    final hasWarning = widget.steps.any((s) => s.isWarning);
+    final dotColor = hasError
+        ? colors.error
+        : hasWarning
+            ? colors.warning
+            : colors.muted;
+    final borderColor = hasError || hasWarning
+        ? dotColor.withValues(alpha: 0.6)
+        : colors.divider.withValues(alpha: 0.6);
+
+    final occurrence = <Object, int>{};
+    return Container(
+      margin: const EdgeInsets.only(bottom: IntermediateSpacing.sSm),
+      decoration: BoxDecoration(
+        color: colors.surfaceVariant,
+        borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.sm)),
+        border: Border.all(color: borderColor, width: 0.5),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            key: const ValueKey('maintenance-capsule-toggle'),
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(
+              context.lmUi.radius(LmCorner.sm),
+            ),
+            child: SizedBox(
+              height: 36,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: IntermediateSpacing.sMd,
+                ),
+                child: Row(
+                  children: [
+                    if (widget.waitingUser)
+                      Icon(
+                        Icons.pause_circle_outline,
+                        size: 13,
+                        color: colors.warning,
+                      )
+                    else
+                      LmActivityDots(color: dotColor, dotSize: 2),
+                    const SizedBox(width: IntermediateSpacing.sSm),
+                    Expanded(
+                      child: Text(
+                        headline,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: IntermediateTextStyles.caption.copyWith(
+                          color: directorReadableColor(colors, colors.muted),
+                        ),
+                      ),
+                    ),
+                    AnimatedRotation(
+                      turns: _expanded ? 0.5 : 0,
+                      duration: LmMotion.durationFor(context, LmMotion.fold),
+                      curve: LmMotion.easeSnap,
+                      child: Icon(
+                        Icons.expand_more,
+                        size: 16,
+                        color: colors.faint,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (_expanded) ...[
+            Divider(
+              height: 1,
+              color: colors.divider.withValues(alpha: 0.5),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                IntermediateSpacing.sMd,
+                IntermediateSpacing.sXs,
+                IntermediateSpacing.sMd,
+                IntermediateSpacing.sXs,
+              ),
+              child: widget.steps.isEmpty
+                  ? Text(
+                      t.advanced.maintenance.noStepsYet,
+                      style: IntermediateTextStyles.caption.copyWith(
+                        color: colors.faint,
+                      ),
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final step in widget.steps)
+                          DirectorToolCard(
+                            key: _nextChildKey(
+                              (
+                                callId: step.callId,
+                                stepIndex: step.stepIndex,
+                                order: step.order,
+                              ),
+                              occurrence,
+                            ),
+                            step: step,
+                            runningEnabled: !widget.waitingUser,
+                          ),
+                      ],
+                    ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _headline(Translations t) {
+    if (widget.saving) {
+      return t.advanced.process.savingActive;
+    }
+    if (widget.waitingUser) {
+      return t.advanced.process.waitingUser;
+    }
+    final steps = widget.steps;
+    String? verb;
+    if (steps.isNotEmpty) {
+      final runningIndex = steps.lastIndexWhere((s) => s.isRunning);
+      final anchor = runningIndex >= 0 ? steps[runningIndex] : steps.last;
+      verb = anchor.isRunning && anchor.title.isNotEmpty
+          ? anchor.title
+          : stageVerbOf(anchor.toolName, t);
+    }
+    final progress = widget.progress;
+    if (progress != null) {
+      final labelVerb = verb ?? t.advanced.maintenance.checkingVerb;
+      if (progress.maxSteps > 0) {
+        return t.advanced.maintenance.capsuleWithBudget(
+          step: progress.currentStep,
+          maxSteps: progress.maxSteps,
+          verb: labelVerb,
+        );
+      }
+      return t.advanced.maintenance.capsuleWithStep(
+        step: progress.currentStep,
+        verb: labelVerb,
+      );
+    }
+    if (verb != null) {
+      return t.advanced.maintenance.capsuleWithCount(
+        count: steps.length,
+        verb: verb,
+      );
+    }
+    return t.advanced.maintenance.capsuleIdle;
   }
 }

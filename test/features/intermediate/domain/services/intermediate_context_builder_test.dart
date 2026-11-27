@@ -27,6 +27,88 @@ void main() {
     );
   });
 
+  test('生成与审查只为可靠单轮往事展示来源轮次', () async {
+    final memories = [
+      _scoredMemory(
+        'verified',
+        '收到礼物',
+        4,
+        37,
+        hasVerifiedSourceTurn: true,
+        narrativeTime: '来公寓第三天',
+      ),
+      _scoredMemory('relative', '出发', 3, 36, hasVerifiedSourceTurn: true),
+      _scoredMemory('old', '旧往事', 3, 35),
+      _scoredMemory(
+        'manual',
+        '手动往事',
+        3,
+        34,
+        source: 'manual',
+        hasVerifiedSourceTurn: true,
+      ),
+      _scoredMemory('invalid', '未知轮次', 3, 0, hasVerifiedSourceTurn: true),
+      _scoredMemory(
+        'macro',
+        '多轮概览',
+        3,
+        33,
+        memoryLevel: MemoryLevel.macro,
+        hasVerifiedSourceTurn: true,
+      ),
+      _scoredMemory(
+        'summary',
+        '归档摘要',
+        3,
+        32,
+        isSummary: true,
+        hasVerifiedSourceTurn: true,
+      ),
+    ];
+    final generating = await builder.buildGeneratePromptAssembly(
+      userInput: '继续',
+      history: const [],
+      sessionSystemPrompt: '角色',
+      contextWindow: 100000,
+      maxTokens: 100,
+      prompts: const PromptsConfig(),
+      retrievedMemories: memories,
+      factBlock: '',
+      currentTurnNumber: 40,
+    );
+    final reviewing = await builder.buildReviewPromptAssembly(
+      userInput: '继续',
+      generated: '正文',
+      retrievedMemories: memories,
+      sessionSystemPrompt: '角色',
+      contextWindow: 100000,
+      maxTokens: 100,
+      currentTurnNumber: 40,
+      prompts: const PromptsConfig(),
+    );
+
+    String memoryContent(List<Map<String, String>> messages) {
+      final contents = messages.map(
+        (message) => message['content'] ?? fail('消息缺少正文'),
+      );
+      return contents.singleWhere(
+        (content) => content.startsWith(kMemoriesInjectionTitle),
+      );
+    }
+
+    final generateMemory = memoryContent(generating.messages);
+    final reviewMemory = memoryContent(reviewing.messages);
+    expect(reviewMemory, generateMemory);
+    expect(generateMemory, contains('[来公寓第三天·来源第37轮·重要性4]'));
+    expect(generateMemory, contains('[4轮前·来源第36轮·重要性3]'));
+    expect(generateMemory, contains('[5轮前·重要性3]'));
+    expect(generateMemory, contains('[6轮前·重要性3]'));
+    expect(generateMemory, contains('[40轮前·重要性3]'));
+    expect(generateMemory, contains('[第33轮·重要性3]'));
+    expect(generateMemory, contains('[8轮前·重要性3]'));
+    expect(RegExp('来源第').allMatches(generateMemory), hasLength(2));
+  });
+
   group('buildGenerateMessages', () {
     test('1. 消息顺序：[system] + [history...] + [user]', () async {
       final history = [
@@ -1274,6 +1356,202 @@ void main() {
       expect(memoriesMsg, contains('· 何人：勇者与盗贼团'));
     });
   });
+
+  group('稳定 system 前缀元数据', () {
+    Future<IntermediatePromptAssembly> generateAssembly({
+      String? sessionSystemPrompt = '角色规则',
+      String globalSystemPrompt = '',
+      List<ChatMessage> history = const [],
+      List<ScoredMemory> memories = const [],
+      String factBlock = '',
+      String? compactionSummary,
+      int contextWindow = 100000,
+      PromptsConfig prompts = const PromptsConfig(),
+    }) =>
+        builder.buildGeneratePromptAssembly(
+          userInput: '继续冒险',
+          history: history,
+          sessionSystemPrompt: sessionSystemPrompt,
+          contextWindow: contextWindow,
+          maxTokens: 2000,
+          prompts: prompts,
+          globalSystemPrompt: globalSystemPrompt,
+          retrievedMemories: memories,
+          factBlock: factBlock,
+          currentTurnNumber: 3,
+          compactionSummary: compactionSummary,
+        );
+
+    Future<IntermediatePromptAssembly> reviewAssembly({
+      String? sessionSystemPrompt = '角色规则',
+      String globalSystemPrompt = '',
+      List<ScoredMemory> memories = const [],
+      String factBlock = '',
+      PromptsConfig prompts = const PromptsConfig(),
+    }) =>
+        builder.buildReviewPromptAssembly(
+          userInput: '继续冒险',
+          generated: '生成正文',
+          retrievedMemories: memories,
+          sessionSystemPrompt: sessionSystemPrompt,
+          contextWindow: 100000,
+          maxTokens: 2000,
+          currentTurnNumber: 3,
+          prompts: prompts,
+          globalSystemPrompt: globalSystemPrompt,
+          factBlock: factBlock,
+        );
+
+    test('有摘要：稳定段 = 角色 + 摘要，消息与薄包装一致', () async {
+      final assembly = await generateAssembly(
+        history: [_msg('u1', 'user', '上一轮输入')],
+        compactionSummary: '压缩摘要',
+      );
+
+      expect(assembly.stableSystemPrefixCount, 2);
+      expect(assembly.messages[0], {'role': 'system', 'content': '角色规则'});
+      expect(assembly.messages[1], {'role': 'system', 'content': '压缩摘要'});
+      expect(assembly.messages[2]['role'], 'user');
+
+      final wrapper = await builder.buildGenerateMessagesV2(
+        userInput: '继续冒险',
+        history: [_msg('u1', 'user', '上一轮输入')],
+        sessionSystemPrompt: '角色规则',
+        contextWindow: 100000,
+        maxTokens: 2000,
+        prompts: const PromptsConfig(),
+        retrievedMemories: const [],
+        factBlock: '',
+        currentTurnNumber: 3,
+        compactionSummary: '压缩摘要',
+      );
+      expect(assembly.messages, wrapper);
+    });
+
+    test('无摘要：稳定段只有角色提示词', () async {
+      final assembly = await generateAssembly();
+      expect(assembly.stableSystemPrefixCount, 1);
+    });
+
+    test('动态 fact/memories 不计数，位置仍在历史之后', () async {
+      final assembly = await generateAssembly(
+        history: [_msg('u1', 'user', '上一轮输入')],
+        compactionSummary: '压缩摘要',
+        memories: [_scoredMemory('m1', '往事内容', 3, 1)],
+        factBlock: '【世界设定】\nFACT',
+      );
+
+      expect(assembly.stableSystemPrefixCount, 2);
+      final roles = assembly.messages.map((m) => m['role']).toList();
+      expect(roles, ['system', 'system', 'user', 'system', 'system', 'user']);
+      expect(assembly.messages[3]['content'], '【世界设定】\nFACT');
+      expect(assembly.messages[4]['content'], contains('往事内容'));
+    });
+
+    test('空角色不占稳定位，但消息基线保持原样', () async {
+      const prompts = PromptsConfig(defaultRolePrompt: '');
+      final withSummary = await generateAssembly(
+        sessionSystemPrompt: null,
+        compactionSummary: '压缩摘要',
+        prompts: prompts,
+      );
+      expect(withSummary.stableSystemPrefixCount, 1);
+      expect(withSummary.messages.first, {'role': 'system', 'content': ''});
+
+      final withoutSummary = await generateAssembly(
+        sessionSystemPrompt: null,
+        prompts: prompts,
+      );
+      expect(withoutSummary.stableSystemPrefixCount, 0);
+    });
+
+    test('空白角色按适配器保留口径计入稳定位', () async {
+      final assembly = await generateAssembly(sessionSystemPrompt: '   ');
+      expect(assembly.stableSystemPrefixCount, 1);
+      expect(assembly.messages.first['content'], '   ');
+    });
+
+    test('预算裁剪改变历史但稳定元数据不变', () async {
+      final longHistory = [
+        for (var i = 0; i < 8; i++)
+          _msg('h$i', i.isEven ? 'user' : 'assistant', 'x' * 200),
+      ];
+      final assembly = await generateAssembly(
+        history: longHistory,
+        compactionSummary: '压缩摘要',
+        factBlock: '【世界设定】\nFACT',
+        contextWindow: 300,
+      );
+      expect(assembly.stableSystemPrefixCount, 2);
+      expect(
+        assembly.messages.where((m) => m['role'] != 'system').length,
+        5,
+        reason: '保底 4 条历史 + 用户消息',
+      );
+    });
+
+    test('审查：稳定段 = 角色 + 审查规则，fact/memories 不计数', () async {
+      final assembly = await reviewAssembly(
+        memories: [_scoredMemory('m1', '往事内容', 3, 1)],
+        factBlock: '【世界设定】\nFACT',
+      );
+
+      expect(assembly.stableSystemPrefixCount, 2);
+      expect(assembly.messages[0]['content'], '角色规则');
+      expect(
+        assembly.messages[1]['content'],
+        const PromptsConfig()
+            .reviewSuffixV2
+            .replaceAll(
+              '{factInjectionTitle}',
+              const PromptsConfig().factInjectionTitle,
+            )
+            .replaceAll(
+              '{memoriesInjectionTitle}',
+              const PromptsConfig().memoriesInjectionTitle,
+            ),
+      );
+      expect(assembly.messages[2]['content'], '【世界设定】\nFACT');
+      expect(assembly.messages[3]['content'], contains('往事内容'));
+      expect(assembly.messages.last['role'], 'user');
+    });
+
+    test('审查规则段为空时只计角色；角色也为空则计 0', () async {
+      const noReview = PromptsConfig(reviewSuffixV2: '');
+      expect(
+        (await reviewAssembly(prompts: noReview)).stableSystemPrefixCount,
+        1,
+      );
+
+      const noRoleNoReview = PromptsConfig(
+        defaultRolePrompt: '',
+        reviewSuffixV2: '',
+      );
+      final empty = await reviewAssembly(
+        sessionSystemPrompt: null,
+        prompts: noRoleNoReview,
+      );
+      expect(empty.stableSystemPrefixCount, 0);
+      expect(empty.messages.first, {'role': 'system', 'content': ''});
+    });
+
+    test('构造两次结果相同', () async {
+      final first = await generateAssembly(
+        history: [_msg('u1', 'user', '上一轮输入')],
+        compactionSummary: '压缩摘要',
+        memories: [_scoredMemory('m1', '往事内容', 3, 1)],
+        factBlock: '【世界设定】\nFACT',
+      );
+      final second = await generateAssembly(
+        history: [_msg('u1', 'user', '上一轮输入')],
+        compactionSummary: '压缩摘要',
+        memories: [_scoredMemory('m1', '往事内容', 3, 1)],
+        factBlock: '【世界设定】\nFACT',
+      );
+      expect(second.stableSystemPrefixCount, first.stableSystemPrefixCount);
+      expect(second.messages, first.messages);
+    });
+  });
 }
 
 /// 按字符数估算 token 的假 TokenCounter（测试专用）
@@ -1308,6 +1586,10 @@ ScoredMemory _scoredMemory(
   int turnNumber, {
   MemoryLevel memoryLevel = MemoryLevel.micro,
   List<String>? parentEventIds,
+  bool hasVerifiedSourceTurn = false,
+  bool isSummary = false,
+  String source = 'auto',
+  String? narrativeTime,
 }) =>
     ScoredMemory(
       memory: ExperientialMemory(
@@ -1320,6 +1602,10 @@ ScoredMemory _scoredMemory(
         createdAt: DateTime.now(),
         memoryLevel: memoryLevel,
         parentEventIds: parentEventIds,
+        hasVerifiedSourceTurn: hasVerifiedSourceTurn,
+        isSummary: isSummary,
+        source: source,
+        narrativeTime: narrativeTime,
       ),
       fts5Score: 1,
       vectorScore: 0,

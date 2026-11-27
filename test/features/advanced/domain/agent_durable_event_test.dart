@@ -5,9 +5,11 @@ import 'package:lmstory/core/agent/agent_budget.dart';
 import 'package:lmstory/core/agent/agent_events.dart';
 import 'package:lmstory/core/agent/agent_message.dart';
 import 'package:lmstory/core/llm/llm_content_block.dart';
+import 'package:lmstory/core/llm/llm_usage.dart';
 import 'package:lmstory/features/advanced/data/agent_durable_event_sink.dart';
 import 'package:lmstory/features/advanced/data/repositories/agent_event_log_repository.dart';
 import 'package:lmstory/features/advanced/domain/entities/agent_durable_event.dart';
+import 'package:lmstory/features/advanced/domain/services/agent_session_stats.dart';
 import 'package:lmstory/features/chat/domain/services/llm_service.dart';
 
 /// 捕获 appendAll 的假仓库（sink 映射测试用）
@@ -125,14 +127,17 @@ void main() {
       expect(ends[1].data.containsKey('cacheCreationTokens'), isFalse);
     });
 
-    test('turn/end：cache 分项随轮累计落键（0 也落——累加器口径恒有值）', () async {
+    test('turn/end：仅端点实际上报 cache 分项才落键', () async {
       final repo = _CapturingEventLogRepository();
       final usage = AgentUsageAccumulator()
         ..promptTokens = 1500
         ..completionTokens = 300
         ..totalTokens = 1800
+        ..totalInputTokens = 2000
         ..cacheReadTokens = 800
-        ..cacheCreationTokens = 50;
+        ..cacheCreationTokens = 50
+        ..hasCacheReadTokens = true
+        ..hasCacheCreationTokens = true;
       final sink = DurableAgentEventSink(repository: repo, sessionId: 's1')
         ..emit(
           AgentTurnFinished(
@@ -148,7 +153,32 @@ void main() {
       expect(end.type, AgentEventTypes.turnEnd);
       expect(end.data['cacheReadTokens'], 800);
       expect(end.data['cacheCreationTokens'], 50);
+      expect(end.data['totalInputTokens'], 2000);
       expect(end.data['promptTokens'], 1500);
+    });
+
+    test('turn/end：无 cache 上报不落键（不可比样本，读取侧不按 0 命中计）', () async {
+      final repo = _CapturingEventLogRepository();
+      final usage = AgentUsageAccumulator()
+        ..promptTokens = 500
+        ..completionTokens = 100
+        ..totalTokens = 600
+        ..totalInputTokens = 500;
+      final sink = DurableAgentEventSink(repository: repo, sessionId: 's1')
+        ..emit(
+          AgentTurnFinished(
+            reason: AgentStopReason.completed,
+            steps: 1,
+            usage: usage,
+            errorMessage: null,
+          ),
+        );
+
+      await sink.flush();
+      final end = repo.appended.single;
+      expect(end.data.containsKey('cacheReadTokens'), isFalse);
+      expect(end.data.containsKey('cacheCreationTokens'), isFalse);
+      expect(end.data['totalInputTokens'], 500);
     });
   });
 
@@ -189,6 +219,60 @@ void main() {
       expect(events[1].type, AgentEventTypes.toolResult);
       // 投影为空（log-only）
       expect(deriveAgentSurface(events).messages, isEmpty);
+    });
+
+    // HAR-09：同轮多次 spawn 的中继事件按 subagentCallId 区分身份
+    //（spawn 的 toolCallId 天然唯一），既有消费方仍按 data['subagent']
+    // 过滤不受影响。
+    test('HAR-09 relaySubagentEvent 携带 subagentCallId：与 spawn callId 一致',
+        () async {
+      final repo = _CapturingEventLogRepository();
+      final sink = DurableAgentEventSink(
+        repository: repo,
+        sessionId: 's1',
+        turnNumber: 3,
+      )
+        ..relaySubagentEvent(
+          AgentAssistantMessageEvent(
+            stepIndex: 0,
+            message: AgentMessage.assistant(text: '子代理 A 输出'),
+          ),
+          subagentCallId: 'spawn-a',
+        )
+        ..relaySubagentEvent(
+          AgentAssistantMessageEvent(
+            stepIndex: 0,
+            message: AgentMessage.assistant(text: '子代理 B 输出'),
+          ),
+          subagentCallId: 'spawn-b',
+        );
+      await sink.flush();
+
+      final events = repo.appended;
+      expect(events, hasLength(2));
+      expect(events[0].data['subagentCallId'], 'spawn-a');
+      expect(events[1].data['subagentCallId'], 'spawn-b');
+      // 既有过滤标记不变
+      for (final event in events) {
+        expect(event.data['subagent'], isTrue);
+        expect(event.surfaceOp, isNull);
+      }
+    });
+
+    test('HAR-09 不带 subagentCallId 的中继不落键（旧接线兼容）', () async {
+      final repo = _CapturingEventLogRepository();
+      final sink = DurableAgentEventSink(repository: repo, sessionId: 's1')
+        ..relaySubagentEvent(
+          AgentAssistantMessageEvent(
+            stepIndex: 0,
+            message: AgentMessage.assistant(text: '子代理输出'),
+          ),
+        );
+      await sink.flush();
+
+      final event = repo.appended.single;
+      expect(event.data['subagent'], isTrue);
+      expect(event.data.containsKey('subagentCallId'), isFalse);
     });
   });
 
@@ -510,6 +594,59 @@ void main() {
       expect(projection.messages[2].content, 't2-user');
     });
 
+    test('HAR-01：trim 后投影仍含压缩摘要（旧轮 surface/replace 整面快照豁免保留）', () {
+      // 模拟 trim(keep=10) 后 readEvents 的存活集：旧轮（1-20）非 system
+      // 行已删，system/frozen 与 surface/replace（整面快照）豁免保留。
+      // 若 surface/replace 被 trim 掉，失败续跑/恢复的投影将丢失压缩摘要。
+      final postTrim = [
+        AgentDurableEvent(
+          seq: 0,
+          type: AgentEventTypes.systemFrozen,
+          surfaceOp: AgentSurfaceOpKind.append,
+          data: {'content': 'FROZEN', 'turn': 1},
+        ),
+        // turn 1-20 的 user/assistant 行已被 trim 删除（此处不出现）
+        AgentDurableEvent(
+          seq: 18,
+          type: AgentEventTypes.surfaceReplace,
+          surfaceOp: AgentSurfaceOpKind.replace,
+          replaceStart: 0,
+          replaceEnd: kAgentSurfaceReplaceToEnd,
+          data: {
+            'turn': 12,
+            'messages': [
+              agentMessageToSurfaceData(AgentMessage.system('FROZEN')),
+              agentMessageToSurfaceData(AgentMessage.user('【前情压缩摘要】')),
+              agentMessageToSurfaceData(AgentMessage.user('第 20 轮输入')),
+            ],
+          },
+        ),
+        // 更新轮（窗口内，trim 幸存）
+        AgentDurableEvent(
+          seq: 19,
+          type: AgentEventTypes.userMessage,
+          surfaceOp: AgentSurfaceOpKind.append,
+          data: {'content': '第 21 轮输入', 'source': 'user', 'turn': 21},
+        ),
+        AgentDurableEvent(
+          seq: 20,
+          type: AgentEventTypes.assistantMessage,
+          surfaceOp: AgentSurfaceOpKind.append,
+          data: const AgentAssistantMessageData(text: '第 21 轮正文').toJson(),
+        ),
+      ];
+
+      final projection = deriveAgentSurface(postTrim);
+      final contents = [
+        for (final m in projection.messages)
+          if (m.content != null) m.content!,
+      ];
+      expect(contents, contains('【前情压缩摘要】'), reason: '压缩摘要仍在投影');
+      expect(contents, contains('第 20 轮输入'));
+      expect(contents, contains('第 21 轮输入'));
+      expect(projection.messages.first.role, 'system');
+    });
+
     test('surface 序列化回环保留 thinkingBlocks（replace 与 assistant/message 同构）', () {
       // 路径 1：surface/replace 序列化回环
       final assistant = AgentMessage.assistant(
@@ -770,6 +907,95 @@ void main() {
       final function = toolCall['function'] as Map<String, dynamic>;
       expect(function['name'], 'search');
       expect(wire[2]['tool_call_id'], 'c1');
+    });
+  });
+
+  group('部分请求未上报缓存时的轮聚合', () {
+    test('一请求 input100/cache80，另一请求 cache 未知 → 命中率 80% 而非 40%', () async {
+      final acc = AgentUsageAccumulator()
+        ..add(
+          const LlmUsage(
+            promptTokens: 100,
+            totalInputTokens: 100,
+            cacheReadTokens: 80,
+          ),
+        )
+        ..add(const LlmUsage(promptTokens: 100, totalInputTokens: 100));
+
+      final repo = _CapturingEventLogRepository();
+      final sink = DurableAgentEventSink(
+        repository: repo,
+        sessionId: 's-root2',
+        turnNumber: 1,
+      )..emit(
+          AgentTurnFinished(
+            reason: AgentStopReason.completed,
+            steps: 2,
+            usage: acc,
+            errorMessage: null,
+          ),
+        );
+      await sink.flush();
+
+      final stats = agentSessionStatsFrom(repo.appended);
+      expect(stats.weightedCacheHitRate, closeTo(0.8, 1e-9));
+      expect(
+        stats.cacheTrend.single.cacheSampleComplete,
+        isFalse,
+        reason: '部分请求未上报缓存，整轮应标记样本不完整',
+      );
+    });
+
+    test('冲突/非法样本不进入可比分母，warnings 随轮持久化', () async {
+      final acc = AgentUsageAccumulator()
+        ..add(
+          const LlmUsage(
+            promptTokens: 100,
+            totalInputTokens: 100,
+            cacheReadTokens: 120,
+          ),
+        )
+        ..add(
+          const LlmUsage(
+            promptTokens: 100,
+            totalInputTokens: 100,
+            cacheReadTokens: 70,
+            warnings: ['字段冲突'],
+          ),
+        );
+
+      final repo = _CapturingEventLogRepository();
+      final sink = DurableAgentEventSink(
+        repository: repo,
+        sessionId: 's-root3',
+        turnNumber: 1,
+      )..emit(
+          AgentTurnFinished(
+            reason: AgentStopReason.completed,
+            steps: 2,
+            usage: acc,
+            errorMessage: null,
+          ),
+        );
+      await sink.flush();
+
+      final turnEnd = repo.appended.last;
+      expect(
+        turnEnd.data['usageWarnings'],
+        ['字段冲突'],
+        reason: '计量异常必须持久保留诊断信息',
+      );
+      expect(
+        turnEnd.data['cacheReadTokens'],
+        190,
+        reason: '原始命中分项保留用于诊断（含非法/冲突样本）',
+      );
+      expect(
+        turnEnd.data.containsKey('cacheComparableInputTokens'),
+        isFalse,
+        reason: '无可比样本时不得落可比分母（读取侧保持未知）',
+      );
+      expect(agentSessionStatsFrom(repo.appended).weightedCacheHitRate, isNull);
     });
   });
 }

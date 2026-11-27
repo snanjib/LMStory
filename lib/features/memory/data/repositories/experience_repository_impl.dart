@@ -14,6 +14,12 @@ import 'package:lmstory/features/memory/domain/services/memory_query.dart';
 import 'package:lmstory/features/memory/domain/services/memory_retrieval_exception.dart';
 import 'package:uuid/uuid.dart';
 
+typedef _ChannelResult = ({Map<String, double> scores, bool failed});
+typedef _VectorCandidates = ({
+  List<Float32List> vectors,
+  List<String> memoryIds,
+});
+
 /// ExperienceRepository 实现（Data 层）
 ///
 /// 使用 drift + VectorEngine 实现中级模式经历类记忆的存储与混合检索。
@@ -63,7 +69,12 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
     // 2. Vector 通道（仅当 queryVector != null）
     final vectorResult = queryVector == null
         ? (scores: const <String, double>{}, failed: false)
-        : await _vectorSearch(sessionId, queryVector, topK * 2);
+        : await _vectorSearch(
+            sessionId,
+            queryVector,
+            topK * 2,
+            _loadVectorCandidates(sessionId, {queryVector.length}),
+          );
 
     // 3. 归并打分 + 排序取 topK
     final scored = await _computeScoredMemories(
@@ -104,16 +115,26 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
     // 1. 过滤空 query（FTS5 空字符串 / Vector 空或 vector=null）
     final validFts5 = fts5Queries.where((q) => q.trim().isNotEmpty).toList();
     final validVector = vectorQueries
-        .where((v) => v.query.trim().isNotEmpty && v.vector != null)
+        .where((v) => v.query.trim().isNotEmpty)
+        .map((v) => v.vector)
+        .nonNulls
         .toList();
 
     // 2. 多路并行（Future.wait）：每路自带降级，单路失败不阻塞其他路
     final fts5Futures = validFts5
         .map((q) => _fts5Search(sessionId, q, topK * 2, normalizationEpsilon))
         .toList();
-    final vectorFutures = validVector
-        .map((v) => _vectorSearch(sessionId, v.vector!, topK * 2))
-        .toList();
+    final vectorFutures = <Future<_ChannelResult>>[];
+    if (validVector.isNotEmpty) {
+      final candidates = _loadVectorCandidates(
+        sessionId,
+        {for (final vector in validVector) vector.length},
+      );
+      for (final vector in validVector) {
+        vectorFutures
+            .add(_vectorSearch(sessionId, vector, topK * 2, candidates));
+      }
+    }
     final results = await Future.wait([
       ...fts5Futures,
       ...vectorFutures,
@@ -336,7 +357,7 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
   ///   双字人名恒不可召回）；
   /// - 返回 `(scores, failed)`：failed 用于区分"索引坏了"与"确实没有"，
   ///   由调用方决定是否把本轮判为「检索不可用」而不是「未命中」。
-  Future<({Map<String, double> scores, bool failed})> _fts5Search(
+  Future<_ChannelResult> _fts5Search(
     String sessionId,
     String query,
     int limit,
@@ -457,58 +478,63 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
     return rows.map((r) => r.read<String>('memory_id')).toSet();
   }
 
+  /// 同一请求的向量通道共用一次候选读取，分组保留各维度原有的读取顺序。
+  Future<Map<int, _VectorCandidates>> _loadVectorCandidates(
+    String sessionId,
+    Set<int> dimensions,
+  ) async {
+    final rows = await (_database.select(_database.experientialMemoriesTable)
+          ..where(
+            (t) =>
+                t.sessionId.equals(sessionId) &
+                t.hasEmbedding.equals(true) &
+                t.isArchived.equals(false),
+          ))
+        .get();
+
+    final byDimension = <int, _VectorCandidates>{
+      for (final dimension in dimensions)
+        dimension: (vectors: <Float32List>[], memoryIds: <String>[]),
+    };
+    for (final row in rows) {
+      final blob = row.embedding;
+      if (blob == null) continue;
+      // 旧行的维度字段可能缺失或不准确，解码失败也必须由通道按原规则降级。
+      final vector = _bytesToFloat32(blob);
+      final candidates = byDimension[vector.length];
+      if (candidates == null) continue;
+      candidates.vectors.add(vector);
+      candidates.memoryIds.add(row.memoryId);
+    }
+    return byDimension;
+  }
+
   /// Vector 通道检索 → memoryId → vectorScore（(cosine+1)/2 归一化）
   ///
-  /// 查询异常时返回空 map（单路降级，DOC-09A-1 §3.7）。
-  Future<({Map<String, double> scores, bool failed})> _vectorSearch(
+  /// 读取候选或打分异常时返回空 map（单路降级，DOC-09A-1 §3.7）。
+  Future<_ChannelResult> _vectorSearch(
     String sessionId,
     Float32List queryVector,
     int limit,
+    Future<Map<int, _VectorCandidates>> candidatePool,
   ) async {
     try {
-      // 加载本 session 全部候选向量
-      final rows = await (_database.select(_database.experientialMemoriesTable)
-            ..where(
-              (t) =>
-                  t.sessionId.equals(sessionId) &
-                  t.hasEmbedding.equals(true) &
-                  t.isArchived.equals(false),
-            ))
-          .get();
-
-      if (rows.isEmpty) {
-        return (scores: const <String, double>{}, failed: false);
-      }
-
-      final candidates = <Float32List>[];
-      final memoryIds = <String>[];
-      for (final row in rows) {
-        final blob = row.embedding;
-        if (blob == null) continue;
-        final vec = _bytesToFloat32(blob);
-        // V1 维度防护：切换 embedding 模型后旧向量维度可能与 queryVector 不一致，
-        // 跳过维度不匹配的候选（非破坏性，切回原模型时旧向量仍可用）。
-        // 偏离 DOC-08 §5.3「切换模型清空向量」的破坏性方案，详见计划 。
-        if (vec.length != queryVector.length) continue;
-        candidates.add(vec);
-        memoryIds.add(row.memoryId);
-      }
-
-      if (candidates.isEmpty) {
+      final candidates = (await candidatePool)[queryVector.length];
+      if (candidates == null || candidates.vectors.isEmpty) {
         return (scores: const <String, double>{}, failed: false);
       }
 
       // batchSearch（candidateId 用索引，避免暴露 DB 自增 id 给 Core 层）
       final results = await _vectorEngine.batchSearch(
         queryVector: queryVector,
-        candidates: candidates,
-        candidateIds: [for (var i = 0; i < candidates.length; i++) i],
+        candidates: candidates.vectors,
+        candidateIds: [for (var i = 0; i < candidates.vectors.length; i++) i],
       );
 
       // 取 limit 条，归一化 (cosine+1)/2：[-1,1] → [0,1]
       final scores = <String, double>{};
       for (final r in results.take(limit)) {
-        final memoryId = memoryIds[r.candidateId];
+        final memoryId = candidates.memoryIds[r.candidateId];
         scores[memoryId] = (r.cosineScore + 1) / 2;
       }
       return (scores: scores, failed: false);
@@ -542,9 +568,12 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
     String? extra,
     bool indexForRetrieval = true,
     String source = 'auto',
+    bool hasVerifiedSourceTurn = false,
   }) async {
     final memoryId = _uuid.v4();
     final now = DateTime.now();
+    final verifiedSource =
+        hasVerifiedSourceTurn && source == 'auto' && turnNumber > 0;
 
     await _database.into(_database.experientialMemoriesTable).insert(
           ExperientialMemoriesTableCompanion.insert(
@@ -565,6 +594,7 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
             createdAt: Value(now),
             memoryLevel: const Value('micro'),
             source: Value(source),
+            hasVerifiedSourceTurn: Value(verifiedSource),
           ),
         );
 
@@ -601,6 +631,7 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
       narrativePeriod: narrativePeriod,
       createdAt: now,
       source: source,
+      hasVerifiedSourceTurn: verifiedSource,
     );
   }
 
@@ -858,6 +889,30 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
     List<String>? tags,
   }) async {
     await _database.transaction(() async {
+      final current = await (_database
+              .select(_database.experientialMemoriesTable)
+            ..where(
+              (t) =>
+                  t.memoryId.equals(memoryId) & t.sessionId.equals(sessionId),
+            ))
+          .getSingleOrNull();
+      if (current == null) throw ModelNotFoundException(memoryId);
+      bool changed(String? next, String? previous) =>
+          next != null && next != previous;
+      final contentChanged = changed(summary, current.summary) ||
+          changed(when, current.whenText) ||
+          changed(where, current.whereText) ||
+          changed(who, current.whoText) ||
+          changed(what, current.whatText) ||
+          changed(significance, current.significance) ||
+          changed(extra, current.extra);
+      final hasContentFields = summary != null ||
+          when != null ||
+          where != null ||
+          who != null ||
+          what != null ||
+          significance != null ||
+          extra != null;
       // 1. 构造更新字段（仅非 null 字段）
       //    注：experiential_memories 表无 updatedAt 列，元数据保留 createdAt
       final companion = ExperientialMemoriesTableCompanion(
@@ -872,6 +927,8 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
         importance:
             importance != null ? Value(importance) : const Value.absent(),
         tags: tags != null ? Value(jsonEncode(tags)) : const Value.absent(),
+        hasVerifiedSourceTurn:
+            contentChanged ? const Value(false) : const Value.absent(),
       );
 
       // （2026-09-09 审查）：UPDATE 带 session 谓词——此前只按
@@ -890,14 +947,7 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
 
       // 2. 同步 FTS5 索引：删除旧索引 + 插入新索引
       //    仅当内容字段被修改时才重建索引
-      final contentChanged = summary != null ||
-          when != null ||
-          where != null ||
-          who != null ||
-          what != null ||
-          significance != null ||
-          extra != null;
-      if (contentChanged) {
+      if (hasContentFields) {
         await _database.customStatement(
           'DELETE FROM memories_fts WHERE session_id = ? AND memory_id = ?',
           [sessionId, memoryId],
@@ -1181,6 +1231,7 @@ class ExperienceRepositoryImpl implements ExperienceRepository {
       parentEventIds: _decodeStringList(row.parentEventIds),
       macroTriggerReason: MacroTriggerReason.fromString(row.macroTriggerReason),
       source: row.source,
+      hasVerifiedSourceTurn: row.hasVerifiedSourceTurn,
       createdAt: row.createdAt,
     );
   }

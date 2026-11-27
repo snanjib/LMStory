@@ -7,6 +7,20 @@ import 'package:lmstory/features/intermediate/presentation/controllers/phases/ex
 import 'package:lmstory/features/memory/domain/entities/experiential_memory.dart';
 import 'package:lmstory/features/memory/domain/entities/scored_memory.dart';
 
+/// 生成/审查请求的消息列表与稳定 system 段元数据。
+///
+/// [stableSystemPrefixCount] 与 [messages] 由同一装配过程产出：请求的
+/// system 消息按适配器规则过滤空文本后，前多少个连续块属于稳定段。
+class IntermediatePromptAssembly {
+  const IntermediatePromptAssembly({
+    required this.messages,
+    required this.stableSystemPrefixCount,
+  });
+
+  final List<Map<String, String>> messages;
+  final int stableSystemPrefixCount;
+}
+
 /// 中级模式上下文组装器（DOC-09A-2 §4）
 ///
 /// 为四步生成的四个 LLM 请求步骤组装消息列表：
@@ -227,6 +241,42 @@ class IntermediateContextBuilder {
 
   // ==================== V2 四步流程消息组装（Phase 6）====================
 
+  /// 组装生成请求消息列表（薄包装）
+  ///
+  /// 与 [buildGeneratePromptAssembly] 共用一次装配实现；保留原返回类型
+  /// 供提示词预览与既有调用者使用。
+  Future<List<Map<String, String>>> buildGenerateMessagesV2({
+    required String userInput,
+    required List<ChatMessage> history,
+    required String? sessionSystemPrompt,
+    required int contextWindow,
+    required int maxTokens,
+    required PromptsConfig prompts,
+    required List<ScoredMemory> retrievedMemories,
+    required String factBlock,
+    required int currentTurnNumber,
+    String globalSystemPrompt = '',
+    String? compactionSummary,
+    double retrievalRatio = 0.0,
+    String? continuationPrefix,
+  }) async =>
+      (await buildGeneratePromptAssembly(
+        userInput: userInput,
+        history: history,
+        sessionSystemPrompt: sessionSystemPrompt,
+        contextWindow: contextWindow,
+        maxTokens: maxTokens,
+        prompts: prompts,
+        retrievedMemories: retrievedMemories,
+        factBlock: factBlock,
+        currentTurnNumber: currentTurnNumber,
+        globalSystemPrompt: globalSystemPrompt,
+        compactionSummary: compactionSummary,
+        retrievalRatio: retrievalRatio,
+        continuationPrefix: continuationPrefix,
+      ))
+          .messages;
+
   /// 组装生成请求消息（V2 四步流程，generating 步骤）
   ///
   /// V2 与 [buildGenerateMessages] 的差异：
@@ -252,7 +302,7 @@ class IntermediateContextBuilder {
   /// - 不塞满：历史不足剩余空间时全保留
   /// - 不截断：历史过长靠压缩管理（§5），仅极端兜底砍到最近 4 条
   /// - 余量不分配：模型注意力更集中，省 token
-  Future<List<Map<String, String>>> buildGenerateMessagesV2({
+  Future<IntermediatePromptAssembly> buildGeneratePromptAssembly({
     required String userInput,
     required List<ChatMessage> history,
     required String? sessionSystemPrompt,
@@ -351,7 +401,7 @@ class IntermediateContextBuilder {
         await _reduceHistory(historyMessages, dialogueBudget);
 
     // 消息结构（v0.2.2 §4.1）：记忆块移到历史后，旧历史紧接压缩摘要提升缓存命中
-    return <Map<String, String>>[
+    final messages = <Map<String, String>>[
       {'role': 'system', 'content': systemPrompt},
       if (hasCompactionSummary)
         {'role': 'system', 'content': compactionSummary},
@@ -361,6 +411,14 @@ class IntermediateContextBuilder {
         {'role': 'system', 'content': memoriesInjection},
       {'role': 'user', 'content': effectiveInput},
     ];
+    // 稳定段 = 开头连续的角色与压缩摘要；空文本被适配器过滤，不占稳定位。
+    var stableSystemPrefixCount = 0;
+    if (systemPrompt.isNotEmpty) stableSystemPrefixCount++;
+    if (hasCompactionSummary) stableSystemPrefixCount++;
+    return IntermediatePromptAssembly(
+      messages: messages,
+      stableSystemPrefixCount: stableSystemPrefixCount,
+    );
   }
 
   /// 中断续写用户消息——原指令 + 已写正文前缀 +
@@ -383,6 +441,38 @@ class IntermediateContextBuilder {
       );
     return buffer.toString();
   }
+
+  /// 组装审查请求消息列表（薄包装）
+  ///
+  /// 与 [buildReviewPromptAssembly] 共用一次装配实现；保留原返回类型
+  /// 供提示词预览与既有调用者使用。
+  Future<List<Map<String, String>>> buildReviewMessagesV2({
+    required String userInput,
+    required String generated,
+    required List<ScoredMemory> retrievedMemories,
+    required String? sessionSystemPrompt,
+    required int contextWindow,
+    required int maxTokens,
+    required int currentTurnNumber,
+    required PromptsConfig prompts,
+    String globalSystemPrompt = '',
+    String factBlock = '',
+    double retrievalRatio = 0.0,
+  }) async =>
+      (await buildReviewPromptAssembly(
+        userInput: userInput,
+        generated: generated,
+        retrievedMemories: retrievedMemories,
+        sessionSystemPrompt: sessionSystemPrompt,
+        contextWindow: contextWindow,
+        maxTokens: maxTokens,
+        currentTurnNumber: currentTurnNumber,
+        prompts: prompts,
+        globalSystemPrompt: globalSystemPrompt,
+        factBlock: factBlock,
+        retrievalRatio: retrievalRatio,
+      ))
+          .messages;
 
   /// 组装审查请求消息（V2 四步流程，reviewing 步骤）
   ///
@@ -415,7 +505,7 @@ class IntermediateContextBuilder {
   /// **token 预算**：
   /// - 去掉历史后无需 dialogueBudget 计算，仅校验检索区不超限
   /// - 保留固定开销上限校验（角色提示词、用户输入）
-  Future<List<Map<String, String>>> buildReviewMessagesV2({
+  Future<IntermediatePromptAssembly> buildReviewPromptAssembly({
     required String userInput,
     required String generated,
     required List<ScoredMemory> retrievedMemories,
@@ -496,7 +586,14 @@ class IntermediateContextBuilder {
             '${prompts.generatedInjectionPrefix}$generated',
       },
     ];
-    return messages;
+    // 稳定段 = 开头连续的角色提示词与审查规则段；空文本不占稳定位。
+    var stableSystemPrefixCount = 0;
+    if (rolePrompt.isNotEmpty) stableSystemPrefixCount++;
+    if (reviewSuffix.isNotEmpty) stableSystemPrefixCount++;
+    return IntermediatePromptAssembly(
+      messages: messages,
+      stableSystemPrefixCount: stableSystemPrefixCount,
+    );
   }
 
   /// 组装关键词提取请求消息（V2 四步流程，extracting 步骤）
@@ -732,7 +829,7 @@ class IntermediateContextBuilder {
   ///
   /// 输出格式示例（5W1E 字段非空才输出对应行）：
   /// ```text
-  /// [来公寓第三天·重要性4]
+  /// [来公寓第三天·来源第37轮·重要性4]
   /// · 何事：勇者斩杀了巨龙
   /// · 何时：战斗结束时
   /// · 何地：火山口
@@ -744,6 +841,7 @@ class IntermediateContextBuilder {
   /// 标题行标签优先级（叙事时间机制，2026-07-25）：
   /// 1. narrativeTime（绝对叙事时间，如"来公寓第三天"）--首选
   /// 2. turnsAgo（相对时序，如"3轮前"）--narrativeTime 缺失时回退
+  /// 3. 可靠的单轮来源另标注来源轮号，来源未知时省略
   ///
   /// 设计原则：
   /// - 每条记忆独立成块，用空行分隔（提升 LLM 注意力分配）
@@ -756,8 +854,13 @@ class IntermediateContextBuilder {
         (memory.narrativeTime != null && memory.narrativeTime!.isNotEmpty)
             ? memory.narrativeTime
             : '$turnsAgo轮前';
+    final canShowSource = memory.hasVerifiedSourceTurn &&
+        memory.source == 'auto' &&
+        !memory.isSummary &&
+        memory.turnNumber > 0;
+    final sourceLabel = canShowSource ? '·来源第${memory.turnNumber}轮' : '';
     final buffer = StringBuffer()
-      ..writeln('[$timeLabel·重要性${memory.importance}]');
+      ..writeln('[$timeLabel$sourceLabel·重要性${memory.importance}]');
 
     final fields = <String>[
       if (memory.what != null && memory.what!.isNotEmpty) '· 何事：${memory.what}',

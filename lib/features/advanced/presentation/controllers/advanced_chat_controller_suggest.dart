@@ -40,12 +40,15 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
   /// [sendMessage] 会清空 suggestReplies，生成结果作废。
   Future<bool> generateSuggestReplies() async {
     // 守卫：生成中拒绝重复点击
-    if (state.isGeneratingSuggest) return false;
+    if (!mounted || state.isGeneratingSuggest) return false;
 
     // 守卫：无历史消息时无法生成（需要至少 1 轮对话作为上下文）
     if (state.messages.isEmpty) {
-      _logger.warn('SuggestReply: 无历史消息，跳过生成');
-      return false;
+      return _suggestFailed(
+        const AuxiliaryGenerationFailure(
+          AuxiliaryGenerationFailureKind.noConversation,
+        ),
+      );
     }
 
     // 提取最近 1 轮 user + assistant 消息
@@ -60,16 +63,25 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
     final lastUserContent = lastUserMsg.content?.trim() ?? '';
     final lastAssistantContent = lastAssistantMsg.content?.trim() ?? '';
     if (lastUserContent.isEmpty || lastAssistantContent.isEmpty) {
-      _logger.warn('SuggestReply: 最近一轮消息内容为空，跳过生成');
-      return false;
+      return _suggestFailed(
+        const AuxiliaryGenerationFailure(
+          AuxiliaryGenerationFailureKind.noConversation,
+        ),
+      );
     }
+
+    final generation = ++_suggestGeneration;
+    bool isCurrent() =>
+        mounted &&
+        state.isGeneratingSuggest &&
+        generation == _suggestGeneration;
 
     // 置生成中状态（清空旧候选，避免 UI 显示过期数据）
     state = state.copyWith(
       isGeneratingSuggest: true,
       suggestReplies: [],
       suggestExpanded: false,
-      suggestFailed: false,
+      suggestFailure: null,
     );
 
     try {
@@ -79,15 +91,14 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
           .resolveAdvancedSuggestReplyNamingConfig(state.session);
       // 竞态检查：用户可能在 await 期间发送了消息（sendMessage 会置
       // isGeneratingSuggest=false），此时应放弃生成结果。
-      if (!state.isGeneratingSuggest) return false;
+      if (!isCurrent()) return false;
 
       if (namingConfig == null) {
-        _logger.warn('SuggestReply: 未配置模型，无法生成');
-        state = state.copyWith(
-          isGeneratingSuggest: false,
-          suggestFailed: true,
+        return _suggestFailed(
+          const AuxiliaryGenerationFailure(
+            AuxiliaryGenerationFailureKind.modelOrKeyUnavailable,
+          ),
         );
-        return false;
       }
 
       // 2. 解析提示词（会话级 > advanced.suggest_reply.prompt > 内置默认）
@@ -95,11 +106,11 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
           await _configurationResolver.resolveAdvancedSuggestReplyPrompt(
         state.session,
       );
-      if (!state.isGeneratingSuggest) return false;
+      if (!isCurrent()) return false;
 
       // 3. 读取生成参数（温度 / maxTokens / candidateCount / maxReplyLength）
       final config = await _getConfig();
-      if (!state.isGeneratingSuggest) return false;
+      if (!isCurrent()) return false;
       final suggestConfig = config.suggestReply;
 
       // 4. 采集前 2 轮 micro 摘要（按 turn 降序取最近 2 条）
@@ -108,7 +119,7 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
         state.session.sessionId,
         limit: 5, // 多取几条过滤 macro 后取 2 条
       );
-      if (!state.isGeneratingSuggest) return false;
+      if (!isCurrent()) return false;
       final microSummaries = recentExperiences
           .where((e) => e.memoryLevel == MemoryLevel.micro)
           .take(2)
@@ -122,7 +133,8 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
       // 5. 调用 LLM 生成候选回复
       // 用户 network.* 超时透传
       final timeouts = await _configurationResolver.resolveTimeouts();
-      final replies = await _suggestGenerator.generate(
+      if (!isCurrent()) return false;
+      final result = await _suggestGenerator.generateWithResult(
         namingConfig: namingConfig,
         systemPrompt: systemPrompt,
         lastUserMessage: lastUserContent,
@@ -136,40 +148,34 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
         readTimeout: timeouts.readTimeout,
       );
       // 竞态检查：LLM 响应返回前用户可能已发送消息
-      if (!state.isGeneratingSuggest) return false;
+      if (!isCurrent()) return false;
 
-      if (replies.isEmpty) {
-        _logger.warn('SuggestReply: LLM 未返回有效候选');
-        state = state.copyWith(
-          isGeneratingSuggest: false,
-          suggestFailed: true,
-        );
-        return false;
+      if (result.failure case final failure?) {
+        return _suggestFailed(failure);
       }
 
       // 6. 写入 state，展开气泡
       state = state.copyWith(
         isGeneratingSuggest: false,
-        suggestReplies: replies,
+        suggestReplies: result.value ?? const [],
         suggestExpanded: true,
-        suggestFailed: false,
+        suggestFailure: null,
       );
       return true;
-    } catch (e, stackTrace) {
-      _logger.error(
-        'SuggestReply: 生成异常',
-        detail: '$e',
-        error: e,
-        stackTrace: stackTrace,
-      );
-      // 竞态检查：异常发生时用户可能已发送消息
-      if (!state.isGeneratingSuggest) return false;
-      state = state.copyWith(
-        isGeneratingSuggest: false,
-        suggestFailed: true,
-      );
-      return false;
+    } catch (e) {
+      if (!isCurrent()) return false;
+      return _suggestFailed(AuxiliaryGenerationFailure.fromException(e));
     }
+  }
+
+  bool _suggestFailed(AuxiliaryGenerationFailure failure) {
+    state = state.copyWith(
+      isGeneratingSuggest: false,
+      suggestReplies: const [],
+      suggestExpanded: false,
+      suggestFailure: failure,
+    );
+    return false;
   }
 
   /// 选择某条候选回复
@@ -202,7 +208,7 @@ extension AdvancedChatControllerSuggest on AdvancedChatController {
       suggestReplies: [],
       isGeneratingSuggest: false,
       suggestExpanded: false,
-      suggestFailed: false,
+      suggestFailure: null,
     );
   }
 }

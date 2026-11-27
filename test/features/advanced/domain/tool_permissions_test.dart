@@ -59,11 +59,16 @@ void main() {
         'search_story',
         'search_story_text',
         'read_story',
+        'list_facts',
         'query_facts',
+        'query_memory_changes',
         'read_compact_summary',
         'read_skill',
+        'calc_eval',
+        'calc_date',
         'ask_user',
         'finish_round',
+        'finish_maintenance',
       ]) {
         expect(ToolPermissions.supervised[t], 'allow', reason: t);
       }
@@ -88,41 +93,51 @@ void main() {
       expect(ToolPermissions.forLegacyWatchMode(), isNull);
     });
 
-    test('allTools 覆盖 13 工具且无重复', () {
-      expect(ToolPermissions.allTools.length, 13);
-      expect(ToolPermissions.allTools.toSet().length, 13);
+    test('allTools 覆盖 18 工具且无重复', () {
+      expect(ToolPermissions.allTools.length, 18);
+      expect(ToolPermissions.allTools.toSet().length, 18);
     });
   });
 
-  // finish_round 是每轮正文唯一交付通道，
-  // 配成 deny/ask 会导致每轮无法正常交付（"能配但配了崩"）——读取侧
-  // 一律按 allow 兜底，历史会话存的非 allow 值同样被兜底。
-  group('B3：finish_round 锁死 allow', () {
-    test('会话存 deny → 兜底 allow', () {
-      final e = ToolPermissions.effective(
-        session: const {'finish_round': 'deny'},
-        global: const {},
-        toolName: 'finish_round',
+  // finish_round 与 finish_maintenance 是每轮正文与周期维护收尾唯一交付通道，
+  // 配成 deny/ask 会导致流程卡死——读取侧一律按 allow 兜底。
+  group('控制收尾工具锁死 allow', () {
+    test('finish_round 与 finish_maintenance 会话存 deny → 兜底 allow', () {
+      for (final tool in ['finish_round', 'finish_maintenance']) {
+        final e = ToolPermissions.effective(
+          session: {tool: 'deny'},
+          global: const {},
+          toolName: tool,
+        );
+        expect(e, ToolPermissionState.allow, reason: tool);
+        expect(ToolPermissions.isLockedAllow(tool), isTrue, reason: tool);
+      }
+      expect(
+        ToolPermissions.lockedAllowTools,
+        containsAll(const ['finish_round', 'finish_maintenance']),
       );
-      expect(e, ToolPermissionState.allow);
     });
 
-    test('会话存 ask → 兜底 allow', () {
-      final e = ToolPermissions.effective(
-        session: const {'finish_round': 'ask'},
-        global: const {},
-        toolName: 'finish_round',
-      );
-      expect(e, ToolPermissionState.allow);
+    test('finish_round 与 finish_maintenance 会话存 ask → 兜底 allow', () {
+      for (final tool in ['finish_round', 'finish_maintenance']) {
+        final e = ToolPermissions.effective(
+          session: {tool: 'ask'},
+          global: const {},
+          toolName: tool,
+        );
+        expect(e, ToolPermissionState.allow, reason: tool);
+      }
     });
 
     test('仅全局存 deny → 兜底 allow', () {
-      final e = ToolPermissions.effective(
-        session: null,
-        global: const {'finish_round': 'deny'},
-        toolName: 'finish_round',
-      );
-      expect(e, ToolPermissionState.allow);
+      for (final tool in ['finish_round', 'finish_maintenance']) {
+        final e = ToolPermissions.effective(
+          session: null,
+          global: {tool: 'deny'},
+          toolName: tool,
+        );
+        expect(e, ToolPermissionState.allow, reason: tool);
+      }
     });
 
     test('其他工具不受锁影响（spawn 仍可 deny）', () {
@@ -132,6 +147,7 @@ void main() {
         toolName: 'spawn',
       );
       expect(e, ToolPermissionState.deny);
+      expect(ToolPermissions.isLockedAllow('spawn'), isFalse);
     });
   });
 }

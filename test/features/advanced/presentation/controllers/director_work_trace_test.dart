@@ -76,14 +76,29 @@ void main() {
       );
     });
 
-    test('无工具轮：诚实标注直写正文（finish_round/system 不算工具）', () {
+    test('无工具轮：降噪返回 null（finish_round/finish_maintenance/system 不算工具）', () {
       final a = artifact(
         13,
-        steps: [step('finish_round'), step('system')],
+        steps: [
+          step('finish_round'),
+          step('finish_maintenance'),
+          step('system'),
+        ],
+      );
+      expect(roundWorkTraceFor(a), isNull);
+    });
+
+    test('list_facts 归入检索类工具，计数为查记忆', () {
+      final a = artifact(
+        13,
+        steps: [
+          step('list_facts'),
+          step('query_facts'),
+        ],
       );
       expect(
         roundWorkTraceFor(a),
-        w('〈round-work n=13〉本轮无工具调用，直写正文〈/round-work〉'),
+        w('〈round-work n=13〉查记忆×2〈/round-work〉'),
       );
     });
 
@@ -172,13 +187,13 @@ void main() {
         compactedTurnBase: 0,
       );
 
-      // user, assistant, trace, user, assistant, trace
-      expect(result, hasLength(6));
+      // user, assistant, trace, user, assistant（第 2 轮无工具，跳过 trace）
+      expect(result, hasLength(5));
       expect(result[2].role, 'user');
       expect(result[2].content, contains('〈round-work n=1〉'));
-      expect(result[5].content, contains('本轮无工具调用'));
       // assistant 正文仍在 trace 之前
       expect(result[1].content, '第一轮正文。');
+      expect(result[4].content, '第二轮正文。');
     });
 
     test('B1 折叠锚点：压缩纪元内各轮 trace 全保留（不再按 8 轮滑窗截断）', () {
@@ -453,6 +468,191 @@ void main() {
       expect(result.first.content, 'u');
       // 末条是 trace（尾部指令由调用方追加，与本模块无关）
       expect(result.last.content, contains('round-work'));
+    });
+  });
+
+  group('computeMaintenanceSchedule 维护周期调度', () {
+    StoryRoundArtifacts roundWithTools(
+      int turn, {
+      List<AgentWorkStep> steps = const [],
+      List<FactsChangeRecord> factsChanges = const [],
+      bool nudgeIssued = false,
+      bool majorReviewCompleted = false,
+    }) =>
+        StoryRoundArtifacts(
+          sessionId: 's1',
+          turnNumber: turn,
+          createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+          agentSteps: steps,
+          factsChanges: factsChanges,
+          agentWorkSummary: AgentWorkSummary(
+            steps: steps.length,
+            totalTokens: 100,
+            durationMs: 500,
+            maintenanceNudgeIssued: nudgeIssued,
+            majorReviewCompleted: majorReviewCompleted,
+          ),
+        );
+
+    test('空 artifacts：第 1 轮不触发，第 50 轮按 currentTurn 触发大周期', () {
+      final t1 = computeMaintenanceSchedule(artifacts: {}, currentTurn: 1);
+      expect(t1.factsGap, 0);
+      expect(t1.anchorGap, 0);
+      expect(t1.eventGap, 0);
+      expect(t1.turnsSinceLastNudge, isNull);
+      expect(t1.turnsSinceMajorReview, 1);
+      expect(t1.isMajorReviewRound, isFalse);
+      expect(t1.shouldIssueNudge, isFalse);
+
+      final t50 = computeMaintenanceSchedule(artifacts: {}, currentTurn: 50);
+      expect(t50.turnsSinceMajorReview, 50);
+      expect(t50.isMajorReviewRound, isTrue);
+      expect(t50.shouldIssueNudge, isFalse);
+    });
+
+    test('各维度缺口独立统计与清零，失败步骤不计入清零', () {
+      final artifacts = <int, StoryRoundArtifacts>{
+        1: roundWithTools(
+          1,
+          steps: [
+            step('update_facts'),
+            step('update_story_anchor'),
+            step('record_event_memory'),
+          ],
+        ),
+        2: roundWithTools(2, steps: [step('finish_round')]),
+        3: roundWithTools(3, steps: [step('merge_entities')]),
+        // 失败的 update_story_anchor / record_event_memory 不应清零缺口
+        4: roundWithTools(
+          4,
+          steps: [
+            step('update_story_anchor', status: AgentStepStatus.warning),
+            step('record_event_memory', status: AgentStepStatus.error),
+          ],
+        ),
+        5: roundWithTools(5, steps: [step('update_story_anchor')]),
+        6: roundWithTools(6, factsChanges: [change()]),
+        7: roundWithTools(7, steps: [step('record_event_memory')]),
+        8: roundWithTools(8, steps: [step('finish_round')]),
+      };
+
+      final s = computeMaintenanceSchedule(
+        artifacts: artifacts,
+        currentTurn: 9,
+      );
+      // 9 - 1 - 6 = 2（第 6 轮通过 factsChanges 更新过事实）
+      expect(s.factsGap, 2);
+      // 9 - 1 - 5 = 3
+      expect(s.anchorGap, 3);
+      // 9 - 1 - 7 = 1
+      expect(s.eventGap, 1);
+      expect(s.shouldIssueNudge, isFalse);
+    });
+
+    test('7 轮缺口触发小提示并遵守冷却间隔', () {
+      final artifacts = <int, StoryRoundArtifacts>{
+        for (var t = 1; t <= 7; t++)
+          t: roundWithTools(t, steps: [step('finish_round')]),
+      };
+
+      // 第 8 轮前已有 7 轮无维护 → 触发首次小提示
+      final turn8 = computeMaintenanceSchedule(
+        artifacts: artifacts,
+        currentTurn: 8,
+      );
+      expect(turn8.factsGap, 7);
+      expect(turn8.anchorGap, 7);
+      expect(turn8.eventGap, 7);
+      expect(turn8.turnsSinceLastNudge, isNull);
+      expect(turn8.shouldIssueNudge, isTrue);
+
+      // 第 8 轮已发出提示，第 9/10/11 轮受 4 轮冷却保护不重复提示
+      artifacts[8] = roundWithTools(
+        8,
+        steps: [step('finish_round')],
+        nudgeIssued: true,
+      );
+      expect(
+        computeMaintenanceSchedule(artifacts: artifacts, currentTurn: 9)
+            .shouldIssueNudge,
+        isFalse,
+      );
+      artifacts[9] = roundWithTools(9, steps: [step('finish_round')]);
+      artifacts[10] = roundWithTools(10, steps: [step('finish_round')]);
+      final turn11 = computeMaintenanceSchedule(
+        artifacts: artifacts,
+        currentTurn: 11,
+      );
+      expect(turn11.turnsSinceLastNudge, 3);
+      expect(turn11.shouldIssueNudge, isFalse);
+
+      // 第 12 轮距第 8 轮满 4 轮冷却 → 再次提示
+      artifacts[11] = roundWithTools(11, steps: [step('finish_round')]);
+      final turn12 = computeMaintenanceSchedule(
+        artifacts: artifacts,
+        currentTurn: 12,
+      );
+      expect(turn12.turnsSinceLastNudge, 4);
+      expect(turn12.shouldIssueNudge, isTrue);
+    });
+
+    test('大周期双任务优先且不叠加小提示，支持两种完成标记清零', () {
+      final artifacts = <int, StoryRoundArtifacts>{
+        for (var t = 1; t <= 49; t++)
+          t: roundWithTools(t, steps: [step('finish_round')]),
+      };
+
+      // 第 50 轮：同时满足缺口>=7与大周期>=50，仅开启大周期，不叠加小提示
+      final turn50 = computeMaintenanceSchedule(
+        artifacts: artifacts,
+        currentTurn: 50,
+      );
+      expect(turn50.isMajorReviewRound, isTrue);
+      expect(turn50.shouldIssueNudge, isFalse);
+
+      // 若第 50 轮通过 majorReviewCompleted 标记完成，第 51 轮归 1
+      artifacts[50] = roundWithTools(
+        50,
+        steps: [step('finish_round')],
+        majorReviewCompleted: true,
+      );
+      final turn51 = computeMaintenanceSchedule(
+        artifacts: artifacts,
+        currentTurn: 51,
+      );
+      expect(turn51.turnsSinceMajorReview, 1);
+      expect(turn51.isMajorReviewRound, isFalse);
+
+      // 第 100 轮再次进入大周期；若第 100 轮仅有失败 finish_maintenance 不清零
+      for (var t = 51; t <= 99; t++) {
+        artifacts[t] = roundWithTools(t, steps: [step('finish_round')]);
+      }
+      expect(
+        computeMaintenanceSchedule(artifacts: artifacts, currentTurn: 100)
+            .isMajorReviewRound,
+        isTrue,
+      );
+      artifacts[100] = roundWithTools(
+        100,
+        steps: [step('finish_maintenance', status: AgentStepStatus.error)],
+      );
+      expect(
+        computeMaintenanceSchedule(artifacts: artifacts, currentTurn: 101)
+            .isMajorReviewRound,
+        isTrue,
+      );
+
+      // 成功的 finish_maintenance 步骤同样清零大周期计数
+      artifacts[101] = roundWithTools(
+        101,
+        steps: [step('finish_maintenance')],
+      );
+      final turn102 = computeMaintenanceSchedule(
+        artifacts: artifacts,
+        currentTurn: 102,
+      );
+      expect(turn102.turnsSinceMajorReview, 1);
+      expect(turn102.isMajorReviewRound, isFalse);
     });
   });
 }

@@ -62,6 +62,26 @@ enum ImportMode {
   overwrite,
 }
 
+/// 活动经历的所属会话与备份包装或已写入的数据冲突。
+class BackupExperienceIdConflictException extends FormatException {
+  const BackupExperienceIdConflictException()
+      : super(
+          'Cannot overwrite because different sessions share an experience ID',
+        );
+
+  const BackupExperienceIdConflictException.ownerMismatch()
+      : super('Backup experience row does not belong to its session');
+
+  const BackupExperienceIdConflictException.existingOwner()
+      : super('Backup experience ID belongs to another session');
+}
+
+/// 同一会话的一轮中存在无法分别寻址的稿件。
+final class BackupDraftIndexConflictException extends FormatException {
+  const BackupDraftIndexConflictException()
+      : super('Multiple drafts in one round share the same index');
+}
+
 /// 导入结果汇总
 class ImportResult {
   const ImportResult({
@@ -75,6 +95,9 @@ class ImportResult {
     required this.mode,
     this.importedAssets = 0,
     this.importedApiKeys = 0,
+    this.skippedMessages = 0,
+    this.skippedAssets = 0,
+    this.skippedSessionRows = 0,
   });
 
   final int importedPresets;
@@ -82,12 +105,15 @@ class ImportResult {
   final int importedSessions;
   final int skippedSessions;
   final int importedMessages;
+  final int skippedMessages;
+  final int skippedSessionRows;
   final int importedPreferences;
   final int skippedPreferences;
   final ImportMode mode;
 
   /// v3 全局资产实际插入行数（角色卡+世界书+自建模板+导演事件日志）
   final int importedAssets;
+  final int skippedAssets;
 
   /// 实际写入的 API Key 条数——追加模式下供应商全部已存在被跳过时为 0，
   /// 摘要不得宣称「已导入并覆盖」（此前只看勾选与备份内容，误导排查）
@@ -100,9 +126,12 @@ class ImportResult {
       importedSessions == 0 &&
       skippedSessions == 0 &&
       importedMessages == 0 &&
+      skippedMessages == 0 &&
+      skippedSessionRows == 0 &&
       importedPreferences == 0 &&
       skippedPreferences == 0 &&
-      importedAssets == 0;
+      importedAssets == 0 &&
+      skippedAssets == 0;
 }
 
 /// 存储统计信息

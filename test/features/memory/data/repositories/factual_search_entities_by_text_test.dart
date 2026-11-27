@@ -32,6 +32,7 @@ void main() {
     List<String> aliases = const [],
     int importance = 3,
     bool isArchived = false,
+    bool injectionDisabled = false,
     FactualSource source = FactualSource.auto,
     FactualEntityType type = FactualEntityType.character,
   }) async {
@@ -46,6 +47,7 @@ void main() {
         createdTurn: 1,
         createdAt: DateTime(2026),
         isArchived: isArchived,
+        injectionDisabled: injectionDisabled,
         source: source,
       ),
     );
@@ -207,6 +209,83 @@ void main() {
 
     // s1 的 FTS 行命中了 id，但实体属于 s2 → 最终查询必须拦住
     expect(await repo.searchWorldFacts('s1', ['禁书区']), isEmpty);
+  });
+
+  test('searchWorldFacts 无重复、跨会话不泄漏、停用不占 limit 名额', () async {
+    // 同一实体被长短两通道同时命中（长词走 FTS、短词走 LIKE）→ 去重
+    await seedEntity(id: 'ent_both', name: '凤凰城', sessionId: 'sW');
+    await repo.insertFactualFts(
+      entityId: 'ent_both',
+      sessionId: 'sW',
+      primaryName: '凤凰城',
+      aliases: const [],
+      description: '凤凰栖居之城。',
+    );
+    final dup = await repo.searchWorldFacts('sW', const ['凤凰城', '凤凰']);
+    expect(
+      dup.where((e) => e.entityId == 'ent_both'),
+      hasLength(1),
+      reason: '两通道命中同一实体不得重复返回',
+    );
+
+    // FF13 形态：FTS 行会话与实体会话不一致 → 不泄漏
+    await seedEntity(id: 'ent_foreign', name: '幽冥殿', sessionId: 'sW2');
+    await repo.insertFactualFts(
+      entityId: 'ent_foreign',
+      sessionId: 'sW',
+      primaryName: '幽冥殿',
+      aliases: const [],
+      description: '别会话的索引行。',
+    );
+    expect(
+      await repo.searchWorldFacts('sW', const ['幽冥殿']),
+      isEmpty,
+      reason: '索引行串会话命中的 id 必须被实体表 session 过滤拦住',
+    );
+
+    // 停用词条不返回且不占 limit 名额（后续合法候选沿候选序补足）
+    await seedEntity(
+      id: 'ent_off',
+      name: '星陨塔',
+      sessionId: 'sW3',
+      importance: 5,
+      injectionDisabled: true,
+    );
+    await repo.insertFactualFts(
+      entityId: 'ent_off',
+      sessionId: 'sW3',
+      primaryName: '星陨塔',
+      aliases: const [],
+      description: '高耸的星陨塔。',
+    );
+    await seedEntity(id: 'ent_ok', name: '星陨湖', sessionId: 'sW3');
+    await repo.insertFactualFts(
+      entityId: 'ent_ok',
+      sessionId: 'sW3',
+      primaryName: '星陨湖',
+      aliases: const [],
+      description: '平静的星陨湖。',
+    );
+
+    expect(
+      (await repo.searchWorldFacts(
+        'sW3',
+        const ['星陨'],
+        limit: 1,
+        excludeInjectionDisabled: true,
+      ))
+          .map((e) => e.entityId),
+      ['ent_ok'],
+      reason: '修复前 LIKE 通道 LIMIT 1 只取到停用候选，过滤后返回空，'
+          ' 合法后续候选被名额挤掉',
+    );
+    // 检索面默认口径不受影响：停用词条照常返回
+    expect(
+      (await repo.searchWorldFacts('sW3', const ['星陨']))
+          .map((e) => e.entityId)
+          .toSet(),
+      {'ent_off', 'ent_ok'},
+    );
   });
 
   test('FF2：updateEntityBasic 改名同步 factual_fts（旧名不再召回）', () async {

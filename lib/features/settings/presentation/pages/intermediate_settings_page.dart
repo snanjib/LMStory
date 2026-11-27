@@ -200,52 +200,38 @@ class _StoryModeToggleCard extends ConsumerWidget {
     return Material(
       color: colors.surfaceVariant,
       borderRadius: BorderRadius.circular(context.lmUi.radius(LmCorner.lg)),
-      child: Padding(
-        padding: const EdgeInsets.all(IntermediateSpacing.sLg),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: colors.accent.withValues(alpha: 0.15),
-                borderRadius:
-                    BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
-              ),
-              child: Icon(
-                Icons.auto_stories,
-                color: colors.accent,
-                size: 22,
-              ),
-            ),
-            const SizedBox(width: IntermediateSpacing.sMd),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    t.intermediate.settings.title,
-                    style: IntermediateTextStyles.bodyUi.copyWith(
-                      color: colors.ink,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                    ),
-                  ),
-                  Text(
-                    t.intermediate.settings.desc,
-                    style: IntermediateTextStyles.caption
-                        .copyWith(color: colors.muted),
-                  ),
-                ],
-              ),
-            ),
-            Switch(
-              value: enabled,
-              onChanged: (value) => ref
-                  .read(intermediateModeFlagProvider.notifier)
-                  .setEnabled(enabled: value),
-            ),
-          ],
+      clipBehavior: Clip.antiAlias,
+      child: SwitchListTile(
+        value: enabled,
+        onChanged: (value) => ref
+            .read(intermediateModeFlagProvider.notifier)
+            .setEnabled(enabled: value),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: IntermediateSpacing.sLg,
+        ),
+        horizontalTitleGap: IntermediateSpacing.sMd,
+        minVerticalPadding: IntermediateSpacing.sLg,
+        secondary: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: colors.accent.withValues(alpha: 0.15),
+            borderRadius:
+                BorderRadius.circular(context.lmUi.radius(LmCorner.md)),
+          ),
+          child: Icon(Icons.auto_stories, color: colors.accent, size: 22),
+        ),
+        title: Text(
+          t.intermediate.settings.title,
+          style: IntermediateTextStyles.bodyUi.copyWith(
+            color: colors.ink,
+            fontWeight: FontWeight.w600,
+            fontSize: 15,
+          ),
+        ),
+        subtitle: Text(
+          t.intermediate.settings.desc,
+          style: IntermediateTextStyles.caption.copyWith(color: colors.muted),
         ),
       ),
     );

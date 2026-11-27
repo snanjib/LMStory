@@ -13,8 +13,10 @@ import 'package:lmstory/core/widgets/editable_value_text.dart';
 import 'package:lmstory/core/widgets/numeric_input_dialog.dart';
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
 import 'package:lmstory/features/settings/presentation/pages/intermediate_settings_page.dart'
     show IntermediateSettingsPage;
+import 'package:lmstory/features/settings/presentation/utils/model_sampling_controls.dart';
 import 'package:lmstory/features/settings/presentation/widgets/intermediate_model_picker_sheet.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 
@@ -280,6 +282,9 @@ class _IntermediateSuggestReplySettingsPageState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(settingsNotifierProvider.select((s) => s.presets), (_, presets) {
+      setState(() => _presets = presets);
+    });
     final configAsync = ref.watch(intermediateConfigProvider);
     final config = configAsync.valueOrNull;
     _ensurePromptInit(configAsync.hasValue, config?.suggestReply.prompt ?? '');
@@ -557,6 +562,14 @@ class _IntermediateSuggestReplySettingsPageState
     final config = ref.watch(intermediateConfigProvider).valueOrNull;
     final suggest = config?.suggestReply;
     final temperature = suggest?.temperature ?? 0.8;
+    final suggestModel = (suggest?.presetId, suggest?.modelId);
+    final phases = config?.phaseModels;
+    final sampling = samplingControlsForModel(
+      _presets,
+      hasModelSelection(suggestModel)
+          ? suggestModel
+          : (phases?.generatingPresetId, phases?.generatingModelId),
+    );
     final maxTokens = suggest?.maxTokens ?? 600;
     final candidateCount = suggest?.candidateCount ?? 3;
     final maxReplyLength = suggest?.maxReplyLength ?? 150;
@@ -579,22 +592,24 @@ class _IntermediateSuggestReplySettingsPageState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _DeferredSliderTile(
-                colors: colors,
-                label: t.settings.intermediate.suggestReply.temperature,
-                value: temperature,
-                min: 0,
-                max: 2,
-                divisions: 200,
-                hint: t.settings.intermediate.suggestReply.temperatureHint,
-                onChanged: (v) => _persistNum(
-                  'intermediate.suggest_reply.temperature',
-                  v,
+              if (sampling.showsTemperatureAndTopP) ...[
+                _DeferredSliderTile(
+                  colors: colors,
+                  label: t.settings.intermediate.suggestReply.temperature,
+                  value: temperature,
+                  min: 0,
+                  max: 2,
+                  divisions: 200,
+                  hint: t.settings.intermediate.suggestReply.temperatureHint,
+                  onChanged: (v) => _persistNum(
+                    'intermediate.suggest_reply.temperature',
+                    v,
+                  ),
                 ),
-              ),
-              const SizedBox(height: IntermediateSpacing.sMd),
-              Divider(height: 1, color: colors.divider),
-              const SizedBox(height: IntermediateSpacing.sMd),
+                const SizedBox(height: IntermediateSpacing.sMd),
+                Divider(height: 1, color: colors.divider),
+                const SizedBox(height: IntermediateSpacing.sMd),
+              ],
               _DeferredSliderTile(
                 colors: colors,
                 label: t.settings.intermediate.suggestReply.maxTokens,

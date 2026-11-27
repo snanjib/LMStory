@@ -37,6 +37,7 @@ class IntermediateMessageBubble extends StatefulWidget {
     this.windowRounds = 5,
     this.actionsEnabled = true,
     this.animateEntrance = true,
+    this.softLineBreak = false,
     this.fontScale = 1.0,
     this.onCopy = _noop,
     this.onRegenerate = _noop,
@@ -78,6 +79,8 @@ class IntermediateMessageBubble extends StatefulWidget {
   /// entrance motion while the user scrolls. New and streaming messages keep
   /// the transition.
   final bool animateEntrance;
+
+  final bool softLineBreak;
 
   /// 字体缩放比例（来自通用设置"字体大小"，与 SimpleMessageBubble 共享计算公式）。
   ///
@@ -377,6 +380,7 @@ class _IntermediateMessageBubbleState extends State<IntermediateMessageBubble>
           IntermediateMarkdownBody(
             data: widget.content,
             isUser: widget.isUser,
+            softLineBreak: widget.softLineBreak,
             fontScale: widget.fontScale,
             onTapText: _toggleActions,
           ),

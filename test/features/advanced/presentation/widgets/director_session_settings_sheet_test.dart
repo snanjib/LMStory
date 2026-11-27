@@ -11,6 +11,7 @@ import 'package:lmstory/core/network/llm_adapters/llm_adapter_factory.dart';
 import 'package:lmstory/core/storage/preferences.dart';
 import 'package:lmstory/core/utils/logger.dart';
 import 'package:lmstory/core/utils/token_counter.dart';
+import 'package:lmstory/core/widgets/commit_slider.dart';
 import 'package:lmstory/features/advanced/domain/entities/retrieval_profile.dart';
 import 'package:lmstory/features/advanced/domain/entities/tool_permissions.dart';
 import 'package:lmstory/features/advanced/presentation/controllers/advanced_chat_controller.dart';
@@ -30,14 +31,21 @@ import 'package:lmstory/features/resource_library/domain/repositories/resource_l
 import 'package:lmstory/features/settings/domain/entities/api_preset.dart';
 import 'package:lmstory/features/settings/domain/repositories/api_preset_repository.dart';
 import 'package:lmstory/features/settings/domain/repositories/settings_repository.dart';
+import 'package:lmstory/features/settings/presentation/controllers/settings_controller.dart';
+import 'package:lmstory/features/settings/presentation/widgets/director_compaction_threshold_field.dart';
+import 'package:lmstory/features/settings/presentation/widgets/intermediate_model_picker_sheet.dart';
 import 'package:lmstory/features/story_runtime/domain/entities/round_artifacts.dart';
 import 'package:lmstory/features/story_runtime/domain/services/persistence_service.dart';
+import 'package:lmstory/features/story_runtime/presentation/widgets/session_settings_fields.dart';
 import 'package:lmstory/features/templates/domain/entities/template.dart';
 import 'package:lmstory/features/templates/domain/repositories/template_repository.dart';
 import 'package:lmstory/i18n/strings.g.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../../helpers/fake_factual_repository.dart';
+import '../../../../test_helpers/load_app_fonts.dart';
 import '../../../../test_helpers/stub_failure_log_repository.dart';
+import '../../../../test_helpers/stub_settings_notifier.dart';
 
 /// DirectorSessionSettingsSheet Widget 测试（种子资源区段挂载）
 ///
@@ -108,6 +116,9 @@ class _StubExperienceRepository implements ExperienceRepository {
 }
 
 class _StubChatRepository implements ChatRepository {
+  _StubChatRepository(this._session);
+
+  ChatSession _session;
   List<ChatMessage> messages = const [];
 
   // 捕获最近一次 updateSession（断言检索松紧度快照写库）
@@ -117,14 +128,19 @@ class _StubChatRepository implements ChatRepository {
   Future<List<ChatMessage>> getMessages(String sessionId) async => messages;
 
   @override
+  Future<DirectorInputs> getDirectorInputs(String sessionId) async =>
+      (pending: null, queued: null);
+
+  @override
   Future<ChatSession> createSession({
     required String title,
+    String? sessionId,
     String mode = 'simple',
     String? modelId,
     String? presetId,
   }) async =>
       ChatSession(
-        sessionId: 'real-director-1',
+        sessionId: sessionId ?? 'real-director-1',
         title: title,
         mode: mode,
         createdAt: DateTime(2026),
@@ -135,11 +151,12 @@ class _StubChatRepository implements ChatRepository {
   @override
   Future<ChatSession> updateSession(ChatSession session) async {
     lastUpdatedSession = session;
+    _session = session;
     return session;
   }
 
   @override
-  Future<ChatSession> getSession(String sessionId) async => _directorSession();
+  Future<ChatSession> getSession(String sessionId) async => _session;
 
   @override
   Future<void> deleteSession(String sessionId) async {}
@@ -205,6 +222,7 @@ Future<_StubChatRepository> _pumpSheet(
   ChatSession? sessionOverride,
   AdvancedConfig? config,
   ConfigLevel level = ConfigLevel.advanced,
+  List<ApiPreset>? presets,
 }) async {
   // 面板分区多，用手机尺寸视口避免底部裁剪
   tester.view.physicalSize = const Size(1080, 2400);
@@ -220,10 +238,15 @@ Future<_StubChatRepository> _pumpSheet(
 
   final session = sessionOverride ?? _directorSession();
   final resolvedConfig = config ?? const AdvancedConfig();
-  final chatRepository = _StubChatRepository();
+  final chatRepository = _StubChatRepository(session);
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        factualRepositoryProvider.overrideWithValue(FakeFactualRepository()),
+        if (presets != null)
+          settingsNotifierProvider.overrideWith(
+            (ref) => StubSettingsNotifier(presets: presets),
+          ),
         apiPresetRepositoryProvider
             .overrideWithValue(_FakeApiPresetRepository()),
         templateRepositoryProvider.overrideWithValue(_StubTemplateRepository()),
@@ -293,8 +316,48 @@ Future<void> _expandContextSection(WidgetTester tester) async {
 // ── Tests ─────────────────────────────────────────────────────────────
 
 void main() {
-  setUpAll(() {
-    LocaleSettings.setLocale(AppLocale.zhCn);
+  testWidgets('导演草稿回显并预选全局主模型，按该模型显示采样控件', (tester) async {
+    await _pumpSheet(
+      tester,
+      sessionOverride: _directorSession().copyWith(
+        sessionId: '${AdvancedChatController.draftSessionIdPrefix}new',
+      ),
+      config: const AdvancedConfig(
+        generatingPresetId: 'relay',
+        generatingModelId: 'grok-4.7',
+      ),
+      presets: [
+        ApiPreset(
+          presetId: 'relay',
+          name: 'Relay',
+          baseUrl: 'https://relay.test',
+          createdAt: DateTime(2026),
+          updatedAt: DateTime(2026),
+          providerOptions: const {'omit_sampling_params': true},
+        ),
+      ],
+    );
+    final labels = t.advanced.settings.generation;
+    expect(find.text(labels.temperature), findsNothing);
+    expect(find.text(labels.topP), findsNothing);
+    expect(find.text(labels.presencePenalty), findsNothing);
+    expect(find.text(labels.frequencyPenalty), findsNothing);
+    expect(find.byType(IntermediateMaxTokensField), findsOneWidget);
+    expect(find.byType(IntermediateReasoningEffortSelector), findsOneWidget);
+    expect(find.text('Relay · grok-4.7'), findsOneWidget);
+    await tester.tap(find.text(t.advanced.settings.selectModel));
+    await tester.pumpAndSettle();
+    final picker = tester.widget<IntermediateModelPickerSheet>(
+      find.byType(IntermediateModelPickerSheet),
+    );
+    expect(picker.selectedPresetId, 'relay');
+    expect(picker.selectedModelId, 'grok-4.7');
+  });
+
+  setUpAll(() async {
+    await LocaleSettings.setLocale(AppLocale.zhCn);
+    // Use shipped fonts for the threshold row at phone width.
+    await loadAppFonts();
   });
 
   group('DirectorSessionSettingsSheet（B6 种子资源区段）', () {
@@ -597,8 +660,6 @@ void main() {
       // 窗口上限在高级子折叠内（折叠态不可见）
       expect(find.text('单次请求 Token 上限'), findsNothing);
 
-      // 拖动/改值 → 写具体值（60%）
-      // （CommitSlider 交互在 field 单测覆盖；此处验证重置路径）
       // 点「重置为全局当前值」→ 写全局当前值快照 0.5，不写 null
       await tester.ensureVisible(find.text('重置为全局当前值'));
       await tester.pumpAndSettle();
@@ -611,6 +672,62 @@ void main() {
       );
       expect(find.text('50%'), findsOneWidget);
     });
+
+    for (final engineeringEnabled in [false, true]) {
+      final mode = engineeringEnabled ? '开启' : '关闭';
+      testWidgets('快速拖动压缩阈值并在松手时保存（工程上下文$mode）', (tester) async {
+        final chatRepo = await _pumpSheet(
+          tester,
+          sessionOverride: _directorSession().copyWith(
+            engineeringContextEnabled: engineeringEnabled,
+            compactionTriggerRatioOverride: 0.5,
+          ),
+        );
+        tester.view.physicalSize = const Size(390, 760);
+        await tester.pumpAndSettle();
+        await _expandContextSection(tester);
+
+        final field = find.byType(DirectorCompactionThresholdField);
+        final slider = find.descendant(
+          of: field,
+          matching: find.byType(CommitSlider),
+        );
+        await tester.ensureVisible(slider);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(of: field, matching: find.text('50%')),
+          findsOneWidget,
+        );
+        final savedBeforeDrag = chatRepo.lastUpdatedSession;
+        final bounds = tester.getRect(slider);
+        // 50% is 40% of the way from the minimum (30%) to the maximum (80%).
+        final thumb = bounds.centerLeft + Offset(bounds.width * 0.4, 0);
+
+        final gesture = await tester.startGesture(thumb);
+        await gesture.moveBy(const Offset(60, 0));
+        await gesture.moveTo(bounds.centerRight - const Offset(2, 0));
+        await tester.pump();
+        expect(
+          find.descendant(of: slider, matching: find.text('80%')),
+          findsOneWidget,
+        );
+        expect(find.text('50%'), findsNothing);
+        expect(find.text('≈ 76.8k tokens'), findsOneWidget);
+        expect(chatRepo.lastUpdatedSession, same(savedBeforeDrag));
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+
+        expect(
+          find.descendant(of: field, matching: find.text('80%')),
+          findsOneWidget,
+        );
+        expect(find.text('≈ 76.8k tokens'), findsOneWidget);
+        final saved = chatRepo.lastUpdatedSession;
+        expect(saved?.compactionTriggerRatioOverride, 0.8);
+        expect(saved?.engineeringContextEnabled, engineeringEnabled);
+      });
+    }
 
     testWidgets('窗口上限高级子折叠：展开见滑杆（0=无限制哨兵）', (tester) async {
       await _pumpSheet(tester);

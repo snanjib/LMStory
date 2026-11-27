@@ -37,12 +37,17 @@ class StoryRuntimeConfig {
     required this.stream,
     required this.reviewEnabled,
     this.retry = const RetryConfig(),
+    this.engineeringCompaction = const AdvancedEngineeringCompactionConfig(),
   });
 
   final ContextBudget contextBudget;
   final ContextConfig context;
   final EmbeddingConfig embedding;
   final MemoryConfig memory;
+
+  /// 工程上下文压缩参数（开启态；默认值唯一来源=default_config.json
+  /// advanced.engineering_compaction 段；关闭态不消费）
+  final AdvancedEngineeringCompactionConfig engineeringCompaction;
   final ConsolidationConfig consolidation;
   final RetrievalConfig retrieval;
   final PromptsConfig prompts;
@@ -67,6 +72,7 @@ class StoryRuntimeConfig {
         context: context,
         embedding: embedding,
         memory: memory,
+        engineeringCompaction: engineeringCompaction,
         consolidation: consolidation,
         retrieval: retrieval,
         prompts: prompts,
@@ -101,6 +107,7 @@ extension AdvancedStoryRuntime on AdvancedConfig {
         context: context,
         embedding: embedding,
         memory: memory,
+        engineeringCompaction: engineeringCompaction,
         consolidation: consolidation,
         retrieval: retrieval,
         prompts: prompts,
