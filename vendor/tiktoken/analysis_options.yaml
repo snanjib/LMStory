@@ -1,0 +1,3 @@
+# Vendored upstream code: no `include:` on purpose. An empty options file
+# means default analyzer behaviour (hard errors only, no style lints) for
+# this subtree; the host app's strict lint set does not apply here.

@@ -57,6 +57,15 @@ dev_dependencies:
   very_good_analysis: ^6.0.0
   yaml: ^3.1.2
 
+dependency_overrides:
+  # tiktoken 1.0.3（上游三年未动、1.0.3 即终版）的 cl100k rank 表是
+  # 约 10 万条目的巨型 map 字面量，在 Flutter 3.47.7 的 flutter_tester
+  # VM 下懒初始化概率性损坏（CI 实测 TypeError 于 Map._fromLiteral，
+  # 极端时 tester teardown segfault）。使用仓内 fork（vendor/tiktoken）：
+  # 公共 API 不变，rank 数据改为常量字符串 + 运行时解析，见其文件头。
+  tiktoken:
+    path: vendor/tiktoken
+
 flutter:
   uses-material-design: true
 
