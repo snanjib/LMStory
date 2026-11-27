@@ -20,11 +20,31 @@ class TokenCounter {
   /// Web 平台缓存的 encoding 实例（lazy 初始化，复用避免重复加载 BPE 表）
   late final _cachedEncoding = getEncoding(_encodingName);
 
+  /// 已在主 isolate 完成首次物化的 BPE 表编码名（原生路径）。
+  ///
+  /// tiktoken 的 rank 表是巨型 const 字面量（cl100k_base 约 10 万条目），
+  /// 在 isolate group 内首次物化后跨 isolate 共享；若首次物化由多个并发
+  /// spawn 的新 isolate 同时进行，VM 竞态下会字段错乱——CI（ubuntu，
+  /// 2026-11-27）偶发 `type '_Type' is not a subtype of type 'String'`
+  /// 于 cl100kBase 懒初始化（本地 macOS 不复现），极端时表现为
+  /// flutter_tester segfault。主 isolate 先行物化把首次初始化串行化，
+  /// 关闭该竞态窗口；成本为首个计数调用在主线程同步加载一次
+  /// BPE 表（约 5-20ms，与 Web 路径行为一致）。
+  static final Set<String> _warmedEncodings = <String>{};
+
+  void _warmUpNative() {
+    if (kIsWeb) return;
+    if (_warmedEncodings.add(_encodingName)) {
+      getEncoding(_encodingName);
+    }
+  }
+
   /// 计算文本的 token 数
   Future<int> countTokens(String text) async {
     if (kIsWeb) {
       return _cachedEncoding.encode(text).length;
     }
+    _warmUpNative();
     final encodingName = _encodingName;
     return Isolate.run(() => getEncoding(encodingName).encode(text).length);
   }
@@ -45,6 +65,7 @@ class TokenCounter {
     if (kIsWeb) {
       return texts.map((t) => _cachedEncoding.encode(t).length).toList();
     }
+    _warmUpNative();
     final encodingName = _encodingName;
     return Isolate.run(() {
       final encoding = getEncoding(encodingName);
