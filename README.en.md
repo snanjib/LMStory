@@ -53,10 +53,10 @@ All of this happens on your device (see [Data & Privacy](#data--privacy-local-fi
 |---|---|---|
 | **Chat mode** | ✅ Implemented | General AI chat: multi-provider, streaming, branches, attachments, context compaction |
 | **Story mode** | ✅ Implemented | Immersive narration: experiential and factual memory accumulate every round; past events and settings are retrieved before writing; optional review stage; failure recovery. Regenerating snapshots the old draft as a switchable variant and interrupted prose is never lost; manuscripts export to Markdown, plus in-session search and reading-position memory |
-| **Director mode** | ✅ Implemented | You write the project rules; an AI "chief editor" runs the world backstage — retrieving memories, maintaining settings, and writing the prose. Includes watch mode (approve every write), ask-the-director prompts, layered process view, durable event log & crash recovery. Enabled by default; can be disabled in Settings |
+| **Director mode** | ✅ Implemented | You write the project rules; an AI "chief editor" runs the world backstage — retrieving memories, maintaining settings, and writing the prose. Ships Act-unit reading stream with a World Status drawer, 7/50-round long-session memory maintenance, watch mode (approve every write), ask-the-director prompts, on-demand history loading, durable event log & crash recovery, plus optional fact-change query (`query_memory_changes`), exact calc/date tools (`calc_eval` / `calc_date`), and an experimental engineering-context toggle. Enabled by default; can be disabled in Settings |
 | **Lorebook / character cards (library)** | ✅ Implemented | Import SillyTavern-compatible PNG character cards (V1/V2/V3), plain JSON cards, and lorebook JSON; apply to a session as read-only "seed" settings; **AI card builder**: co-create cards and lorebooks through an agent conversation, saved after draft confirmation |
-| **BYOK** | ✅ Implemented | 7 built-in provider templates (OpenAI / DeepSeek / OpenRouter / Anthropic Claude / Google Gemini / NVIDIA NIM / Agnes AI); four protocols: OpenAI-compatible Chat Completions, OpenAI Responses, Anthropic, and Gemini |
-| **Data import/export** | ✅ Implemented | Sessions, memories, and settings; local-first |
+| **BYOK** | ✅ Implemented | 7 built-in provider templates (OpenAI / DeepSeek / OpenRouter / Anthropic Claude / Google Gemini / NVIDIA NIM / Agnes AI); four protocols: OpenAI-compatible Chat Completions, OpenAI Responses, Anthropic, and Gemini; new providers default to omitting sampling parameters for strict endpoints, with unified context & cache usage estimation |
+| **Data import/export** | ✅ Implemented | Sessions, memories, and settings; local-first with transactional overwrite validation, copy-variant memory isolation, native startup backup recovery, and Web pre-overwrite snapshot recovery |
 | **UI language** | ✅ Implemented | Simplified Chinese / English, switchable in Settings → Language and input (instant, remembered; follow-system not yet available) |
 
 ## Start from zero, or bring seeds
@@ -99,17 +99,17 @@ Requirements: Flutter >= 3.19, Dart >= 3.3. After first launch, go to **Settings
 | Linux | ⚠️ Unvalidated | Platform project exists; no release validation yet |
 | Web | ⚠️ Experimental | Browser database & streaming adapted; third-party APIs usually need a same-origin proxy for CORS |
 
-The current version is 0.4.1 (Director mode and the lorebook/character-card library delivered; iOS/macOS dual-platform adaptation complete). Versioning and release cadence will be settled as the open-source effort progresses.
+The current version is 0.5.0 (Director Act-unit reading stream, long-session memory maintenance & calibration, unified context estimation, and transactional backup/database recovery delivered). Versioning and release cadence will be settled as the open-source effort progresses.
 
 ## Roadmap
 
 **Implemented**
-- [x] Chat mode (multi-protocol BYOK, branches, compaction)
-- [x] Story mode (experiential + factual memory, hybrid retrieval, failure recovery)
-- [x] Director mode (project rules / watch mode / event log)
+- [x] Chat mode (multi-protocol BYOK, branches, compaction, unified context estimation)
+- [x] Story mode (experiential + factual memory, hybrid retrieval, variant memory sync, failure recovery)
+- [x] Director mode (project rules / act units & world status / 7·50 memory maintenance / watch mode / event log)
 - [x] Lorebook & character-card import and application (SillyTavern-compatible)
 - [x] iOS / macOS dual-platform adaptation (file drag & drop, close-window guard, authorization memory)
-- [x] English UI (zh-CN / en-US, instant switching)
+- [x] English UI (zh-CN / en-US, instant switching) and zh/en offline first-launch demo
 
 ## Development, contribution & architecture
 

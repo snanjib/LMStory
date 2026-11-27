@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [v0.4.0]
+    branches: [v0.5.0]
   pull_request:
-    branches: [v0.4.0]
+    branches: [v0.5.0]
 
 jobs:
   # GITHUB_TOKEN least-privilege: the repo-level default is already read-only;
