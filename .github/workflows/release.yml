@@ -319,8 +319,8 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Release notes = the CHANGELOG section for this version (exact
-      # header match: '## [0.4.2] - date') + the fixed install-guide footer.
+      # Release notes = the CHANGELOG section for this version (header
+      # line '## [x.y.z] - date', prefix-matched) + the fixed install-guide footer.
       - name: Assemble release notes
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
