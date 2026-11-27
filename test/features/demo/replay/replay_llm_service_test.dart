@@ -154,22 +154,40 @@ void main() {
       );
 
       final token = CancellationToken();
-      // 订阅两个事件后取消（done 未送达）
+      // 订阅后取消（done 未送达）：取消由第 2 个事件的送达回调直接驱动，
+      // 不经轮询——轮询粒度在 CI 事件循环批量化下会错过取消窗口；取消
+      // 路径上的 CancelledException 用 onError 收集并在断言阶段定性，
+      // 不作为未处理错误逃逸进测试 zone。
       final received = <LlmStreamEvent>[];
+      final twoArrived = Completer<void>();
+      final cancelSideErrors = <Object>[];
       final sub = svc
           .streamChat(
             request(LlmPurposes.agentStep, cancelToken: token),
           )
-          .listen(received.add);
-      await Future<void>.delayed(Duration.zero);
-      // 异步流逐事件让出：等前两个事件到达
-      while (received.length < 2) {
-        await Future<void>.delayed(Duration.zero);
-      }
+          .listen(
+            (event) {
+              received.add(event);
+              if (received.length == 2 && !twoArrived.isCompleted) {
+                twoArrived.complete();
+              }
+            },
+            onError: cancelSideErrors.add,
+          );
+      await twoArrived.future;
       token.cancel();
       await sub.cancel();
 
+      for (final error in cancelSideErrors) {
+        expect(
+          error,
+          isA<CancelledException>(),
+          reason: '取消路径只允许 CancelledException，其余错误视为回归',
+        );
+      }
       expect(received.whereType<LlmStreamDone>(), isEmpty);
+      // 送达回调驱动取消：取消必然落在前两个事件内，整步不得被消耗
+      expect(received, hasLength(2));
 
       // 重试：同一第一步从头完整重放
       final retry = await drain(svc.streamChat(request(LlmPurposes.agentStep)));
